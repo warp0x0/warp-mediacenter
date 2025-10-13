@@ -1,0 +1,110 @@
+{
+  "tmdb": {
+    "base_url": "https://api.themoviedb.org/3",
+    "api_key": "${TMDB_API_KEY}",
+    "default_headers": {
+      "Accept": "application/json",
+      "User-Agent": "WarpMC/1.0"
+    },
+    "rate_limits": {
+      "per_minute": 40,
+      "respect_retry_after": true
+    },
+    "endpoints": {
+      "discover_movies": "/discover/movie",
+      "movie_genre_list": "/genre/movie/list",
+      "movie_details": "/movie/{}",
+      "recommended_movies": "/movie/{}/recommendations",
+      "similar_movies": "/movie/{}/similar",
+      "search_movies": "/search/movie",
+      "daily_trending_movies": "/trending/movie/day",
+      "popular_movies": "/movie/popular",
+      "find_by_ext_id": "/find/{}",
+      "discover_shows": "/discover/tv",
+      "show_genre_list": "/genre/tv/list",
+      "show_details": "/tv/{}",
+      "recommended_shows": "/tv/{}/recommendations",
+      "similar_shows": "/tv/{}/similar",
+      "search_shows": "/search/tv",
+      "daily_trending_shows": "/trending/tv/day",
+      "popular_shows": "/tv/popular"
+    }
+  },
+  "trakt": {
+    "web_url": "https://trakt.tv",
+    "base_url": "https://api.trakt.tv",
+    "client_id": "${TRAKT_CLIENT_ID}",
+    "client_secret": "${TRAKT_CLIENT_SECRET}",
+    "default_headers": {
+      "Content-Type": "application/json",
+      "trakt-api-version": "2",
+      "trakt-api-key": "${TRAKT_CLIENT_ID}",
+      "User-Agent": "WarpMC/1.0"
+    },
+    "rate_limits": {
+      "per_minute": 60,
+      "respect_retry_after": true
+    },
+    "endpoints": {
+      "device_auth": "/oauth/device/code",
+      "refresh_auth": "/oauth/token",
+      "auth_poll": "/oauth/device/token",
+      "start_scrobble": "/scrobble/start",
+      "pause_scrobble": "/scrobble/pause",
+      "stop_scrobble": "/scrobble/stop",
+      "sync_playback": "/sync/playback",
+      "trending_movies": "/movies/trending",
+      "popular_movies": "/movies/popular",
+      "movies_favourited": "/movies/favorited",
+      "most_played_movies": "/movies/played",
+      "most_watched_movies": "/movies/watched",
+      "most_collected_movies": "/movies/collected",
+      "aniticipated_movies": "/movies/anticipated",
+      "movie_cast_crew": "/movies/{}/people",
+      "movie_rating": "/movies/{}/ratings",
+      "related_movies": "/movies/{}/related",
+      "movie_stats": "/movies/{}/stats",
+      "all_movie_videos": "/movies/{}/videos",
+      "search_movies": "/search/movie",
+      "id_lookup": "/search/(trakt|imdb|tmdb)/{}",
+      "trending_shows": "/shows/trending",
+      "popular_shows": "/shows/popular",
+      "shows_favourited": "/shows/favorited",
+      "most_played_shows": "/shows/played",
+      "most_watched_shows": "/shows/watched",
+      "most_collected_shows": "/shows/collected",
+      "aniticipated_shows": "/shows/anticipated",
+      "show_cast_crew": "/shows/{}/people",
+      "show_rating": "/shows/{}/ratings",
+      "related_shows": "/shows/{}/related",
+      "show_stats": "/shows/{}/stats",
+      "all_show_videos": "/shows/{}/videos",
+      "search_shows": "/search/show"
+    }
+  },
+  "real_debrid": {
+    "base_url": "https://api.real-debrid.com/rest/1.0",
+    "oauth_base_url": "https://api.real-debrid.com/oauth/v2",
+    "temp_client_id": "${RD_TEMP_CLIENT_ID}",
+    "client_id": "${RD_CLIENT_ID}",
+    "client_secret": "${RD_CLIENT_SECRET}",
+    "default_headers": {
+      "Accept": "application/json",
+      "User-Agent": "WarpMC/1.0",
+      "Authorization": "Bearer ${RD_ACCESS_TOKEN}"
+    },
+    "rate_limits": {
+      "per_minute": 120,
+      "respect_retry_after": true
+    },
+    "endpoints": {
+      "device_auth": "/device/code",
+      "creds_auth": "/device/credentials",
+      "token_auth": "/token",
+      "add_magnet": "/torrents/addMagnet",
+      "select_files": "/torrents/selectFiles/{}",
+      "torrent_info": "/torrents/info/{}",
+      "unrestrict_link": "/unrestrict/link"
+    }
+  }
+}

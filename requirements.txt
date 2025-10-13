@@ -1,0 +1,6 @@
+# Core typing & config
+pydantic==2.12.0
+python-dotenv==1.1.1
+
+# HTTP
+Requests==2.32.5

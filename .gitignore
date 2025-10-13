@@ -25,6 +25,22 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.build/
+.dist/
+.venv/
+venv/
+.env
+
+# OS / Editors
+.DS_Store
+.idea/
+.vscode/
+*.code-workspace
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
@@ -205,3 +221,13 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Runtime storage
+var/cache/
+var/tokens/
+var/public_domain_catalogs/
+*.log
+
+# Project Resources Dir
+Resources/
+Resources/*

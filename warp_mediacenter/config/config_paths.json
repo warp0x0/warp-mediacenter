@@ -1,0 +1,5 @@
+{
+  "information_provider_settings": "warp_mediacenter/config/informationproviderservicesettings.json",
+  "proxy_settings": "warp_mediacenter/config/proxysettings.json",
+  "proxy_pool": "warp_mediacenter/Resources/webshare_proxies.txt"
+}

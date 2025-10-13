@@ -1,0 +1,29 @@
+{
+  "enabled": true,
+
+  "rotation": {
+    "stickiness_seconds": 600,
+    "max_failures_before_rotate": 2,
+    "decay_half_life_seconds": 900
+  },
+
+  "retry": {
+    "max_attempts": 4,
+    "base_backoff_ms": 300,
+    "max_backoff_ms": 6000,
+    "jitter_ms": 250
+  },
+
+  "pool": {
+    "source": "file",
+    "file": "warp_mediacenter/Resources/webshare_proxies.txt",
+    "format": "host:port:user:pass",
+    "example": "proxy1.webshare.io:8080:user:password"
+  },
+
+  "domains": {
+    "api.themoviedb.org": { "stickiness_seconds": 900 },
+    "api.trakt.tv": { "stickiness_seconds": 900 },
+    "api.real-debrid.com": { "stickiness_seconds": 900 }
+  }
+}
