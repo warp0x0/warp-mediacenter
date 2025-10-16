@@ -16,6 +16,7 @@ from warp_mediacenter.backend.common.logging import get_logger
 from warp_mediacenter.backend.common.tasks import TaskRunner, TaskSpec
 from warp_mediacenter.backend.information_handlers.models import ImageAsset, MediaType, Movie, Season, Show
 from warp_mediacenter.backend.information_handlers.providers import InformationProviders
+from warp_mediacenter.backend.resource_management import get_resource_manager
 from warp_mediacenter.config.settings import (
     Settings,
     get_settings,
@@ -87,6 +88,7 @@ class LocalLibraryScanner:
         self._providers = providers or InformationProviders()
         self._index = load_library_index()
         self._index_lock = threading.Lock()
+        self._resource_manager = get_resource_manager()
 
     # ------------------------------------------------------------------
     # Public API
@@ -102,6 +104,14 @@ class LocalLibraryScanner:
             log.info("library_scan_empty", root=str(root), media_type=media_type.value)
             return results
 
+        context = f"library_scan_{media_type.value}"
+        with TaskRunner(
+            max_workers=self._settings.task_workers,
+            resource_manager=self._resource_manager,
+            estimated_task_memory_mb=512.0,
+            context=context,
+            resource_wait_timeout=90.0,
+        ) as runner:
         with TaskRunner(max_workers=self._settings.task_workers) as runner:
             futures = [
                 runner.submit(
@@ -109,6 +119,7 @@ class LocalLibraryScanner:
                         fn=self._process_entry,
                         args=(entry, media_type, refresh),
                         name=f"library_scan_{media_type.value}_{entry.name}",
+                        estimated_memory_mb=512.0,
                     )
                 )
                 for entry in entries
@@ -184,6 +195,11 @@ class LocalLibraryScanner:
         return False
 
     def _process_movie(self, container: Path, *, refresh: bool) -> Optional[LibraryItem]:
+        self._resource_manager.wait_for_headroom(
+            256.0,
+            context="library_movie_prepare",
+            timeout=90.0,
+        )
         metadata_file = container / "warp_metadata.json"
         if metadata_file.exists() and not refresh:
             existing = self._load_existing_item(metadata_file, MediaType.MOVIE)
@@ -241,6 +257,11 @@ class LocalLibraryScanner:
         return item
 
     def _process_show(self, show_dir: Path, *, refresh: bool) -> Optional[LibraryItem]:
+        self._resource_manager.wait_for_headroom(
+            384.0,
+            context="library_show_prepare",
+            timeout=90.0,
+        )
         metadata_file = show_dir / "warp_metadata.json"
         if metadata_file.exists() and not refresh:
             existing = self._load_existing_item(metadata_file, MediaType.SHOW)

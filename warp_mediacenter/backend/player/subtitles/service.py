@@ -12,6 +12,7 @@ import io
 
 from ...common.logging import get_logger
 from ...common.tasks import TaskRunner, TaskSpec
+from ...resource_management import get_resource_manager
 from ..exceptions import SubtitleDownloadError, SubtitleError
 from .models import (
     PREFERRED_EXTENSIONS,
@@ -43,6 +44,13 @@ class SubtitleService:
         providers: Optional[Iterable[SubtitleProvider]] = None,
         temp_dir: Optional[Path] = None,
     ) -> None:
+        self._task_runner = task_runner or TaskRunner(
+            max_workers=4,
+            resource_manager=get_resource_manager(),
+            estimated_task_memory_mb=64.0,
+            context="subtitle_service",
+            resource_wait_timeout=20.0,
+        )
         self._task_runner = task_runner or TaskRunner(max_workers=4)
         self._providers = list(providers) if providers else self._default_providers()
         self._provider_map = {p.name: p for p in self._providers}
@@ -72,6 +80,7 @@ class SubtitleService:
                         retries=provider.retries,
                         backoff_sec=provider.backoff_sec,
                         name=f"subtitle_search_{provider.name}",
+                        estimated_memory_mb=48.0,
                     )
                 )
             )

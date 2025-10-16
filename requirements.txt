@@ -5,5 +5,8 @@ python-dotenv==1.1.1
 # HTTP
 requests==2.32.3
 
+# System/resource insights
+psutil==5.9.8
+
 # Media playback
 python-vlc==3.0.20123

@@ -5,6 +5,7 @@ import sys
 from .backend.common.logging import init_logging, get_logger
 from .backend.common.tasks import TaskRunner, TaskSpec
 from .backend.common.types import HealthReport
+from .backend.resource_management import get_resource_manager
 from .config.settings import get_settings
 
 
@@ -40,8 +41,25 @@ def main() -> int:
     log.info("health_report", **health)
 
     # tiny task runner smoke test
-    with TaskRunner(max_workers=settings.task_workers) as runner:
-        fut = runner.submit(TaskSpec(fn=_sample_task, args=(2, 3), name="sum"))
+    resource_manager = get_resource_manager()
+    profile = resource_manager.build_profile(requested_workers=settings.task_workers)
+    log.info("resource_profile", **profile.as_dict())
+
+    with TaskRunner(
+        max_workers=settings.task_workers,
+        resource_manager=resource_manager,
+        estimated_task_memory_mb=128.0,
+        context="startup",
+        resource_wait_timeout=15.0,
+    ) as runner:
+        fut = runner.submit(
+            TaskSpec(
+                fn=_sample_task,
+                args=(2, 3),
+                name="sum",
+                estimated_memory_mb=64.0,
+            )
+        )
         result = fut.result(timeout=2)
         log.info("task_result", task="sum", result=result)
 

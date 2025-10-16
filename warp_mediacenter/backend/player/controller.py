@@ -10,6 +10,7 @@ import threading
 
 from ..common.logging import get_logger
 from ..common.tasks import TaskRunner, TaskSpec
+from ..resource_management import get_resource_manager
 from ...config import settings
 from .exceptions import PlayerError, SubtitleError
 from .subtitles.models import SubtitleQuery, SubtitleResult
@@ -69,6 +70,13 @@ class PlayerController:
         self._instance = vlc.Instance()
         self._player = self._instance.media_player_new()
         self._event_manager = self._player.event_manager()
+        self._task_runner = task_runner or TaskRunner(
+            max_workers=4,
+            resource_manager=get_resource_manager(),
+            estimated_task_memory_mb=64.0,
+            context="player",
+            resource_wait_timeout=15.0,
+        )
         self._task_runner = task_runner or TaskRunner(max_workers=4)
         temp_dir = Path(settings.get_player_temp_dir())
         self._subtitle_service = subtitle_service or SubtitleService(
@@ -113,6 +121,7 @@ class PlayerController:
                     name="subtitle_autoload",
                     retries=1,
                     backoff_sec=2.0,
+                    estimated_memory_mb=64.0,
                 )
             )
 

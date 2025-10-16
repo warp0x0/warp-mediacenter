@@ -11,6 +11,15 @@ import threading
 from dataclasses import dataclass
 from datetime import datetime
 
+from warp_mediacenter.backend.common.logging import get_logger
+from warp_mediacenter.backend.resource_management import (
+    ResourceProfile,
+    get_resource_manager,
+)
+
+# local logger
+log = get_logger(__name__)
+
 # --- Optional .env support (won't fail if python-dotenv isn't installed) ---
 try:
     load_dotenv()
@@ -408,6 +417,7 @@ class Settings:
     library_paths: LibraryPaths
     user_settings_path: Path
     library_index_path: Path
+    resource_profile: ResourceProfile
 
     def library_path(self, kind: LibraryMediaKind) -> Optional[str]:
         return self.library_paths.get(kind)
@@ -419,6 +429,7 @@ class Settings:
             "log_level": self.log_level,
             "task_workers": self.task_workers,
             "library_paths": self.library_paths.as_dict(),
+            "resource_profile": self.resource_profile.as_dict(),
         }
 
 
@@ -437,6 +448,16 @@ def _build_settings() -> Settings:
         task_workers = max(1, int(task_workers_raw))
     except (TypeError, ValueError):
         task_workers = 4
+
+    resource_manager = get_resource_manager()
+    profile = resource_manager.build_profile(requested_workers=task_workers)
+    if profile.recommended_task_workers != task_workers:
+        log.info(
+            "settings_task_workers_adjusted",
+            requested=task_workers,
+            recommended=profile.recommended_task_workers,
+        )
+        task_workers = profile.recommended_task_workers
 
     libs_cfg = user_cfg.get("library_paths") or {}
     movies_path = _coerce_path(libs_cfg.get("movie") or libs_cfg.get("movies"))
@@ -457,6 +478,7 @@ def _build_settings() -> Settings:
         library_paths=library_paths,
         user_settings_path=_USER_SETTINGS_PATH,
         library_index_path=_LIBRARY_INDEX_PATH,
+        resource_profile=profile,
     )
 
 
@@ -518,6 +540,7 @@ __all__ = [
     "get_public_domain_source_config",
     "Settings",
     "LibraryPaths",
+    "ResourceProfile",
     "get_settings",
     "update_library_path",
     "load_library_index",
