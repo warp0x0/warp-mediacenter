@@ -30,6 +30,8 @@ _DEFAULT_CONFIG_PATHS = {
     "tokens": str(_PROJECT_ROOT / "var" / "tokens"),
     "user_settings": str(_PROJECT_ROOT / "var" / "user_settings.json"),
     "library_index": str(_PROJECT_ROOT / "var" / "library_index.json"),
+    "player_temp": str(_PROJECT_ROOT / "var" / "player" / "temp"),
+    "vlc_runtime_root": str(_PROJECT_ROOT / "Resources" / "vlc"),
 }
 
 _ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
@@ -129,6 +131,21 @@ def get_tokens_dir() -> str:
     """Directory that stores token payloads and secrets."""
 
     return PATHS["tokens"]
+
+
+def get_player_temp_dir() -> str:
+    """Directory where downloaded/temporary player files should live."""
+
+    path = Path(PATHS["player_temp"])
+    path.mkdir(parents=True, exist_ok=True)
+
+    return str(path)
+
+
+def get_vlc_runtime_root() -> str:
+    """Root directory where bundled VLC binaries are stored."""
+
+    return PATHS["vlc_runtime_root"]
 
 # Eager, cached singletons (safe for small JSONs)
 try:
