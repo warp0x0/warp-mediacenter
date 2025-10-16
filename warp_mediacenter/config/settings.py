@@ -9,6 +9,7 @@ import os
 import re
 import threading
 from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 
 from warp_mediacenter.backend.common.logging import get_logger

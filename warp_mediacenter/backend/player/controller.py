@@ -77,6 +77,7 @@ class PlayerController:
             context="player",
             resource_wait_timeout=15.0,
         )
+        self._task_runner = task_runner or TaskRunner(max_workers=4)
         temp_dir = Path(settings.get_player_temp_dir())
         self._subtitle_service = subtitle_service or SubtitleService(
             task_runner=self._task_runner,
