@@ -1,5 +1,9 @@
 {
   "information_provider_settings": "warp_mediacenter/config/informationproviderservicesettings.json",
   "proxy_settings": "warp_mediacenter/config/proxysettings.json",
-  "proxy_pool": "warp_mediacenter/Resources/webshare_proxies.txt"
+  "proxy_pool": "warp_mediacenter/Resources/webshare_proxies.txt",
+  "cache_root": "warp_mediacenter/var/cache",
+  "info_providers_cache": "warp_mediacenter/var/cache/info_providers",
+  "public_domain_catalogs": "warp_mediacenter/var/public_domain_catalogs",
+  "tokens": "warp_mediacenter/var/tokens"
 }
