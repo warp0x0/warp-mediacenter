@@ -51,6 +51,7 @@ class SubtitleService:
             context="subtitle_service",
             resource_wait_timeout=20.0,
         )
+        self._task_runner = task_runner or TaskRunner(max_workers=4)
         self._providers = list(providers) if providers else self._default_providers()
         self._provider_map = {p.name: p for p in self._providers}
         self._temp_dir = temp_dir or Path(tempfile.gettempdir()) / "warp-mediacenter" / "subtitles"
