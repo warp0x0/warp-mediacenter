@@ -112,7 +112,6 @@ class LocalLibraryScanner:
             context=context,
             resource_wait_timeout=90.0,
         ) as runner:
-        with TaskRunner(max_workers=self._settings.task_workers) as runner:
             futures = [
                 runner.submit(
                     TaskSpec(
