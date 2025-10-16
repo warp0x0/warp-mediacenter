@@ -1,7 +1,10 @@
-from concurrent.futures import ThreadPoolExecutor, Future
-from typing import Callable, Any, Optional
+"""Lightweight task execution with adaptive resource awareness."""
+
 from __future__ import annotations
+
+from concurrent.futures import ThreadPoolExecutor, Future
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Callable, Any, Optional
 import threading
 import time
 
@@ -9,6 +12,9 @@ from .logging import get_logger
 from .errors import TaskError
 
 log = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from warp_mediacenter.backend.resource_management import ResourceManager
 
 
 
@@ -20,6 +26,7 @@ class TaskSpec:
     retries: int = 0
     backoff_sec: float = 0.5
     name: str = "task"
+    estimated_memory_mb: Optional[float] = None
 
     def __post_init__(self):
         if self.kwargs is None:
@@ -28,14 +35,47 @@ class TaskSpec:
 
 class TaskRunner:
     """Tiny in-process task runner with retries/backoff."""
-    def __init__(self, max_workers: int = 4):
-        self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="warp-task")
+    def __init__(
+        self,
+        max_workers: int = 4,
+        *,
+        resource_manager: Optional["ResourceManager"] = None,
+        estimated_task_memory_mb: float = 256.0,
+        context: Optional[str] = None,
+        resource_wait_timeout: float = 30.0,
+    ):
+        self._resource_manager = resource_manager
+        self._estimated_task_memory_mb = max(0.0, estimated_task_memory_mb)
+        self._resource_wait_timeout = resource_wait_timeout
+        self._context = context or "task_runner"
+
+        effective_workers = max_workers
+        if self._resource_manager is not None:
+            effective_workers = self._resource_manager.recommend_worker_count(
+                max_workers,
+                min_mem_per_worker_mb=self._estimated_task_memory_mb or 0,
+                context=self._context,
+            )
+
+        self._executor = ThreadPoolExecutor(
+            max_workers=effective_workers,
+            thread_name_prefix="warp-task",
+        )
         self._closed = False
         self._lock = threading.Lock()
 
     def submit(self, spec: TaskSpec) -> Future:
         if self._closed:
             raise TaskError("TaskRunner is closed")
+
+        required_memory = spec.estimated_memory_mb or self._estimated_task_memory_mb
+        if self._resource_manager is not None and required_memory:
+            context = spec.name or self._context
+            self._resource_manager.wait_for_headroom(
+                required_memory,
+                context=context,
+                timeout=self._resource_wait_timeout,
+            )
 
         def _wrapped():
             attempt = 0
