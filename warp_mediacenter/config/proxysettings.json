@@ -23,7 +23,6 @@
 
   "domains": {
     "api.themoviedb.org": { "stickiness_seconds": 900 },
-    "api.trakt.tv": { "stickiness_seconds": 900 },
-    "api.real-debrid.com": { "stickiness_seconds": 900 }
+    "api.trakt.tv": { "stickiness_seconds": 900 }
   }
 }

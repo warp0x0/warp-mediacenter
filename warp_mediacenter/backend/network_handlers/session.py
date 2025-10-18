@@ -1,11 +1,13 @@
-from typing import Any, Dict, Optional, Tuple
-from requests.adapters import HTTPAdapter
 from __future__ import annotations
+
+from typing import Any, Callable, Collection, Dict, Mapping, Optional, Tuple
 from urllib.parse import urlparse
-import requests
-import socket
 import random
+import socket
 import time
+
+import requests
+from requests.adapters import HTTPAdapter
 
 from warp_mediacenter.backend.network_handlers.url_manager import URLManager
 from warp_mediacenter.backend.network_handlers.proxy_manager import ProxyManager
@@ -45,6 +47,9 @@ def _sleep_with_jitter(base_ms: int, attempt: int, max_ms: int, jitter_ms: int):
 
 # ---------------- Main Session ----------------
 
+TokenRefresher = Callable[[str, "HttpSession", Optional[requests.Response]], Optional[Mapping[str, str]]]
+
+
 class HttpSession:
     """
     Central HTTP client:
@@ -69,36 +74,90 @@ class HttpSession:
         self.max_backoff_ms = self.proxym.retry_cfg.get("max_backoff_ms", 6000)
         self.jitter_ms = self.proxym.retry_cfg.get("jitter_ms", 250)
 
+        # service -> callable invoked once when a 401 is encountered to refresh auth
+        self._token_refreshers: Dict[str, TokenRefresher] = {}
+
     # -------- public API --------
 
-    def get(self, service: str, path: str, *,
-            params: Optional[Dict[str, Any]] = None,
-            headers: Optional[Dict[str, str]] = None) -> requests.Response:
+    def get(
+        self,
+        service: str,
+        path: str,
+        *,
+        params: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+        allowed_statuses: Optional[Collection[int]] = None,
+    ) -> requests.Response:
 
-        return self._request("GET", service, path, params=params, headers=headers)
+        return self._request(
+            "GET",
+            service,
+            path,
+            params=params,
+            headers=headers,
+            allowed_statuses=allowed_statuses,
+        )
 
-    def post(self, service: str, path: str, *,
-             json_body: Optional[Dict[str, Any]] = None,
-             params: Optional[Dict[str, Any]] = None,
-             headers: Optional[Dict[str, str]] = None) -> requests.Response:
+    def post(
+        self,
+        service: str,
+        path: str,
+        *,
+        json_body: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+        allowed_statuses: Optional[Collection[int]] = None,
+    ) -> requests.Response:
 
-        return self._request("POST", service, path, params=params, json_body=json_body, headers=headers)
+        return self._request(
+            "POST",
+            service,
+            path,
+            params=params,
+            json_body=json_body,
+            headers=headers,
+            allowed_statuses=allowed_statuses,
+        )
+
+    def register_token_refresher(
+        self,
+        service: str,
+        handler: Optional[TokenRefresher],
+    ) -> None:
+        """Register or remove a token refresh hook for a service."""
+
+        if handler is None:
+            self._token_refreshers.pop(service, None)
+        else:
+            self._token_refreshers[service] = handler
 
     # -------- internals --------
 
-    def _request(self, method: str, service: str, path: str, *,
-                 params: Optional[Dict[str, Any]],
-                 json_body: Optional[Dict[str, Any]] = None,
-                 headers: Optional[Dict[str, str]] = None) -> requests.Response:
+    def _request(
+        self,
+        method: str,
+        service: str,
+        path: str,
+        *,
+        params: Optional[Dict[str, Any]],
+        json_body: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+        allowed_statuses: Optional[Collection[int]] = None,
+    ) -> requests.Response:
 
         url, base_headers = self.urlm.build(service, path, params)
         hdrs = dict(base_headers or {})
         if headers:
             hdrs.update(headers)
 
+        allowed = set(allowed_statuses or ())
+
         domain = urlparse(url).hostname or ""
         attempt = 1
         last_exc: Optional[Exception] = None
+        token_refresh_attempted = False
+        normalized_path = path or ""
+        is_oauth_request = normalized_path.lstrip("/").startswith("oauth/")
 
         while attempt <= self.retry_max_attempts:
             proxies = self.proxym.choose(domain) if self.proxym.enabled_for_domain(domain) else None
@@ -113,37 +172,64 @@ class HttpSession:
                     proxies=proxies,
                 )
 
-                if resp.status_code < 400:
+                status = resp.status_code
+
+                if status < 400 or status in allowed:
                     self.proxym.mark_good(proxies)
 
                     return resp
 
-                # 429: optionally respect Retry-After
-                if resp.status_code == 429:
-                    self.proxym.mark_bad(proxies)
+                if status == 401:
+                    refresher = self._token_refreshers.get(service)
+                    if (
+                        refresher is not None
+                        and not token_refresh_attempted
+                        and not is_oauth_request
+                    ):
+                        token_refresh_attempted = True
+                        updated = refresher(service, self, resp)
+                        if updated:
+                            hdrs.update(dict(updated))
+                        continue
+
+                    raise _map_http_error(status)
+
+                if status == 429:
+                    last_exc = _map_http_error(status)
                     if self.urlm.should_respect_retry_after(service):
                         ra = resp.headers.get("Retry-After")
                         if ra:
                             try:
-                                time.sleep(min(int(ra), 30))
-                            except ValueError:
-                                pass  # ignore HTTP-date
-
-                # Retryables
-                if 500 <= resp.status_code < 600 or resp.status_code in (408, 429):
-                    if resp.status_code != 429:
-                        self.proxym.mark_bad(proxies)
+                                time.sleep(min(int(float(ra)), 30))
+                            except (ValueError, TypeError):
+                                pass  # ignore malformed header / HTTP-date
                     if attempt == self.retry_max_attempts:
-                        raise _map_http_error(resp.status_code)
-                else:
-                    # Non-retryable 4xx
-                    raise _map_http_error(resp.status_code)
+                        raise last_exc
+                    attempt += 1
+                    _sleep_with_jitter(self.base_backoff_ms, attempt, self.max_backoff_ms, self.jitter_ms)
+                    continue
+
+                if status == 408 or 500 <= status < 600:
+                    last_exc = _map_http_error(status)
+                    self.proxym.mark_bad(proxies)
+                    if attempt == self.retry_max_attempts:
+                        raise last_exc
+                    attempt += 1
+                    _sleep_with_jitter(self.base_backoff_ms, attempt, self.max_backoff_ms, self.jitter_ms)
+                    continue
+
+                # Non-retryable 4xx
+                raise _map_http_error(status)
 
             except requests.exceptions.Timeout as e:
                 last_exc = e
                 self.proxym.mark_bad(proxies)
                 if attempt == self.retry_max_attempts:
                     raise TimeoutError(str(e)) from e
+
+                attempt += 1
+                _sleep_with_jitter(self.base_backoff_ms, attempt, self.max_backoff_ms, self.jitter_ms)
+                continue
 
             except requests.exceptions.ConnectionError as e:
                 last_exc = e
@@ -154,13 +240,22 @@ class HttpSession:
                 if attempt == self.retry_max_attempts:
                     raise ConnectionFailed(str(e)) from e
 
+                attempt += 1
+                _sleep_with_jitter(self.base_backoff_ms, attempt, self.max_backoff_ms, self.jitter_ms)
+                continue
+
+            except NetError as e:
+                last_exc = e
+                raise
+
             except Exception as e:
                 last_exc = e
                 self.proxym.mark_bad(proxies)
                 if attempt == self.retry_max_attempts:
                     raise NetError(str(e)) from e
 
-            attempt += 1
-            _sleep_with_jitter(self.base_backoff_ms, attempt, self.max_backoff_ms, self.jitter_ms)
+                attempt += 1
+                _sleep_with_jitter(self.base_backoff_ms, attempt, self.max_backoff_ms, self.jitter_ms)
+                continue
 
         raise NetError(f"Request failed after retries: {last_exc}")
