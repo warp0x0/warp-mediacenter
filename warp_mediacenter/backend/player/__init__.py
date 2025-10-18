@@ -1,8 +1,15 @@
 """VLC-based playback primitives and subtitle orchestration."""
 
-from .controller import PlayerController, PlayRequest, PlaybackState
-from .exceptions import PlayerError, SubtitleError
-from .subtitles.models import SubtitleQuery, SubtitleResult
+from warp_mediacenter.backend.player.controller import (
+    PlaybackState,
+    PlayRequest,
+    PlayerController,
+)
+from warp_mediacenter.backend.player.exceptions import PlayerError, SubtitleError
+from warp_mediacenter.backend.player.subtitles.models import (
+    SubtitleQuery,
+    SubtitleResult,
+)
 
 __all__ = [
     "PlayerController",

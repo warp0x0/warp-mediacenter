@@ -21,15 +21,16 @@ from warp_mediacenter.backend.resource_management import (
 # local logger
 log = get_logger(__name__)
 
+_THIS_DIR = Path(__file__).resolve().parent
+_PROJECT_ROOT = _THIS_DIR.parent  # warp_mediacenter/
+
 # --- Optional .env support (won't fail if python-dotenv isn't installed) ---
 try:
-    load_dotenv()
+    load_dotenv(_PROJECT_ROOT / ".env")
 except Exception:
     pass
 
 # Path resolution and loaders
-_THIS_DIR = Path(__file__).resolve().parent
-_PROJECT_ROOT = _THIS_DIR.parent  # warp_mediacenter/
 _DEFAULT_CONFIG_PATHS = {
     "information_provider_settings": str(_THIS_DIR / "informationproviderservicesettings.json"),
     "proxy_settings": str(_THIS_DIR / "proxysettings.json"),

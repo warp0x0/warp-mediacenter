@@ -10,20 +10,30 @@ import tempfile
 import zipfile
 import io
 
-from ...common.logging import get_logger
-from ...common.tasks import TaskRunner, TaskSpec
-from ...resource_management import get_resource_manager
-from ..exceptions import SubtitleDownloadError, SubtitleError
-from .models import (
+from warp_mediacenter.backend.common.logging import get_logger
+from warp_mediacenter.backend.common.tasks import TaskRunner, TaskSpec
+from warp_mediacenter.backend.player.exceptions import (
+    SubtitleDownloadError,
+    SubtitleError,
+)
+from warp_mediacenter.backend.player.subtitles.models import (
     PREFERRED_EXTENSIONS,
     SubtitlePayload,
     SubtitleQuery,
     SubtitleResult,
     pick_best_subtitle_file,
 )
-from .providers.base import SubtitleProvider
-from .providers.opensubtitles import OpenSubtitlesProvider
-from .providers.stub import Addic7edProvider, BSPlayerProvider, PodnapisiProvider, SubsceneProvider
+from warp_mediacenter.backend.player.subtitles.providers.base import SubtitleProvider
+from warp_mediacenter.backend.player.subtitles.providers.opensubtitles import (
+    OpenSubtitlesProvider,
+)
+from warp_mediacenter.backend.player.subtitles.providers.stub import (
+    Addic7edProvider,
+    BSPlayerProvider,
+    PodnapisiProvider,
+    SubsceneProvider,
+)
+from warp_mediacenter.backend.resource_management import get_resource_manager
 
 log = get_logger(__name__)
 
