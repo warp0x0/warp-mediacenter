@@ -46,6 +46,8 @@ from warp_mediacenter.backend.information_handlers.trakt_manager import (
     ScrobbleResponse,
     TraktManager,
     TraktUserProfile,
+    TraktUserSettings,
+    TraktSearchResult,
     UserList,
 )
 from warp_mediacenter.backend.network_handlers.session import HttpSession
@@ -307,8 +309,36 @@ class InformationProviders:
     def refresh_trakt_token(self) -> OAuthToken:
         return self._require_trakt().refresh_token()
 
+    def trakt_has_token(self) -> bool:
+        if self._trakt is None:
+            return False
+        return self._trakt.has_token()
+
+    def trakt_has_valid_token(self, *, buffer_seconds: int = 120) -> bool:
+        if self._trakt is None:
+            return False
+        return self._trakt.has_valid_token(buffer_seconds=buffer_seconds)
+
+    def trakt_current_token(self) -> Optional[OAuthToken]:
+        if self._trakt is None:
+            return None
+        return self._trakt.current_token()
+
+    def trakt_token_expires_at(self) -> Optional[float]:
+        if self._trakt is None:
+            return None
+        return self._trakt.token_expires_at()
+
+    def trakt_clear_token(self) -> None:
+        if self._trakt is None:
+            return
+        self._trakt.clear_token()
+
     def get_trakt_profile(self, username: str = "me") -> TraktUserProfile:
         return self._require_trakt().get_profile(username)
+
+    def get_trakt_user_settings(self) -> TraktUserSettings:
+        return self._require_trakt().get_user_settings()
 
     def get_trakt_user_lists(self, username: str = "me") -> Sequence[UserList]:
         return self._require_trakt().get_user_lists(username)
@@ -347,6 +377,21 @@ class InformationProviders:
         if self._trakt is None:
             return None
         return self._trakt.rate_limit()
+
+    def search_trakt(
+        self,
+        query: str,
+        *,
+        types: Optional[Sequence[MediaType]] = None,
+        limit: int = 10,
+        year: Optional[int] = None,
+    ) -> Sequence[TraktSearchResult]:
+        return self._require_trakt().search(
+            query,
+            types=types,
+            limit=limit,
+            year=year,
+        )
 
     # ------------------------------------------------------------------
     # Helpers
