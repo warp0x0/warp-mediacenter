@@ -37,7 +37,6 @@ class URLManager:
 
     - TMDb: appends `api_key` from settings (already env-expanded) into query
     - Trakt: relies on default headers containing `trakt-api-key` (env-expanded)
-    - Real-Debrid: relies on default headers possibly containing `Authorization`
     """
 
     def __init__(self, service_overrides: Optional[Dict[str, Dict[str, Any]]] = None):

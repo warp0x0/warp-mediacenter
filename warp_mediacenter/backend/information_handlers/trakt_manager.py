@@ -34,6 +34,27 @@ class DeviceCode(BaseModel):
     interval: int
 
 
+class DeviceAuthPollingError(RuntimeError):
+    """Raised when the device code polling endpoint indicates a terminal state."""
+
+    def __init__(
+        self,
+        error: str,
+        description: Optional[str] = None,
+        *,
+        retry_interval: Optional[int] = None,
+    ) -> None:
+        message = description or error
+        super().__init__(message)
+        self.error = error
+        self.description = description
+        self.retry_interval = retry_interval
+
+    @property
+    def should_retry(self) -> bool:
+        return self.error in {"authorization_pending", "slow_down"}
+
+
 class OAuthToken(BaseModel):
     access_token: str
     token_type: str
@@ -93,6 +114,22 @@ class ScrobbleResponse(BaseModel):
     media: CatalogItem
 
 
+class TraktUserSettings(BaseModel):
+    user: TraktUserProfile
+    account: Optional[Mapping[str, Any]] = None
+    connections: Optional[Mapping[str, Any]] = None
+    sharing: Optional[Mapping[str, Any]] = None
+    limits: Optional[Mapping[str, Any]] = None
+    privacy: Optional[Mapping[str, Any]] = None
+    saved_filters: Optional[Sequence[Mapping[str, Any]]] = None
+
+
+class TraktSearchResult(BaseModel):
+    type: MediaType
+    score: Optional[float] = None
+    media: CatalogItem
+
+
 class TraktManager:
     """Implements the authenticated Trakt flows used by the information handlers."""
 
@@ -122,6 +159,8 @@ class TraktManager:
         self._facade = facade or MediaModelFacade()
         self._rate_limit: Optional[RateLimitInfo] = None
 
+        self._session.register_token_refresher(_SERVICE_NAME, self._token_refresh_callback)
+
     # ------------------------------------------------------------------
     # Authentication helpers
     # ------------------------------------------------------------------
@@ -138,8 +177,19 @@ class TraktManager:
             "client_id": self._client_id,
             "client_secret": self._client_secret,
         }
-        response = self._session.post(_SERVICE_NAME, "/oauth/device/token", json_body=payload)
+        response = self._session.post(
+            _SERVICE_NAME,
+            "/oauth/device/token",
+            json_body=payload,
+            allowed_statuses={400},
+        )
         data = self._parse_json(response)
+        if response.status_code >= 400:
+            error = str(data.get("error") or "authorization_pending")
+            description = data.get("error_description")
+            interval = self._try_int(data.get("interval"))
+            raise DeviceAuthPollingError(error, description, retry_interval=interval)
+
         token = OAuthToken.model_validate(data)
         self._store_token(token)
 
@@ -162,6 +212,43 @@ class TraktManager:
         self._store_token(token)
 
         return token
+
+    def current_token(self) -> Optional[OAuthToken]:
+        if not self._token_payload:
+            return None
+        try:
+            return OAuthToken.model_validate(dict(self._token_payload))
+        except ValidationError:
+            return None
+
+    def has_token(self) -> bool:
+        return bool(self._token_payload.get("access_token"))
+
+    def token_expires_at(self) -> Optional[float]:
+        value = self._token_payload.get("expires_at") if self._token_payload else None
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def has_valid_token(self, *, buffer_seconds: int = 120) -> bool:
+        token = self.current_token()
+        if token is None:
+            return False
+        expires_at = self.token_expires_at()
+        if expires_at is None:
+            return True
+        return expires_at > (time.time() + buffer_seconds)
+
+    def clear_token(self) -> None:
+        self._token_payload.clear()
+        try:
+            if self._token_file.exists():
+                self._token_file.unlink()
+        except OSError:
+            pass
 
     # ------------------------------------------------------------------
     # User-facing operations
@@ -285,6 +372,64 @@ class TraktManager:
             media=catalog_item,
         )
 
+    def get_user_settings(self) -> TraktUserSettings:
+        payload = self._authorized_get("/users/settings")
+
+        return TraktUserSettings.model_validate(payload)
+
+    def search(
+        self,
+        query: str,
+        *,
+        types: Optional[Sequence[MediaType]] = None,
+        limit: int = 10,
+        year: Optional[int] = None,
+    ) -> Sequence[TraktSearchResult]:
+        params: Dict[str, Any] = {"query": query, "limit": limit}
+        if year is not None:
+            params["year"] = int(year)
+
+        chosen_types = list(types) if types else [MediaType.MOVIE, MediaType.SHOW]
+        if chosen_types:
+            params["type"] = ",".join(sorted({t.value for t in chosen_types}))
+
+        payload = self._authorized_get("/search", params=params)
+        if not isinstance(payload, Iterable):
+            return []
+
+        results: list[TraktSearchResult] = []
+        for entry in payload:
+            if not isinstance(entry, Mapping):
+                continue
+            media_payload = self._extract_media_payload(entry)
+            if media_payload is None:
+                continue
+
+            fallback_type = self._resolve_media_type(
+                media_payload.get("media_type"),
+                fallback=MediaType.MOVIE,
+            )
+            resolved_type = self._resolve_media_type(entry.get("type"), fallback=fallback_type)
+
+            try:
+                catalog_item = self._facade.catalog_item(
+                    media_payload,
+                    source_tag=_SERVICE_NAME,
+                    media_type=resolved_type,
+                )
+            except ValidationError:
+                continue
+
+            results.append(
+                TraktSearchResult(
+                    type=resolved_type,
+                    score=self._try_float(entry.get("score")),
+                    media=catalog_item,
+                )
+            )
+
+        return results
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -388,6 +533,22 @@ class TraktManager:
         if isinstance(data, Mapping):
             self._token_payload.update(data)
 
+    def _token_refresh_callback(
+        self,
+        service: str,
+        session: HttpSession,
+        response: Optional[Any] = None,
+    ) -> Optional[Mapping[str, str]]:
+        request = getattr(response, "request", None)
+        if request is not None:
+            path = getattr(request, "path_url", "")
+            if isinstance(path, str) and path.startswith("/oauth/"):
+                raise Unauthorized("Trakt OAuth request returned 401")
+
+        self.refresh_token()
+
+        return self._auth_headers()
+
     def _history_endpoint(self, media_type: MediaType) -> str:
         mapping = {
             MediaType.MOVIE: "movies",
@@ -444,6 +605,14 @@ class TraktManager:
         except (TypeError, ValueError):
             return None
 
+    def _try_float(self, value: Any) -> Optional[float]:
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
     # ------------------------------------------------------------------
     # Public introspection helpers
     # ------------------------------------------------------------------
@@ -457,9 +626,12 @@ class TraktManager:
 __all__ = [
     "TraktManager",
     "DeviceCode",
+    "DeviceAuthPollingError",
     "OAuthToken",
     "RateLimitInfo",
     "TraktUserProfile",
+    "TraktUserSettings",
+    "TraktSearchResult",
     "UserList",
     "HistoryEntry",
     "ScrobbleResponse",

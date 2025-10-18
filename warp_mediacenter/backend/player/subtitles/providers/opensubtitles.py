@@ -10,11 +10,18 @@ import json
 
 import requests
 
-from ....config import settings
-from ...exceptions import SubtitleProviderUnavailable
-from ...common.logging import get_logger
-from ..models import SubtitlePayload, SubtitleQuery, SubtitleResult
-from .base import SubtitleProvider, ensure_api_key
+from warp_mediacenter.backend.common.logging import get_logger
+from warp_mediacenter.backend.player.exceptions import SubtitleProviderUnavailable
+from warp_mediacenter.backend.player.subtitles.models import (
+    SubtitlePayload,
+    SubtitleQuery,
+    SubtitleResult,
+)
+from warp_mediacenter.backend.player.subtitles.providers.base import (
+    SubtitleProvider,
+    ensure_api_key,
+)
+from warp_mediacenter.config import settings
 
 log = get_logger(__name__)
 

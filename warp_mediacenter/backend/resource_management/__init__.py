@@ -1,6 +1,6 @@
 """Adaptive resource and memory management helpers."""
 
-from .manager import (
+from warp_mediacenter.backend.resource_management.manager import (
     ResourceManager,
     ResourceProfile,
     SystemSnapshot,

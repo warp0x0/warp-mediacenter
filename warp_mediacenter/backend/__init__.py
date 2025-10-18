@@ -1,9 +1,20 @@
 """Backend public interfaces."""
 
-from .player import PlayerController, PlayRequest, PlaybackState
-from .player.subtitles import SubtitleQuery, SubtitleResult
-from .plugins import PluginError, PluginManifest, PluginManager
-from .resource_management import (
+from warp_mediacenter.backend.player import (
+    PlayRequest,
+    PlaybackState,
+    PlayerController,
+)
+from warp_mediacenter.backend.player.subtitles import (
+    SubtitleQuery,
+    SubtitleResult,
+)
+from warp_mediacenter.backend.plugins import (
+    PluginError,
+    PluginManifest,
+    PluginManager,
+)
+from warp_mediacenter.backend.resource_management import (
     ResourceManager,
     ResourceProfile,
     SystemSnapshot,
