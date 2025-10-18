@@ -2,11 +2,11 @@ from __future__ import annotations
 import time
 import sys
 
-from .backend.common.logging import init_logging, get_logger
-from .backend.common.tasks import TaskRunner, TaskSpec
-from .backend.common.types import HealthReport
-from .backend.resource_management import get_resource_manager
-from .config.settings import get_settings
+from warp_mediacenter.backend.common.logging import get_logger, init_logging
+from warp_mediacenter.backend.common.tasks import TaskRunner, TaskSpec
+from warp_mediacenter.backend.common.types import HealthReport
+from warp_mediacenter.backend.resource_management import get_resource_manager
+from warp_mediacenter.config.settings import get_settings
 
 
 

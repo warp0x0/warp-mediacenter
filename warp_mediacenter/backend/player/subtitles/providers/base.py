@@ -5,9 +5,13 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import List
 
-from ..models import SubtitlePayload, SubtitleQuery, SubtitleResult
-from ...exceptions import SubtitleProviderUnavailable
-from ...common.logging import get_logger
+from warp_mediacenter.backend.common.logging import get_logger
+from warp_mediacenter.backend.player.exceptions import SubtitleProviderUnavailable
+from warp_mediacenter.backend.player.subtitles.models import (
+    SubtitlePayload,
+    SubtitleQuery,
+    SubtitleResult,
+)
 
 log = get_logger(__name__)
 

@@ -4,9 +4,13 @@ from __future__ import annotations
 
 from typing import List
 
-from ...common.logging import get_logger
-from ..models import SubtitlePayload, SubtitleQuery, SubtitleResult
-from .base import SubtitleProvider
+from warp_mediacenter.backend.common.logging import get_logger
+from warp_mediacenter.backend.player.subtitles.models import (
+    SubtitlePayload,
+    SubtitleQuery,
+    SubtitleResult,
+)
+from warp_mediacenter.backend.player.subtitles.providers.base import SubtitleProvider
 
 log = get_logger(__name__)
 

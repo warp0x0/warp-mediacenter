@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING, Callable, Any, Optional
 import threading
 import time
 
-from .logging import get_logger
-from .errors import TaskError
+from warp_mediacenter.backend.common.errors import TaskError
+from warp_mediacenter.backend.common.logging import get_logger
 
 log = get_logger(__name__)
 

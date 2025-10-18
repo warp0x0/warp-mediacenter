@@ -14,7 +14,12 @@ from tempfile import TemporaryDirectory
 from typing import Any, Dict, Mapping, Optional
 
 from warp_mediacenter.backend.common.logging import get_logger
-from warp_mediacenter.backend.resource_management import ResourceManager, get_resource_manager
+from warp_mediacenter.backend.plugins.exceptions import PluginError
+from warp_mediacenter.backend.plugins.manifest import PluginManifest
+from warp_mediacenter.backend.resource_management import (
+    ResourceManager,
+    get_resource_manager,
+)
 from warp_mediacenter.config import settings as settings_module
 from warp_mediacenter.config.settings import (
     InstalledPlugin,
@@ -23,9 +28,6 @@ from warp_mediacenter.config.settings import (
     register_installed_plugin,
     remove_installed_plugin,
 )
-
-from .exceptions import PluginError
-from .manifest import PluginManifest
 
 log = get_logger(__name__)
 

@@ -1,5 +1,12 @@
-from .models import SubtitleQuery, SubtitleResult, SubtitlePayload
-from .service import SubtitleService, SubtitleDownload
+from warp_mediacenter.backend.player.subtitles.models import (
+    SubtitlePayload,
+    SubtitleQuery,
+    SubtitleResult,
+)
+from warp_mediacenter.backend.player.subtitles.service import (
+    SubtitleDownload,
+    SubtitleService,
+)
 
 __all__ = [
     "SubtitleQuery",
