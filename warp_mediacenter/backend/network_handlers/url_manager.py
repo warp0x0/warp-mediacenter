@@ -1,13 +1,14 @@
-from typing import Any, Dict, Optional, Tuple, Iterable
-from urllib.parse import urlencode, urljoin
 from __future__ import annotations
+
 from dataclasses import dataclass
+from typing import Any, Dict, Iterable, Optional, Tuple
+from urllib.parse import urlencode, urljoin
 
 from warp_mediacenter.config.settings import (
-    INFORMATION_PROVIDER_SETTINGS,
     get_service_config,
     get_default_headers,
     get_base_url,
+    list_provider_configs,
 )
 
 
@@ -41,12 +42,17 @@ class URLManager:
 
     def __init__(self, service_overrides: Optional[Dict[str, Dict[str, Any]]] = None):
         self._services_raw: Dict[str, Dict[str, Any]] = {}
-        base_cfg = INFORMATION_PROVIDER_SETTINGS or {}
+        base_cfg = list_provider_configs()
         for svc, cfg in base_cfg.items():
             merged = dict(cfg)
             if service_overrides and svc in service_overrides:
                 merged.update(service_overrides[svc] or {})
             self._services_raw[svc] = merged
+
+        if service_overrides:
+            for svc, cfg in service_overrides.items():
+                if svc not in self._services_raw:
+                    self._services_raw[svc] = dict(cfg or {})
 
         # cached views
         self._views: Dict[str, ServiceView] = {}
