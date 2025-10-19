@@ -31,7 +31,7 @@ _PATH_BASES = [_PACKAGE_ROOT, *_PACKAGE_ROOT.parents]
 
 # --- Optional .env support (won't fail if python-dotenv isn't installed) ---
 try:
-    load_dotenv(_PROJECT_ROOT / ".env")
+    load_dotenv(_PACKAGE_ROOT / ".env")
 except Exception:
     pass
 
@@ -39,16 +39,16 @@ except Exception:
 _DEFAULT_CONFIG_PATHS = {
     "information_provider_settings": str(_THIS_DIR / "informationproviderservicesettings.json"),
     "proxy_settings": str(_THIS_DIR / "proxysettings.json"),
-    "proxy_pool": str(_PROJECT_ROOT / "Resources" / "webshare_proxies.txt"),
-    "cache_root": str(_PROJECT_ROOT / "var" / "cache"),
-    "info_providers_cache": str(_PROJECT_ROOT / "var" / "cache" / "info_providers"),
-    "public_domain_catalogs": str(_PROJECT_ROOT / "var" / "public_domain_catalogs"),
-    "tokens": str(_PROJECT_ROOT / "var" / "tokens"),
-    "user_settings": str(_PROJECT_ROOT / "var" / "user_settings.json"),
-    "library_index": str(_PROJECT_ROOT / "var" / "library_index.json"),
-    "player_temp": str(_PROJECT_ROOT / "var" / "player" / "temp"),
-    "vlc_runtime_root": str(_PROJECT_ROOT / "Resources" / "vlc"),
-    "plugins_root": str(_PROJECT_ROOT / "var" / "plugins"),
+    "proxy_pool": str(_PACKAGE_ROOT / "Resources" / "webshare_proxies.txt"),
+    "cache_root": str(_PACKAGE_ROOT / "var" / "cache"),
+    "info_providers_cache": str(_PACKAGE_ROOT / "var" / "cache" / "info_providers"),
+    "public_domain_catalogs": str(_PACKAGE_ROOT / "var" / "public_domain_catalogs"),
+    "tokens": str(_PACKAGE_ROOT / "var" / "tokens"),
+    "user_settings": str(_PACKAGE_ROOT / "var" / "user_settings.json"),
+    "library_index": str(_PACKAGE_ROOT / "var" / "library_index.json"),
+    "player_temp": str(_PACKAGE_ROOT / "var" / "player" / "temp"),
+    "vlc_runtime_root": str(_PACKAGE_ROOT / "Resources" / "vlc"),
+    "plugins_root": str(_PACKAGE_ROOT / "var" / "plugins"),
 }
 
 _ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
@@ -211,6 +211,20 @@ def _pipeline_settings() -> Dict[str, Any]:
 
 def _content_lists_settings() -> Dict[str, Any]:
     return INFORMATION_PROVIDER_SETTINGS.get("content_lists", {}) if INFORMATION_PROVIDER_SETTINGS else {}
+
+
+def list_provider_configs() -> Dict[str, Dict[str, Any]]:
+    """Return a shallow copy of all configured information provider sections."""
+
+    providers = _provider_settings()
+    result: Dict[str, Dict[str, Any]] = {}
+    for name, cfg in providers.items():
+        if isinstance(cfg, Mapping):
+            result[name] = dict(cfg)
+        else:
+            result[name] = {}
+
+    return result
 
 
 def get_service_config(service: str) -> Optional[Dict[str, Any]]:
@@ -699,6 +713,7 @@ __all__ = [
     "get_public_domain_catalog_dir",
     "get_tokens_dir",
     "get_service_config",
+    "list_provider_configs",
     "get_rate_limits",
     "get_default_headers",
     "get_base_url",
