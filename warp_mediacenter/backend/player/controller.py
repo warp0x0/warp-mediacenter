@@ -8,14 +8,17 @@ from pathlib import Path
 from typing import Optional
 import threading
 
-from ..common.logging import get_logger
-from ..common.tasks import TaskRunner, TaskSpec
-from ..resource_management import get_resource_manager
-from ...config import settings
-from .exceptions import PlayerError, SubtitleError
-from .subtitles.models import SubtitleQuery, SubtitleResult
-from .subtitles.service import SubtitleDownload, SubtitleService
-from .vlc_paths import resolve_vlc_runtime
+from warp_mediacenter.backend.common.logging import get_logger
+from warp_mediacenter.backend.common.tasks import TaskRunner, TaskSpec
+from warp_mediacenter.backend.player.exceptions import PlayerError, SubtitleError
+from warp_mediacenter.backend.player.subtitles.models import SubtitleQuery, SubtitleResult
+from warp_mediacenter.backend.player.subtitles.service import (
+    SubtitleDownload,
+    SubtitleService,
+)
+from warp_mediacenter.backend.player.vlc_paths import resolve_vlc_runtime
+from warp_mediacenter.backend.resource_management import get_resource_manager
+from warp_mediacenter.config import settings
 
 log = get_logger(__name__)
 

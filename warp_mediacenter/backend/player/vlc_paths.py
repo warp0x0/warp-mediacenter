@@ -7,8 +7,8 @@ import os
 import sys
 from typing import Iterable, Optional
 
-from ..common.logging import get_logger
-from ...config import settings
+from warp_mediacenter.backend.common.logging import get_logger
+from warp_mediacenter.config import settings
 
 log = get_logger(__name__)
 

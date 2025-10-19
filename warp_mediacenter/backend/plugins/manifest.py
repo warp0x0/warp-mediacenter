@@ -7,9 +7,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
+from warp_mediacenter.backend.plugins.exceptions import PluginError
 from warp_mediacenter.config.settings import InstalledPlugin
-
-from .exceptions import PluginError
 
 
 def _coerce_memory(value: Any) -> Optional[float]:

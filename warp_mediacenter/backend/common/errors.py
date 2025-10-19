@@ -19,4 +19,4 @@ class NetworkError(WarpError):
 
 
 class ProviderError(WarpError):
-    """Info-provider (TMDb/Trakt/RD) issues."""
+    """Info-provider (TMDb/Trakt) issues."""
