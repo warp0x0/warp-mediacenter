@@ -18,7 +18,7 @@ lib/
 lib64/
 parts/
 sdist/
-var/
+# var/
 wheels/
 share/python-wheels/
 *.egg-info/
@@ -34,7 +34,7 @@ __pycache__/
 .dist/
 .venv/
 venv/
-.env
+# .env
 
 # OS / Editors
 .DS_Store
@@ -151,7 +151,7 @@ celerybeat.pid
 *.sage.py
 
 # Environments
-.env
+# .env
 .envrc
 .venv
 env/
@@ -223,11 +223,11 @@ marimo/_lsp/
 __marimo__/
 
 # Runtime storage
-var/cache/
-var/tokens/
-var/public_domain_catalogs/
-*.log
+# var/cache/
+# var/tokens/
+# var/public_domain_catalogs/
+# *.log
 
 # Project Resources Dir
-Resources/
-Resources/*
+# Resources/
+# Resources/*
