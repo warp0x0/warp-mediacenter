@@ -22,7 +22,12 @@ from warp_mediacenter.backend.resource_management import (
 log = get_logger(__name__)
 
 _THIS_DIR = Path(__file__).resolve().parent
-_PROJECT_ROOT = _THIS_DIR.parent  # warp_mediacenter/
+_PACKAGE_ROOT = _THIS_DIR.parent  # warp_mediacenter/
+_PROJECT_ROOT = _PACKAGE_ROOT.parent
+
+# Include progressively higher parents so relative config paths resolve even if
+# the package is imported from a nested working directory (e.g. notebooks).
+_PATH_BASES = [_PACKAGE_ROOT, *_PACKAGE_ROOT.parents]
 
 # --- Optional .env support (won't fail if python-dotenv isn't installed) ---
 try:
@@ -86,15 +91,20 @@ def _load_config_paths() -> Dict[str, str]:
     raw = _read_json(cfg_path)
     merged = {**_DEFAULT_CONFIG_PATHS, **(raw or {})}
 
-    # Make absolute relative to the project root (not the working directory)
+    # Make absolute relative to the nearest parent that actually contains the
+    # referenced resource (works even when the runtime CWD is inside notebooks).
     def _resolve(value: str) -> str:
-        path = Path(value)
-        if not path.is_absolute():
-            path = (_PROJECT_ROOT / path).resolve()
-        else:
-            path = path.resolve()
+        candidate = Path(value)
+        if candidate.is_absolute():
+            return str(candidate.resolve())
 
-        return str(path)
+        for base in _PATH_BASES:
+            resolved = (base / candidate).resolve()
+            if resolved.exists() or resolved.parent.exists():
+                return str(resolved)
+
+        # Fallback to the package root even if the path does not exist yet.
+        return str((_PACKAGE_ROOT / candidate).resolve())
 
     for key, value in list(merged.items()):
         merged[key] = _resolve(value)
