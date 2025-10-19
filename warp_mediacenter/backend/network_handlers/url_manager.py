@@ -1,7 +1,8 @@
-from typing import Any, Dict, Optional, Tuple, Iterable
-from urllib.parse import urlencode, urljoin
 from __future__ import annotations
+
 from dataclasses import dataclass
+from typing import Any, Dict, Iterable, Optional, Tuple
+from urllib.parse import urlencode, urljoin
 
 from warp_mediacenter.config.settings import (
     INFORMATION_PROVIDER_SETTINGS,
