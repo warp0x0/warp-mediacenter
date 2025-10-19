@@ -85,10 +85,20 @@ def _load_config_paths() -> Dict[str, str]:
 
     raw = _read_json(cfg_path)
     merged = {**_DEFAULT_CONFIG_PATHS, **(raw or {})}
-    # Make absolute
-    for k, v in list(merged.items()):
-        merged[k] = str(Path(v).resolve())
-    
+
+    # Make absolute relative to the project root (not the working directory)
+    def _resolve(value: str) -> str:
+        path = Path(value)
+        if not path.is_absolute():
+            path = (_PROJECT_ROOT / path).resolve()
+        else:
+            path = path.resolve()
+
+        return str(path)
+
+    for key, value in list(merged.items()):
+        merged[key] = _resolve(value)
+
     return merged
 
 # ---------------------------
