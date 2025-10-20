@@ -253,16 +253,20 @@ def _build_image(url: Optional[str], **extra: Any) -> Optional[ImageAsset]:
         return None
 
 
-def _normalize_external_ids(payload: Mapping[str, Any]) -> Dict[str, str]:
-    external = payload.get("external_ids")
-    if isinstance(external, Mapping):
-        return {str(k): str(v) for k, v in external.items() if v is not None}
-
+def _normalize_ids(payload: Mapping[str, Any]) -> Dict[str, str]:
     ids = payload.get("ids")
     if isinstance(ids, Mapping):
         return {str(k): str(v) for k, v in ids.items() if v is not None}
 
     return {}
+
+
+def _normalize_external_ids(payload: Mapping[str, Any]) -> Dict[str, str]:
+    external = payload.get("external_ids")
+    if isinstance(external, Mapping):
+        return {str(k): str(v) for k, v in external.items() if v is not None}
+
+    return _normalize_ids(payload)
 
 
 def _extract_keywords(payload: Mapping[str, Any]) -> Sequence[str]:
@@ -520,6 +524,15 @@ class MediaModelFacade:
         media_type: MediaType,
         overrides: Optional[Mapping[str, Any]] = None,
     ) -> CatalogItem:
+        extra_payload: Dict[str, Any] = {}
+        raw_extra = payload.get("extra")
+        if isinstance(raw_extra, Mapping):
+            extra_payload.update(raw_extra)
+
+        ids_payload = _normalize_ids(payload)
+        if ids_payload and "ids" not in extra_payload:
+            extra_payload["ids"] = ids_payload
+
         data: Dict[str, Any] = {
             "id": _extract_id(payload),
             "title": _extract_title(payload),
@@ -528,7 +541,7 @@ class MediaModelFacade:
             "overview": _extract_overview(payload),
             "poster": _build_image(payload.get("poster") or payload.get("poster_url")),
             "genres": _extract_genres(payload),
-            "extra": payload.get("extra") or {},
+            "extra": extra_payload,
         }
 
         year = payload.get("year") or payload.get("release_year")

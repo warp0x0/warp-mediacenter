@@ -1,6 +1,8 @@
-from typing import TypedDict, Literal, Optional
-from pydantic import BaseModel, Field
 from __future__ import annotations
+
+from typing import Literal, Optional, TypedDict
+
+from pydantic import BaseModel, Field
 
 
 
