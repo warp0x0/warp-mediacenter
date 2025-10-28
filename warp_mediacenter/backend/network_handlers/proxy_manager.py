@@ -89,7 +89,7 @@ class ProxyManager:
             return None
 
         stick_secs = int(self.domain_overrides.get(domain, {}).get("stickiness_seconds", self.stickiness_seconds))
-        self._sticky[domain] = Stickiness(proxy_key=best.url, expires_at=now + stick_secs)
+        self._sticky[domain] = Stickiness(proxy_url=best.url, expires_at=now + stick_secs)
         
         return {"http": best.url, "https": best.url}
 
