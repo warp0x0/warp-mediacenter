@@ -300,6 +300,49 @@ def _extract_genres(payload: Mapping[str, Any]) -> Sequence[str]:
     return []
 
 
+def _extract_year(payload: Mapping[str, Any]) -> Optional[int]:
+    """Attempt to normalize a release year from common payload fields."""
+
+    year_fields = (
+        "year",
+        "release_year",
+        "first_air_year",
+        "air_year",
+    )
+
+    for key in year_fields:
+        value = payload.get(key)
+        if value is None:
+            continue
+        try:
+            year = int(value)
+        except (TypeError, ValueError):
+            continue
+        if year >= 1800:
+            return year
+
+    date_fields = (
+        "release_date",
+        "first_air_date",
+        "air_date",
+        "premiered",
+    )
+
+    for key in date_fields:
+        value = payload.get(key)
+        if not value:
+            continue
+        try:
+            # ``fromisoformat`` supports the YYYY-MM-DD format returned by TMDb
+            parsed = date.fromisoformat(str(value))
+        except ValueError:
+            continue
+        if parsed.year >= 1800:
+            return parsed.year
+
+    return None
+
+
 def _extract_media_dates(payload: Mapping[str, Any]) -> Dict[str, Optional[date]]:
     def _parse(value: Any) -> Optional[date]:
         if not value:
@@ -544,18 +587,22 @@ class MediaModelFacade:
             "extra": extra_payload,
         }
 
-        year = payload.get("year") or payload.get("release_year")
-        if year:
-            try:
-                data["year"] = int(year)
-            except (TypeError, ValueError):
-                pass
+        year = _extract_year(payload)
+        if year is not None:
+            data["year"] = year
 
         origin_country = payload.get("origin_country") or payload.get("country")
         if origin_country:
-            data["origin_country"] = str(origin_country)
+            if isinstance(origin_country, Iterable) and not isinstance(origin_country, (str, bytes)):
+                countries = [str(entry) for entry in origin_country if entry]
+                if countries:
+                    data["origin_country"] = ",".join(countries)
+            else:
+                data["origin_country"] = str(origin_country)
 
         rating = payload.get("rating")
+        if rating is None:
+            rating = payload.get("vote_average")
         if rating is not None:
             try:
                 data["rating"] = float(rating)
@@ -575,6 +622,12 @@ class MediaModelFacade:
                 data["license"] = LicenseTag.UNKNOWN
         elif isinstance(license_tag, LicenseTag):
             data["license"] = license_tag
+
+        # Preserve the original payload so that downstream consumers do not lose
+        # any metadata fields that were not normalized explicitly above.
+        extra_payload.setdefault(
+            "raw_payload", {str(key): value for key, value in payload.items()}
+        )
 
         if overrides:
             data.update({k: v for k, v in overrides.items() if v is not None})
