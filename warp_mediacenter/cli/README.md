@@ -71,6 +71,7 @@ python -m warp_mediacenter.cli.media <command> [options]
 | --- | --- |
 | `tmdb movie <MOVIE_ID> [--language LANG] [--skip-credits]` | Fetch full TMDb movie metadata. |
 | `tmdb show <SHOW_ID> [--language LANG] [--skip-credits]` | Fetch detailed TMDb show metadata. |
+| `tmdb catalog <CATEGORY> [--media-type movie|show] [--language LANG] [--page N]` | Retrieve TMDb catalog listings such as popular, now_playing, or top_rated. |
 
 ### Public-domain catalogs
 
@@ -94,7 +95,10 @@ OAuth device flow.
 | `trakt auth clear` | Remove cached OAuth tokens. |
 | `trakt profile [--username USER]` | Fetch profile data for the authenticated user or a specified username. |
 | `trakt lists [--username USER]` | List custom Trakt lists for a user. |
+| `trakt list-items <LIST_ID> [--username USER] [--media-type TYPE]` | Render the entries from a specific Trakt list. |
 | `trakt history [--media-type TYPE] [--limit N]` | Display watched history for the authenticated user. |
+| `trakt catalog <CATEGORY> [--media-type movie|show] [--period WINDOW] [--limit N] [--username USER]` | Fetch Trakt catalog categories including trending, popular, watched, or user list collections. |
+| `trakt in-progress [--media-type movie|show]` | Show in-progress playback items filtered by media type. |
 | `trakt search <QUERY> [...]` | Trakt search shortcut that requires authentication. |
 
 ### Endpoint inspection
