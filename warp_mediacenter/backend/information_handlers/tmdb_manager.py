@@ -92,25 +92,7 @@ class TMDbManager:
                 "include_adult": include_adult,
             },
         )
-
-        results = []
-        for result in payload.get("results", []) or []:
-            if not isinstance(result, Mapping):
-                continue
-            overrides = self._image_overrides(result)
-            try:
-                results.append(
-                    self._facade.catalog_item(
-                        result,
-                        source_tag=_SERVICE_NAME,
-                        media_type=MediaType.MOVIE,
-                        overrides=overrides,
-                    )
-                )
-            except ValidationError:
-                continue
-
-        return results
+        return self._parse_catalog_results(payload, MediaType.MOVIE)
 
     def search_shows(
         self,
@@ -127,25 +109,29 @@ class TMDbManager:
                 "page": page,
             },
         )
+        return self._parse_catalog_results(payload, MediaType.SHOW)
 
-        results = []
-        for result in payload.get("results", []) or []:
-            if not isinstance(result, Mapping):
-                continue
-            overrides = self._image_overrides(result)
-            try:
-                results.append(
-                    self._facade.catalog_item(
-                        result,
-                        source_tag=_SERVICE_NAME,
-                        media_type=MediaType.SHOW,
-                        overrides=overrides,
-                    )
-                )
-            except ValidationError:
-                continue
+    def catalog_list(
+        self,
+        media_type: MediaType,
+        category: str,
+        *,
+        language: Optional[str] = None,
+        page: int = 1,
+    ) -> Sequence[CatalogItem]:
+        if media_type not in {MediaType.MOVIE, MediaType.SHOW}:
+            raise ValueError("Catalog lists are only available for movies or shows")
 
-        return results
+        path = self._catalog_path(media_type, category)
+        payload = self._request_json(
+            path,
+            params={
+                "language": self._normalize_language(language),
+                "page": page,
+            },
+        )
+
+        return self._parse_catalog_results(payload, media_type)
 
     def movie_details(
         self,
@@ -379,6 +365,49 @@ class TMDbManager:
             return dict(payload)
 
         raise RuntimeError("Unexpected TMDb payload structure")
+
+    def _catalog_path(self, media_type: MediaType, category: str) -> str:
+        key = category.lower()
+        segment = "movie" if media_type == MediaType.MOVIE else "tv"
+        if key == "popular":
+            return f"/{segment}/popular"
+        if key in {"top_rated", "toprated"}:
+            return f"/{segment}/top_rated"
+        if key in {"upcoming", "up_next"} and media_type == MediaType.MOVIE:
+            return "/movie/upcoming"
+        if key in {"airing_today", "airingtoday"} and media_type == MediaType.SHOW:
+            return "/tv/airing_today"
+        if key.startswith("trending"):
+            window = "day"
+            if "week" in key:
+                window = "week"
+            return f"/trending/{segment}/{window}"
+
+        raise ValueError(f"Unsupported TMDb catalog category '{category}' for {media_type.value}")
+
+    def _parse_catalog_results(
+        self,
+        payload: Mapping[str, Any],
+        media_type: MediaType,
+    ) -> list[CatalogItem]:
+        results: list[CatalogItem] = []
+        for result in payload.get("results", []) or []:
+            if not isinstance(result, Mapping):
+                continue
+            overrides = self._image_overrides(result)
+            try:
+                results.append(
+                    self._facade.catalog_item(
+                        result,
+                        source_tag=_SERVICE_NAME,
+                        media_type=media_type,
+                        overrides=overrides,
+                    )
+                )
+            except ValidationError:
+                continue
+
+        return results
 
     def _image_overrides(self, payload: Mapping[str, Any]) -> Dict[str, Any]:
         overrides: Dict[str, Any] = {}

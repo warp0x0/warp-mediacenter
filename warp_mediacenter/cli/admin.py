@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime
+import sqlite3
+from contextlib import closing
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
@@ -13,6 +15,8 @@ from warp_mediacenter.config.settings import library as library_settings
 from warp_mediacenter.config.settings import paths as path_settings
 from warp_mediacenter.config.settings import providers as provider_settings
 from warp_mediacenter.config.settings.plugins import InstalledPlugin
+from warp_mediacenter.backend.persistence import connect as db_connect
+from warp_mediacenter.backend.persistence import connection as db_connection
 
 from ._utils import (
     build_subparser,
@@ -239,6 +243,160 @@ def _handle_plugins_remove(args: argparse.Namespace) -> None:
     print_json(to_serializable(updated.plugins))
 
 
+def _database_path_payload() -> Dict[str, Any]:
+    path = path_settings.get_database_path()
+    payload: Dict[str, Any] = {
+        "path": str(path.resolve()),
+        "exists": path.exists(),
+    }
+    if path.exists():
+        stat = path.stat()
+        payload["size_bytes"] = stat.st_size
+        payload["last_modified"] = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
+    return payload
+
+
+def _handle_db_info(_: argparse.Namespace) -> None:
+    print_json(_database_path_payload())
+
+
+def _handle_db_migrate(_: argparse.Namespace) -> None:
+    with db_connection():
+        pass
+    payload = _database_path_payload()
+    payload["migrated"] = True
+    print_json(payload)
+
+
+def _handle_db_stats(_: argparse.Namespace) -> None:
+    path = path_settings.get_database_path()
+    payload = _database_path_payload()
+    if not path.exists():
+        payload["counts"] = {}
+        print_json(payload)
+        return
+
+    with closing(db_connect()) as conn:
+        tables = (
+            "titles",
+            "episodes",
+            "sources",
+            "play_history",
+            "settings",
+            "catalog_widgets",
+        )
+        counts: Dict[str, Any] = {}
+        for table in tables:
+            try:
+                row = conn.execute(f"SELECT COUNT(*) AS count FROM {table}").fetchone()
+            except sqlite3.Error as exc:
+                counts[table] = {"error": str(exc)}
+            else:
+                counts[table] = 0 if row is None else int(row[0])
+
+        page_count_row = conn.execute("PRAGMA page_count").fetchone()
+        page_size_row = conn.execute("PRAGMA page_size").fetchone()
+
+    payload["counts"] = counts
+    payload["page_count"] = None if page_count_row is None else int(page_count_row[0])
+    payload["page_size"] = None if page_size_row is None else int(page_size_row[0])
+    print_json(payload)
+
+
+def _handle_db_vacuum(_: argparse.Namespace) -> None:
+    path = path_settings.get_database_path()
+    if not path.exists():
+        exit_with_error("Database file does not exist; run 'warp-admin db migrate' or scan the library first.")
+        return
+
+    with closing(db_connect()) as conn:
+        previous_isolation = conn.isolation_level
+        conn.isolation_level = None
+        try:
+            conn.execute("VACUUM")
+        finally:
+            conn.isolation_level = previous_isolation
+
+    payload = _database_path_payload()
+    payload["vacuumed"] = True
+    print_json(payload)
+
+
+def _handle_db_widgets_list(_: argparse.Namespace) -> None:
+    path = path_settings.get_database_path()
+    payload = _database_path_payload()
+    if not path.exists():
+        payload["widgets"] = []
+        print_json(payload)
+        return
+
+    with closing(db_connect()) as conn:
+        rows = conn.execute(
+            "SELECT widget_key, last_updated, ttl_seconds FROM catalog_widgets ORDER BY widget_key"
+        ).fetchall()
+
+    payload["widgets"] = [
+        {
+            "widget_key": str(row["widget_key"]),
+            "last_updated": str(row["last_updated"]),
+            "ttl_seconds": int(row["ttl_seconds"]),
+        }
+        for row in rows
+    ]
+    print_json(payload)
+
+
+def _handle_db_widgets_show(args: argparse.Namespace) -> None:
+    path = path_settings.get_database_path()
+    if not path.exists():
+        exit_with_error("Database file does not exist; run 'warp-admin db migrate' or scan the library first.")
+        return
+
+    with closing(db_connect()) as conn:
+        row = conn.execute(
+            "SELECT widget_key, payload_json, last_updated, ttl_seconds FROM catalog_widgets WHERE widget_key = ?",
+            (args.key,),
+        ).fetchone()
+
+    if row is None:
+        exit_with_error(f"Widget '{args.key}' was not found in the cache.")
+        return
+
+    payload: Dict[str, Any] = {
+        "widget_key": str(row["widget_key"]),
+        "last_updated": str(row["last_updated"]),
+        "ttl_seconds": int(row["ttl_seconds"]),
+    }
+
+    raw_json = row["payload_json"]
+    if args.raw:
+        payload["payload_json"] = raw_json
+    else:
+        try:
+            payload["payload"] = json.loads(raw_json)
+        except json.JSONDecodeError as exc:
+            payload["payload_error"] = f"Invalid JSON: {exc}"
+            payload["payload_json"] = raw_json
+
+    print_json(payload)
+
+
+def _handle_db_widgets_clear(args: argparse.Namespace) -> None:
+    path = path_settings.get_database_path()
+    if not path.exists():
+        exit_with_error("Database file does not exist; nothing to clear.")
+        return
+
+    with closing(db_connect()) as conn:
+        cursor = conn.execute("DELETE FROM catalog_widgets WHERE widget_key = ?", (args.key,))
+        conn.commit()
+
+    payload = _database_path_payload()
+    payload["widget_key"] = args.key
+    payload["removed"] = cursor.rowcount > 0
+    print_json(payload)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="warp-admin",
@@ -356,6 +514,39 @@ def _build_parser() -> argparse.ArgumentParser:
     plugins_remove = build_subparser(plugins_sub, "remove", help="Remove an installed plugin entry.")
     plugins_remove.add_argument("plugin_id", help="Identifier of the plugin to remove.")
     plugins_remove.set_defaults(func=_handle_plugins_remove)
+
+    # Database ----------------------------------------------------------
+    db_parser = build_subparser(subparsers, "db", help="Inspect and manage the local SQLite database.")
+    db_sub = db_parser.add_subparsers(dest="db_command")
+    require_subcommand(db_sub)
+
+    db_info = build_subparser(db_sub, "info", help="Show the database path and current file metadata.")
+    db_info.set_defaults(func=_handle_db_info)
+
+    db_migrate = build_subparser(db_sub, "migrate", help="Ensure the SQLite schema is created and up to date.")
+    db_migrate.set_defaults(func=_handle_db_migrate)
+
+    db_stats = build_subparser(db_sub, "stats", help="Display row counts and storage statistics for core tables.")
+    db_stats.set_defaults(func=_handle_db_stats)
+
+    db_vacuum = build_subparser(db_sub, "vacuum", help="Reclaim free space by running VACUUM on the database file.")
+    db_vacuum.set_defaults(func=_handle_db_vacuum)
+
+    db_widgets = build_subparser(db_sub, "widgets", help="Inspect cached catalog widget payloads.")
+    db_widgets_sub = db_widgets.add_subparsers(dest="db_widgets_command")
+    require_subcommand(db_widgets_sub)
+
+    db_widgets_list = build_subparser(db_widgets_sub, "list", help="List widget cache entries.")
+    db_widgets_list.set_defaults(func=_handle_db_widgets_list)
+
+    db_widgets_show = build_subparser(db_widgets_sub, "show", help="Show the payload for a widget cache entry.")
+    db_widgets_show.add_argument("key", help="Widget cache key to inspect.")
+    db_widgets_show.add_argument("--raw", action="store_true", help="Return the stored JSON string without parsing it.")
+    db_widgets_show.set_defaults(func=_handle_db_widgets_show)
+
+    db_widgets_clear = build_subparser(db_widgets_sub, "clear", help="Remove a widget cache entry from the database.")
+    db_widgets_clear.add_argument("key", help="Widget cache key to remove.")
+    db_widgets_clear.set_defaults(func=_handle_db_widgets_clear)
 
     return parser
 
