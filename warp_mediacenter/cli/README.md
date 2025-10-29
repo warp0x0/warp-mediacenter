@@ -46,6 +46,13 @@ python -m warp_mediacenter.cli.admin <command> [options]
 | `plugins list` | List plugin registry entries. |
 | `plugins register` | Register a plugin (accepts arguments such as `--plugin-id`, `--entrypoint`, `--path`, and optional metadata flags). |
 | `plugins remove <ID>` | Remove a plugin entry from the registry. |
+| `db info` | Display the SQLite database path along with file size and timestamps. |
+| `db migrate` | Run database migrations to create or update the schema. |
+| `db stats` | Show row counts for core tables plus page-level storage metrics. |
+| `db vacuum` | Execute `VACUUM` to reclaim free space in the SQLite file. |
+| `db widgets list` | List cached catalog widget keys stored in SQLite. |
+| `db widgets show <KEY> [--raw]` | Inspect the payload for a cached widget (use `--raw` to print the stored JSON string). |
+| `db widgets clear <KEY>` | Remove a cached widget payload from the database. |
 
 All commands print JSON to stdout to simplify scripting and integration.
 
@@ -71,6 +78,7 @@ python -m warp_mediacenter.cli.media <command> [options]
 | --- | --- |
 | `tmdb movie <MOVIE_ID> [--language LANG] [--skip-credits]` | Fetch full TMDb movie metadata. |
 | `tmdb show <SHOW_ID> [--language LANG] [--skip-credits]` | Fetch detailed TMDb show metadata. |
+| `tmdb catalog <CATEGORY> [--media-type movie|show] [--language LANG] [--page N]` | Retrieve TMDb catalog listings such as popular, now_playing, or top_rated. |
 
 ### Public-domain catalogs
 
@@ -94,7 +102,10 @@ OAuth device flow.
 | `trakt auth clear` | Remove cached OAuth tokens. |
 | `trakt profile [--username USER]` | Fetch profile data for the authenticated user or a specified username. |
 | `trakt lists [--username USER]` | List custom Trakt lists for a user. |
+| `trakt list-items <LIST_ID> [--username USER] [--media-type TYPE]` | Render the entries from a specific Trakt list. |
 | `trakt history [--media-type TYPE] [--limit N]` | Display watched history for the authenticated user. |
+| `trakt catalog <CATEGORY> [--media-type movie|show] [--period WINDOW] [--limit N] [--username USER]` | Fetch Trakt catalog categories including trending, popular, watched, or user list collections. |
+| `trakt in-progress [--media-type movie|show] [--limit N]` | Show in-progress playback items filtered by media type with configurable page size. |
 | `trakt search <QUERY> [...]` | Trakt search shortcut that requires authentication. |
 
 ### Endpoint inspection

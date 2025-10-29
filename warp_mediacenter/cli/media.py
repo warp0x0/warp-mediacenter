@@ -131,6 +131,22 @@ def _handle_tmdb_show_details(args: argparse.Namespace) -> None:
     print_json(to_serializable(show))
 
 
+def _handle_tmdb_catalog(args: argparse.Namespace) -> None:
+    provider = _providers()
+    media_type = MediaType(args.media_type)
+    try:
+        results = provider.tmdb_catalog(
+            media_type,
+            args.category,
+            language=args.language,
+            page=args.page,
+        )
+    except Exception as exc:
+        exit_with_error(str(exc))
+        return
+    print_json(to_serializable(results))
+
+
 def _handle_trakt_auth_start(_: argparse.Namespace) -> None:
     manager = _ensure_trakt()
     try:
@@ -206,6 +222,21 @@ def _handle_trakt_lists(args: argparse.Namespace) -> None:
     print_json(to_serializable(lists))
 
 
+def _handle_trakt_list_items(args: argparse.Namespace) -> None:
+    provider = _providers()
+    media_type = MediaType(args.media_type) if args.media_type else None
+    try:
+        items = provider.get_trakt_list_items(
+            args.list_id,
+            username=args.username or "me",
+            media_type=media_type,
+        )
+    except Exception as exc:
+        exit_with_error(str(exc))
+        return
+    print_json(to_serializable(items))
+
+
 def _handle_trakt_history(args: argparse.Namespace) -> None:
     manager = _ensure_trakt()
     media_type = MediaType(args.media_type)
@@ -218,6 +249,34 @@ def _handle_trakt_history(args: argparse.Namespace) -> None:
         exit_with_error(str(exc))
         return
     print_json(to_serializable(history))
+
+
+def _handle_trakt_catalog(args: argparse.Namespace) -> None:
+    provider = _providers()
+    media_type = MediaType(args.media_type)
+    try:
+        results = provider.trakt_catalog(
+            media_type,
+            args.category,
+            period=args.period,
+            limit=args.limit,
+            username=args.username or "me",
+        )
+    except Exception as exc:
+        exit_with_error(str(exc))
+        return
+    print_json(to_serializable(results))
+
+
+def _handle_trakt_in_progress(args: argparse.Namespace) -> None:
+    provider = _providers()
+    media_type = MediaType(args.media_type)
+    try:
+        results = provider.trakt_playback(media_type, limit=args.limit)
+    except Exception as exc:
+        exit_with_error(str(exc))
+        return
+    print_json(to_serializable(results))
 
 
 def _handle_endpoints(args: argparse.Namespace) -> None:
@@ -275,6 +334,18 @@ def _build_parser() -> argparse.ArgumentParser:
     show_details.add_argument("--skip-credits", action="store_true", help="Skip retrieving credits to reduce payload size.")
     show_details.set_defaults(func=_handle_tmdb_show_details)
 
+    tmdb_catalog = build_subparser(tmdb_sub, "catalog", help="Fetch TMDb catalog listings such as popular or trending.")
+    tmdb_catalog.add_argument("category", help="Catalog category (e.g. popular, now_playing, top_rated).")
+    tmdb_catalog.add_argument(
+        "--media-type",
+        choices=[MediaType.MOVIE.value, MediaType.SHOW.value],
+        default=MediaType.MOVIE.value,
+        help="Media type to query.",
+    )
+    tmdb_catalog.add_argument("--language", help="Optional ISO language code for localized results.")
+    tmdb_catalog.add_argument("--page", type=int, default=1, help="Result page to request.")
+    tmdb_catalog.set_defaults(func=_handle_tmdb_catalog)
+
     # Public domain ------------------------------------------------------
     public_parser = build_subparser(subparsers, "public-domain", help="Explore curated and remote public-domain catalogs.")
     public_sub = public_parser.add_subparsers(dest="public_command")
@@ -322,10 +393,56 @@ def _build_parser() -> argparse.ArgumentParser:
     trakt_lists.add_argument("--username", help="Optional Trakt username; defaults to the authenticated user.")
     trakt_lists.set_defaults(func=_handle_trakt_lists)
 
+    trakt_list_items = build_subparser(
+        trakt_sub,
+        "list-items",
+        help="Fetch entries from a Trakt list for the authenticated user or another username.",
+    )
+    trakt_list_items.add_argument("list_id", help="Trakt list slug or identifier.")
+    trakt_list_items.add_argument("--username", help="Optional Trakt username; defaults to the authenticated user.")
+    trakt_list_items.add_argument(
+        "--media-type",
+        choices=[t.value for t in MediaType],
+        help="Restrict to a specific media type.",
+    )
+    trakt_list_items.set_defaults(func=_handle_trakt_list_items)
+
     trakt_history = build_subparser(trakt_sub, "history", help="Show the watched history for the authenticated user.")
     trakt_history.add_argument("--media-type", choices=[t.value for t in MediaType], default=MediaType.MOVIE.value, help="Media type to query.")
     trakt_history.add_argument("--limit", type=int, default=25, help="Maximum number of history entries to fetch.")
     trakt_history.set_defaults(func=_handle_trakt_history)
+
+    trakt_catalog = build_subparser(trakt_sub, "catalog", help="Fetch Trakt catalog categories (popular, trending, etc.).")
+    trakt_catalog.add_argument("category", help="Catalog category to fetch (popular, trending, watched, lists, ...).")
+    trakt_catalog.add_argument(
+        "--media-type",
+        choices=[MediaType.MOVIE.value, MediaType.SHOW.value],
+        default=MediaType.MOVIE.value,
+        help="Media type to query.",
+    )
+    trakt_catalog.add_argument("--period", help="Optional period for time-based categories (e.g. weekly, monthly).")
+    trakt_catalog.add_argument("--limit", type=int, default=40, help="Maximum number of entries to return.")
+    trakt_catalog.add_argument("--username", help="Optional username for user-specific categories such as lists.")
+    trakt_catalog.set_defaults(func=_handle_trakt_catalog)
+
+    trakt_in_progress = build_subparser(
+        trakt_sub,
+        "in-progress",
+        help="Fetch in-progress Trakt playback entries filtered by media type.",
+    )
+    trakt_in_progress.add_argument(
+        "--media-type",
+        choices=[MediaType.MOVIE.value, MediaType.SHOW.value],
+        default=MediaType.MOVIE.value,
+        help="Media type to query.",
+    )
+    trakt_in_progress.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="Maximum number of entries to request per page (Trakt allows up to 100).",
+    )
+    trakt_in_progress.set_defaults(func=_handle_trakt_in_progress)
 
     trakt_search_cmd = build_subparser(trakt_sub, "search", help="Shortcut for the Trakt search command requiring authentication.")
     trakt_search_cmd.add_argument("query", help="Text to search for.")

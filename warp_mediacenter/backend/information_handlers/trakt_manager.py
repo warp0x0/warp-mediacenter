@@ -258,6 +258,113 @@ class TraktManager:
 
         return TraktUserProfile.model_validate(payload)
 
+    def catalog_list(
+        self,
+        media_type: MediaType,
+        category: str,
+        *,
+        period: Optional[str] = None,
+        limit: int = 40,
+        username: str = "me",
+    ) -> Sequence[CatalogItem]:
+        path = self._catalog_endpoint(media_type, category, period=period, username=username)
+        params: Dict[str, Any] = {"limit": limit}
+        response = self._session.get(_SERVICE_NAME, path, params=params)
+        payload = self._parse_json(response)
+
+        if not isinstance(payload, Iterable):
+            return []
+
+        items: list[CatalogItem] = []
+        for entry in payload:
+            if not isinstance(entry, Mapping):
+                continue
+            media_payload = self._extract_media_payload(entry)
+            if media_payload is None and isinstance(entry, Mapping):
+                media_payload = dict(entry)
+                media_payload.setdefault("media_type", media_type.value)
+
+            if media_payload is None:
+                continue
+
+            resolved_type = self._resolve_media_type(media_payload.get("media_type"), fallback=media_type)
+            try:
+                items.append(
+                    self._facade.catalog_item(
+                        media_payload,
+                        source_tag=_SERVICE_NAME,
+                        media_type=resolved_type,
+                    )
+                )
+            except ValidationError:
+                continue
+
+        return items
+
+    def get_in_progress(
+        self,
+        media_type: MediaType,
+        *,
+        limit: int = 50,
+        max_pages: int = 10,
+    ) -> Sequence[CatalogItem]:
+        trakt_type = {
+            MediaType.MOVIE: "movies",
+            MediaType.SHOW: "episodes",
+            MediaType.EPISODE: "episodes",
+        }.get(media_type)
+        if trakt_type is None:
+            raise ValueError("Playback progress is only available for movies or shows")
+
+        page_size = max(1, min(limit, 100))
+        items: list[CatalogItem] = []
+        page = 1
+
+        while page <= max_pages:
+            response = self._authorized_get_response(
+                f"/sync/playback/{trakt_type}",
+                params={"limit": page_size, "page": page},
+            )
+            payload = self._parse_json(response)
+
+            if not isinstance(payload, Iterable):
+                break
+
+            batch_count = 0
+            for entry in payload:
+                if not isinstance(entry, Mapping):
+                    continue
+                media_payload = self._extract_media_payload(entry)
+                if media_payload is None:
+                    continue
+                fallback = MediaType.MOVIE if trakt_type == "movies" else MediaType.EPISODE
+                resolved_type = self._resolve_media_type(
+                    media_payload.get("media_type"),
+                    fallback=fallback,
+                )
+                try:
+                    items.append(
+                        self._facade.catalog_item(
+                            media_payload,
+                            source_tag=_SERVICE_NAME,
+                            media_type=resolved_type,
+                        )
+                    )
+                except ValidationError:
+                    continue
+                batch_count += 1
+
+            if batch_count < page_size:
+                break
+
+            total_pages = self._try_int(response.headers.get("X-Pagination-Page-Count"))
+            if total_pages is not None and page >= total_pages:
+                break
+
+            page += 1
+
+        return items
+
     def get_user_lists(self, username: str = "me") -> Sequence[UserList]:
         payload = self._authorized_get(f"/users/{username}/lists")
         if not isinstance(payload, Iterable):
@@ -273,6 +380,48 @@ class TraktManager:
                 continue
 
         return results
+
+    def get_list_items(
+        self,
+        list_id: str,
+        *,
+        username: str = "me",
+        media_type: Optional[MediaType] = None,
+    ) -> Sequence[CatalogItem]:
+        if not list_id:
+            raise ValueError("A list identifier or slug must be provided")
+
+        path = f"/users/{username}/lists/{list_id}/items"
+        if media_type is not None:
+            segment = self._list_media_segment(media_type)
+            path = f"{path}/{segment}"
+
+        payload = self._authorized_get(path)
+        if not isinstance(payload, Iterable):
+            return []
+
+        items: list[CatalogItem] = []
+        for entry in payload:
+            if not isinstance(entry, Mapping):
+                continue
+            media_payload = self._extract_media_payload(entry)
+            if media_payload is None:
+                continue
+
+            fallback_type = media_type or MediaType.MOVIE
+            resolved_type = self._resolve_media_type(entry.get("type"), fallback=fallback_type)
+            try:
+                items.append(
+                    self._facade.catalog_item(
+                        media_payload,
+                        source_tag=_SERVICE_NAME,
+                        media_type=resolved_type,
+                    )
+                )
+            except ValidationError:
+                continue
+
+        return items
 
     def get_watched_history(
         self,
@@ -433,16 +582,73 @@ class TraktManager:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+    def _catalog_endpoint(
+        self,
+        media_type: MediaType,
+        category: str,
+        *,
+        period: Optional[str],
+        username: str,
+    ) -> str:
+        base = {
+            MediaType.MOVIE: "movies",
+            MediaType.SHOW: "shows",
+        }.get(media_type)
+        if base is None:
+            raise ValueError(f"Unsupported media type for Trakt catalog: {media_type}")
+
+        normalized = category.lower()
+        if normalized == "trending":
+            return f"/{base}/trending"
+        if normalized == "popular":
+            return f"/{base}/popular"
+        if normalized == "anticipated":
+            return f"/{base}/anticipated"
+        if normalized in {"watched", "played", "collected"}:
+            window = (period or "weekly").lower()
+            return f"/{base}/{normalized}/{window}"
+        if normalized == "lists":
+            return f"/users/{username}/lists/{base}"
+
+        raise ValueError(f"Unsupported Trakt catalog category '{category}'")
+
+    def _list_media_segment(self, media_type: MediaType) -> str:
+        mapping = {
+            MediaType.MOVIE: "movies",
+            MediaType.SHOW: "shows",
+            MediaType.SEASON: "seasons",
+            MediaType.EPISODE: "episodes",
+        }
+        if media_type not in mapping:
+            raise ValueError(f"Unsupported media type for Trakt list items: {media_type}")
+        return mapping[media_type]
+
     def _authorized_get(self, path: str, params: Optional[Mapping[str, Any]] = None) -> Any:
+        response = self._authorized_get_response(path, params=params)
+        return self._parse_json(response)
+
+    def _authorized_get_response(
+        self, path: str, params: Optional[Mapping[str, Any]] = None
+    ):
         self._ensure_valid_token()
         headers = self._auth_headers()
         try:
-            response = self._session.get(_SERVICE_NAME, path, params=dict(params or {}), headers=headers)
+            response = self._session.get(
+                _SERVICE_NAME,
+                path,
+                params=dict(params or {}),
+                headers=headers,
+            )
         except Unauthorized:
             # Token might have been revoked; refresh once and retry.
             self.refresh_token()
-            response = self._session.get(_SERVICE_NAME, path, params=dict(params or {}), headers=self._auth_headers())
-        return self._parse_json(response)
+            response = self._session.get(
+                _SERVICE_NAME,
+                path,
+                params=dict(params or {}),
+                headers=self._auth_headers(),
+            )
+        return response
 
     def _authorized_post(
         self,

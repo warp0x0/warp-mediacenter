@@ -27,6 +27,8 @@ _DEFAULT_CONFIG_PATHS = {
     "proxy_pool": str(_PACKAGE_ROOT / "Resources" / "webshare_proxies.txt"),
     "cache_root": str(_PACKAGE_ROOT / "var" / "cache"),
     "info_providers_cache": str(_PACKAGE_ROOT / "var" / "cache" / "info_providers"),
+    "artwork_cache": str(_PACKAGE_ROOT / "var" / "artwork"),
+    "database": str(_PACKAGE_ROOT / "var" / "warpmc.db"),
     "public_domain_catalogs": str(_PACKAGE_ROOT / "var" / "public_domain_catalogs"),
     "tokens": str(_PACKAGE_ROOT / "var" / "tokens"),
     "user_settings": str(_PACKAGE_ROOT / "var" / "user_settings.json"),
@@ -108,6 +110,17 @@ def get_info_providers_cache_dir() -> str:
     return PATHS["info_providers_cache"]
 
 
+def get_artwork_dir() -> Path:
+    path = Path(PATHS["artwork_cache"])
+    path.mkdir(parents=True, exist_ok=True)
+
+    return path
+
+
+def get_artwork_cache_dir() -> str:
+    return str(get_artwork_dir())
+
+
 def get_public_domain_catalog_dir() -> str:
     return PATHS["public_domain_catalogs"]
 
@@ -142,6 +155,13 @@ def get_library_index_path() -> Path:
     return Path(PATHS["library_index"])
 
 
+def get_database_path() -> Path:
+    path = Path(PATHS["database"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    return path
+
+
 __all__ = [
     "PATHS",
     "expand_env",
@@ -156,6 +176,9 @@ __all__ = [
     "get_tokens_dir",
     "get_user_settings_path",
     "get_vlc_runtime_root",
+    "get_artwork_dir",
+    "get_artwork_cache_dir",
+    "get_database_path",
     "load_config_paths",
     "read_json",
 ]

@@ -1,8 +1,5 @@
 """Local library management utilities."""
 
-from warp_mediacenter.backend.library.local_library import (
-    LocalLibraryScanner,
-    scan_to_library,
-)
+from warp_mediacenter.backend.library.scanner import add_scan_path, scan_once
 
-__all__ = ["LocalLibraryScanner", "scan_to_library"]
+__all__ = ["add_scan_path", "scan_once"]

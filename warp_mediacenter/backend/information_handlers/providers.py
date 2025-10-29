@@ -14,7 +14,9 @@ should only require adjusting these delegation methods.
 
 from __future__ import annotations
 
-from datetime import datetime
+import hashlib
+import random
+from datetime import date, datetime
 from typing import Any, Mapping, Optional, Sequence
 
 from warp_mediacenter.backend.information_handlers.cache import InformationProviderCache
@@ -51,6 +53,11 @@ from warp_mediacenter.backend.information_handlers.trakt_manager import (
     UserList,
 )
 from warp_mediacenter.backend.network_handlers.session import HttpSession
+from warp_mediacenter.backend.persistence import (
+    connection as db_connection,
+    get_widget as db_get_widget,
+    set_widget as db_set_widget,
+)
 
 
 class InformationProviders:
@@ -182,6 +189,21 @@ class InformationProviders:
         page: int = 1,
     ) -> Sequence[CatalogItem]:
         return self._tmdb.search_shows(query, language=language, page=page)
+
+    def tmdb_catalog(
+        self,
+        media_type: MediaType,
+        category: str,
+        *,
+        language: Optional[str] = None,
+        page: int = 1,
+    ) -> Sequence[CatalogItem]:
+        return self._tmdb.catalog_list(
+            media_type,
+            category,
+            language=language,
+            page=page,
+        )
 
     def movie_details(
         self,
@@ -343,6 +365,19 @@ class InformationProviders:
     def get_trakt_user_lists(self, username: str = "me") -> Sequence[UserList]:
         return self._require_trakt().get_user_lists(username)
 
+    def get_trakt_list_items(
+        self,
+        list_id: str,
+        *,
+        username: str = "me",
+        media_type: Optional[MediaType] = None,
+    ) -> Sequence[CatalogItem]:
+        return self._require_trakt().get_list_items(
+            list_id,
+            username=username,
+            media_type=media_type,
+        )
+
     def get_trakt_history(
         self,
         media_type: MediaType,
@@ -378,6 +413,35 @@ class InformationProviders:
             return None
         return self._trakt.rate_limit()
 
+    def trakt_catalog(
+        self,
+        media_type: MediaType,
+        category: str,
+        *,
+        period: Optional[str] = None,
+        limit: int = 40,
+        username: str = "me",
+    ) -> Sequence[CatalogItem]:
+        if self._trakt is None:
+            return []
+        return self._trakt.catalog_list(
+            media_type,
+            category,
+            period=period,
+            limit=limit,
+            username=username,
+        )
+
+    def trakt_playback(
+        self,
+        media_type: MediaType,
+        *,
+        limit: int = 50,
+    ) -> Sequence[CatalogItem]:
+        if self._trakt is None:
+            return []
+        return self._trakt.get_in_progress(media_type, limit=limit)
+
     def search_trakt(
         self,
         query: str,
@@ -394,6 +458,30 @@ class InformationProviders:
         )
 
     # ------------------------------------------------------------------
+    # Widget caching
+    # ------------------------------------------------------------------
+    def get_widget(self, widget_key: str) -> Optional[Any]:
+        record = self.get_widget_record(widget_key)
+        return None if record is None else record["payload"]
+
+    def get_widget_record(self, widget_key: str) -> Optional[Mapping[str, Any]]:
+        with db_connection() as conn:
+            record = db_get_widget(conn, widget_key)
+        if record is None:
+            return None
+        return {
+            "payload": record["payload"],
+            "last_updated": record["last_updated"],
+            "ttl_seconds": record["ttl_seconds"],
+        }
+
+    def cache_widget(self, widget_key: str, payload: Any, *, ttl_seconds: int) -> None:
+        serializable = _to_serializable(payload)
+        randomized = _apply_daily_randomization(widget_key, serializable)
+        with db_connection() as conn:
+            db_set_widget(conn, widget_key, randomized, ttl_seconds)
+
+    # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
     def _require_trakt(self) -> TraktManager:
@@ -404,6 +492,39 @@ class InformationProviders:
                 ) from self._trakt_error
             raise RuntimeError("Trakt manager is unavailable")
         return self._trakt
+
+
+def _to_serializable(payload: Any) -> Any:
+    if hasattr(payload, "model_dump"):
+        return payload.model_dump(mode="json")  # type: ignore[no-any-return]
+    if isinstance(payload, Mapping):
+        return {k: _to_serializable(v) for k, v in payload.items()}
+    if isinstance(payload, Sequence) and not isinstance(payload, (str, bytes, bytearray)):
+        return [_to_serializable(item) for item in payload]
+    return payload
+
+
+def _apply_daily_randomization(widget_key: str, payload: Any) -> Any:
+    day_key = date.today().isoformat()
+    seed = _daily_seed(widget_key, day_key)
+    if isinstance(payload, Mapping):
+        data = {k: _to_serializable(v) for k, v in payload.items()}
+        items = payload.get("items")
+        if isinstance(items, Sequence) and not isinstance(items, (str, bytes, bytearray, Mapping)):
+            shuffled = list(_to_serializable(i) for i in items)
+            random.Random(seed).shuffle(shuffled)
+            data["items"] = shuffled
+        return data
+    if isinstance(payload, Sequence) and not isinstance(payload, (str, bytes, bytearray, Mapping)):
+        items = list(_to_serializable(item) for item in payload)
+        random.Random(seed).shuffle(items)
+        return items
+    return payload
+
+
+def _daily_seed(widget_key: str, day_key: str) -> int:
+    digest = hashlib.sha256(f"{widget_key}:{day_key}".encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], "big")
 
 
 __all__ = ["InformationProviders", "SourceDescriptor"]
