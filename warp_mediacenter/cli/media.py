@@ -272,7 +272,7 @@ def _handle_trakt_in_progress(args: argparse.Namespace) -> None:
     provider = _providers()
     media_type = MediaType(args.media_type)
     try:
-        results = provider.trakt_playback(media_type)
+        results = provider.trakt_playback(media_type, limit=args.limit)
     except Exception as exc:
         exit_with_error(str(exc))
         return
@@ -435,6 +435,12 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=[MediaType.MOVIE.value, MediaType.SHOW.value],
         default=MediaType.MOVIE.value,
         help="Media type to query.",
+    )
+    trakt_in_progress.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="Maximum number of entries to request per page (Trakt allows up to 100).",
     )
     trakt_in_progress.set_defaults(func=_handle_trakt_in_progress)
 

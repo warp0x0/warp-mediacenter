@@ -105,7 +105,7 @@ OAuth device flow.
 | `trakt list-items <LIST_ID> [--username USER] [--media-type TYPE]` | Render the entries from a specific Trakt list. |
 | `trakt history [--media-type TYPE] [--limit N]` | Display watched history for the authenticated user. |
 | `trakt catalog <CATEGORY> [--media-type movie|show] [--period WINDOW] [--limit N] [--username USER]` | Fetch Trakt catalog categories including trending, popular, watched, or user list collections. |
-| `trakt in-progress [--media-type movie|show]` | Show in-progress playback items filtered by media type. |
+| `trakt in-progress [--media-type movie|show] [--limit N]` | Show in-progress playback items filtered by media type with configurable page size. |
 | `trakt search <QUERY> [...]` | Trakt search shortcut that requires authentication. |
 
 ### Endpoint inspection

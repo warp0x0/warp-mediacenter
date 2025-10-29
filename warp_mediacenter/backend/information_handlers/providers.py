@@ -432,10 +432,15 @@ class InformationProviders:
             username=username,
         )
 
-    def trakt_playback(self, media_type: MediaType) -> Sequence[CatalogItem]:
+    def trakt_playback(
+        self,
+        media_type: MediaType,
+        *,
+        limit: int = 50,
+    ) -> Sequence[CatalogItem]:
         if self._trakt is None:
             return []
-        return self._trakt.get_in_progress(media_type)
+        return self._trakt.get_in_progress(media_type, limit=limit)
 
     def search_trakt(
         self,

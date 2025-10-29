@@ -301,7 +301,13 @@ class TraktManager:
 
         return items
 
-    def get_in_progress(self, media_type: MediaType) -> Sequence[CatalogItem]:
+    def get_in_progress(
+        self,
+        media_type: MediaType,
+        *,
+        limit: int = 50,
+        max_pages: int = 10,
+    ) -> Sequence[CatalogItem]:
         trakt_type = {
             MediaType.MOVIE: "movies",
             MediaType.SHOW: "episodes",
@@ -310,29 +316,52 @@ class TraktManager:
         if trakt_type is None:
             raise ValueError("Playback progress is only available for movies or shows")
 
-        payload = self._authorized_get(f"/sync/playback/{trakt_type}", params={"limit": 50})
-        if not isinstance(payload, Iterable):
-            return []
-
+        page_size = max(1, min(limit, 100))
         items: list[CatalogItem] = []
-        for entry in payload:
-            if not isinstance(entry, Mapping):
-                continue
-            media_payload = self._extract_media_payload(entry)
-            if media_payload is None:
-                continue
-            fallback = MediaType.MOVIE if trakt_type == "movies" else MediaType.EPISODE
-            resolved_type = self._resolve_media_type(media_payload.get("media_type"), fallback=fallback)
-            try:
-                items.append(
-                    self._facade.catalog_item(
-                        media_payload,
-                        source_tag=_SERVICE_NAME,
-                        media_type=resolved_type,
-                    )
+        page = 1
+
+        while page <= max_pages:
+            response = self._authorized_get_response(
+                f"/sync/playback/{trakt_type}",
+                params={"limit": page_size, "page": page},
+            )
+            payload = self._parse_json(response)
+
+            if not isinstance(payload, Iterable):
+                break
+
+            batch_count = 0
+            for entry in payload:
+                if not isinstance(entry, Mapping):
+                    continue
+                media_payload = self._extract_media_payload(entry)
+                if media_payload is None:
+                    continue
+                fallback = MediaType.MOVIE if trakt_type == "movies" else MediaType.EPISODE
+                resolved_type = self._resolve_media_type(
+                    media_payload.get("media_type"),
+                    fallback=fallback,
                 )
-            except ValidationError:
-                continue
+                try:
+                    items.append(
+                        self._facade.catalog_item(
+                            media_payload,
+                            source_tag=_SERVICE_NAME,
+                            media_type=resolved_type,
+                        )
+                    )
+                except ValidationError:
+                    continue
+                batch_count += 1
+
+            if batch_count < page_size:
+                break
+
+            total_pages = self._try_int(response.headers.get("X-Pagination-Page-Count"))
+            if total_pages is not None and page >= total_pages:
+                break
+
+            page += 1
 
         return items
 
@@ -595,15 +624,31 @@ class TraktManager:
         return mapping[media_type]
 
     def _authorized_get(self, path: str, params: Optional[Mapping[str, Any]] = None) -> Any:
+        response = self._authorized_get_response(path, params=params)
+        return self._parse_json(response)
+
+    def _authorized_get_response(
+        self, path: str, params: Optional[Mapping[str, Any]] = None
+    ):
         self._ensure_valid_token()
         headers = self._auth_headers()
         try:
-            response = self._session.get(_SERVICE_NAME, path, params=dict(params or {}), headers=headers)
+            response = self._session.get(
+                _SERVICE_NAME,
+                path,
+                params=dict(params or {}),
+                headers=headers,
+            )
         except Unauthorized:
             # Token might have been revoked; refresh once and retry.
             self.refresh_token()
-            response = self._session.get(_SERVICE_NAME, path, params=dict(params or {}), headers=self._auth_headers())
-        return self._parse_json(response)
+            response = self._session.get(
+                _SERVICE_NAME,
+                path,
+                params=dict(params or {}),
+                headers=self._auth_headers(),
+            )
+        return response
 
     def _authorized_post(
         self,
