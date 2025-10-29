@@ -46,6 +46,13 @@ python -m warp_mediacenter.cli.admin <command> [options]
 | `plugins list` | List plugin registry entries. |
 | `plugins register` | Register a plugin (accepts arguments such as `--plugin-id`, `--entrypoint`, `--path`, and optional metadata flags). |
 | `plugins remove <ID>` | Remove a plugin entry from the registry. |
+| `db info` | Display the SQLite database path along with file size and timestamps. |
+| `db migrate` | Run database migrations to create or update the schema. |
+| `db stats` | Show row counts for core tables plus page-level storage metrics. |
+| `db vacuum` | Execute `VACUUM` to reclaim free space in the SQLite file. |
+| `db widgets list` | List cached catalog widget keys stored in SQLite. |
+| `db widgets show <KEY> [--raw]` | Inspect the payload for a cached widget (use `--raw` to print the stored JSON string). |
+| `db widgets clear <KEY>` | Remove a cached widget payload from the database. |
 
 All commands print JSON to stdout to simplify scripting and integration.
 
