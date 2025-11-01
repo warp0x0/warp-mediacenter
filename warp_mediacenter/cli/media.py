@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 from datetime import datetime
-from typing import Any, MutableMapping, Optional, Sequence
+from typing import Any, Mapping, MutableMapping, Optional, Sequence
 
 from warp_mediacenter.backend.information_handlers.models import MediaType
 from warp_mediacenter.backend.information_handlers.providers import InformationProviders
