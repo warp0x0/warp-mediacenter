@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import hashlib
 import random
-from datetime import date, datetime
-from typing import Any, Mapping, Optional, Sequence
+from datetime import date, datetime, timezone
+from typing import Any, Mapping, Optional, Sequence, Tuple
+
+from pydantic import ValidationError
 
 from warp_mediacenter.backend.information_handlers.cache import InformationProviderCache
 from warp_mediacenter.backend.information_handlers.models import (
@@ -41,10 +43,15 @@ from warp_mediacenter.backend.information_handlers.tmdb_manager import (
 )
 from warp_mediacenter.backend.information_handlers.trailers_manager import TrailersManager
 from warp_mediacenter.backend.information_handlers.trakt_manager import (
+    CatalogWidget,
+    CatalogWidgetItem,
+    ContinueWatchingPayload,
     DeviceCode,
     HistoryEntry,
     OAuthToken,
+    PaginationDetails,
     RateLimitInfo,
+    PlaybackEntry,
     ScrobbleResponse,
     TraktManager,
     TraktUserProfile,
@@ -57,7 +64,9 @@ from warp_mediacenter.backend.persistence import (
     connection as db_connection,
     get_widget as db_get_widget,
     set_widget as db_set_widget,
+    upsert_title,
 )
+from warp_mediacenter.backend.common.logging import get_logger
 
 
 class InformationProviders:
@@ -101,6 +110,7 @@ class InformationProviders:
         trailers: Optional[TrailersManager] = None,
         allow_missing_trakt: bool = True,
     ) -> None:
+        self._log = get_logger(__name__)
         self._cache = cache or InformationProviderCache()
         self._facade = facade or MediaModelFacade()
 
@@ -128,6 +138,10 @@ class InformationProviders:
                     self._trakt_error = exc
             else:
                 self._trakt = TraktManager(facade=self._facade)
+
+        self._continue_watching_cache: Optional[ContinueWatchingPayload] = None
+        self._continue_watching_cache_params: Optional[Tuple[int, int, int]] = None
+        self._continue_watching_cache_ts: Optional[datetime] = None
 
     # ------------------------------------------------------------------
     # Shared accessors
@@ -322,14 +336,28 @@ class InformationProviders:
     # ------------------------------------------------------------------
     # Trakt delegates
     # ------------------------------------------------------------------
+    def trakt_device_code_start(self) -> Mapping[str, Any]:
+        return self._require_trakt().device_code_start()
+
+    def trakt_facade_status(self) -> Mapping[str, Any]:
+        return self._require_trakt().facade_status()
+
     def start_trakt_device_auth(self) -> DeviceCode:
         return self._require_trakt().start_device_auth()
 
     def poll_trakt_device_token(self, device_code: str) -> OAuthToken:
         return self._require_trakt().poll_device_token(device_code)
 
+    def wait_for_trakt_device_token(
+        self,
+        device: DeviceCode,
+        *,
+        timeout: Optional[int] = None,
+    ) -> OAuthToken:
+        return self._require_trakt().wait_for_device_token(device, timeout=timeout)
+
     def refresh_trakt_token(self) -> OAuthToken:
-        return self._require_trakt().refresh_token()
+        return self._require_trakt().refresh_tokens()
 
     def trakt_has_token(self) -> bool:
         if self._trakt is None:
@@ -397,15 +425,98 @@ class InformationProviders:
         self,
         *,
         media_type: MediaType,
-        ids: Mapping[str, Any],
+        media: Mapping[str, Any],
         progress: float,
         action: str = "start",
+        show: Optional[Mapping[str, Any]] = None,
+        app_version: Optional[str] = None,
+        app_date: Optional[str] = None,
     ) -> ScrobbleResponse:
-        return self._require_trakt().scrobble(
+        response = self._require_trakt().scrobble(
             media_type=media_type,
-            ids=ids,
+            media=media,
             progress=progress,
             action=action,
+            show=show,
+            app_version=app_version,
+            app_date=app_date,
+        )
+        if str(action).lower() in {"pause", "stop"}:
+            self._refresh_continue_watching_cache()
+        return response
+
+    def trakt_scrobble_start(
+        self,
+        *,
+        media_type: MediaType,
+        media: Mapping[str, Any],
+        progress: float,
+        show: Optional[Mapping[str, Any]] = None,
+        app_version: Optional[str] = None,
+        app_date: Optional[str] = None,
+    ) -> ScrobbleResponse:
+        return self._require_trakt().start_scrobble(
+            media_type=media_type,
+            media=media,
+            progress=progress,
+            show=show,
+            app_version=app_version,
+            app_date=app_date,
+        )
+
+    def trakt_scrobble_pause(
+        self,
+        *,
+        media_type: MediaType,
+        media: Mapping[str, Any],
+        progress: float,
+        show: Optional[Mapping[str, Any]] = None,
+        app_version: Optional[str] = None,
+        app_date: Optional[str] = None,
+    ) -> ScrobbleResponse:
+        response = self._require_trakt().pause_scrobble(
+            media_type=media_type,
+            media=media,
+            progress=progress,
+            show=show,
+            app_version=app_version,
+            app_date=app_date,
+        )
+        self._refresh_continue_watching_cache()
+        return response
+
+    def trakt_scrobble_stop(
+        self,
+        *,
+        media_type: MediaType,
+        media: Mapping[str, Any],
+        progress: float,
+        show: Optional[Mapping[str, Any]] = None,
+        app_version: Optional[str] = None,
+        app_date: Optional[str] = None,
+    ) -> ScrobbleResponse:
+        response = self._require_trakt().stop_scrobble(
+            media_type=media_type,
+            media=media,
+            progress=progress,
+            show=show,
+            app_version=app_version,
+            app_date=app_date,
+        )
+        self._refresh_continue_watching_cache()
+        return response
+
+    def get_trakt_playback_resume(
+        self,
+        media_type: MediaType,
+        *,
+        start_at: Optional[datetime] = None,
+        end_at: Optional[datetime] = None,
+    ) -> Sequence[PlaybackEntry]:
+        return self._require_trakt().get_playback_resume(
+            media_type,
+            start_at=start_at,
+            end_at=end_at,
         )
 
     def trakt_rate_limit(self) -> Optional[RateLimitInfo]:
@@ -481,9 +592,130 @@ class InformationProviders:
         with db_connection() as conn:
             db_set_widget(conn, widget_key, randomized, ttl_seconds)
 
+    def ensure_trakt_catalog_widget(
+        self,
+        category: str,
+        *,
+        period: str = "daily",
+        per_page: int = 10,
+        max_pages: int = 10,
+        max_items: Optional[int] = None,
+        related_ids: Optional[Mapping[MediaType, str]] = None,
+    ) -> Mapping[str, Any]:
+        widget_key = _trakt_widget_key(category)
+        record = self.get_widget_record(widget_key)
+        if record is not None:
+            return record["payload"]
+
+        return self.refresh_trakt_catalog_widget(
+            category,
+            period=period,
+            per_page=per_page,
+            max_pages=max_pages,
+            max_items=max_items,
+            related_ids=related_ids,
+        )
+
+    def refresh_trakt_catalog_widget(
+        self,
+        category: str,
+        *,
+        period: str = "daily",
+        per_page: int = 10,
+        max_pages: int = 10,
+        max_items: Optional[int] = None,
+        related_ids: Optional[Mapping[MediaType, str]] = None,
+    ) -> Mapping[str, Any]:
+        trakt = self._require_trakt()
+        widgets = trakt.get_catalog_widget_bundle(
+            category,
+            period=period,
+            per_page=per_page,
+            max_pages=max_pages,
+            max_items=max_items,
+            related_ids=related_ids,
+        )
+
+        movies = widgets.get("movies") or CatalogWidget(
+            items=[],
+            pagination=PaginationDetails(page=1, per_page=per_page, has_next=False),
+        )
+        shows = widgets.get("shows") or CatalogWidget(
+            items=[],
+            pagination=PaginationDetails(page=1, per_page=per_page, has_next=False),
+        )
+
+        self._persist_catalog_titles(movies.items)
+        self._persist_catalog_titles(shows.items)
+
+        movie_pages = [page.model_dump(mode="json") for page in movies.iter_pages()]
+        show_pages = [page.model_dump(mode="json") for page in shows.iter_pages()]
+
+        payload = {
+            "category": category.lower(),
+            "period": period,
+            "movies": movies.model_dump(mode="json"),
+            "movies_pages": movie_pages,
+            "shows": shows.model_dump(mode="json"),
+            "shows_pages": show_pages,
+        }
+
+        self.cache_widget(_trakt_widget_key(category), payload, ttl_seconds=60 * 60 * 24)
+        return payload
+
+    def get_trakt_continue_watching(
+        self,
+        *,
+        movie_limit: int = 25,
+        show_limit: int = 25,
+        history_window: int = 20,
+    ) -> Mapping[str, Any]:
+        self._require_trakt()
+        params = (int(movie_limit), int(show_limit), int(history_window))
+        if self._continue_watching_cache is not None and self._continue_watching_cache_params == params:
+            ts = self._continue_watching_cache_ts
+            if ts is not None and ts.astimezone().date() == date.today():
+                return self._continue_watching_cache.model_dump(mode="json")
+
+        self._refresh_continue_watching_cache(params)
+
+        payload = self._continue_watching_cache or ContinueWatchingPayload()
+        return payload.model_dump(mode="json")
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+    def _persist_catalog_titles(self, items: Sequence[CatalogWidgetItem]) -> None:
+        if not items:
+            return
+
+        seen_ids: set[str] = set()
+        with db_connection() as conn:
+            for entry in items:
+                media = entry.media
+                tmdb_id = _catalog_item_tmdb_id(media)
+                if not tmdb_id or tmdb_id in seen_ids:
+                    continue
+                seen_ids.add(tmdb_id)
+                try:
+                    upsert_title(
+                        conn,
+                        tmdb_id=tmdb_id,
+                        type=media.type.value,
+                        title=media.title,
+                        year=media.year,
+                        overview=media.overview,
+                        poster_url=_catalog_item_poster_url(media),
+                        backdrop_url=_catalog_item_backdrop_url(media),
+                    )
+                except Exception as exc:  # pragma: no cover - persistence guard
+                    self._log.debug(
+                        "Failed to persist Trakt widget title %s: %s",
+                        media.title,
+                        exc,
+                    )
+                    continue
+
     def _require_trakt(self) -> TraktManager:
         if self._trakt is None:
             if self._trakt_error is not None:
@@ -492,6 +724,40 @@ class InformationProviders:
                 ) from self._trakt_error
             raise RuntimeError("Trakt manager is unavailable")
         return self._trakt
+
+    def _refresh_continue_watching_cache(
+        self,
+        params: Optional[Tuple[int, int, int]] = None,
+    ) -> None:
+        if self._trakt is None:
+            self._continue_watching_cache = None
+            self._continue_watching_cache_ts = None
+            return
+
+        limits = params or self._continue_watching_cache_params or (25, 25, 20)
+        try:
+            payload = self._trakt.get_continue_watching(
+                movie_limit=limits[0],
+                show_limit=limits[1],
+                history_window=limits[2],
+            )
+        except Exception as exc:  # pragma: no cover - network variability
+            self._log.debug("trakt_continue_watching_refresh_failed", exc_info=exc)
+            self._continue_watching_cache = None
+            self._continue_watching_cache_ts = None
+            return
+
+        if not isinstance(payload, ContinueWatchingPayload):
+            try:
+                payload = ContinueWatchingPayload.model_validate(payload)
+            except ValidationError:
+                self._continue_watching_cache = None
+                self._continue_watching_cache_ts = None
+                return
+
+        self._continue_watching_cache = payload
+        self._continue_watching_cache_params = limits
+        self._continue_watching_cache_ts = datetime.now(timezone.utc)
 
 
 def _to_serializable(payload: Any) -> Any:
@@ -525,6 +791,65 @@ def _apply_daily_randomization(widget_key: str, payload: Any) -> Any:
 def _daily_seed(widget_key: str, day_key: str) -> int:
     digest = hashlib.sha256(f"{widget_key}:{day_key}".encode("utf-8")).digest()
     return int.from_bytes(digest[:8], "big")
+
+
+def _trakt_widget_key(category: str) -> str:
+    normalized = category.strip().lower().replace(" ", "_")
+    return f"trakt_{normalized}"
+
+
+def _catalog_item_tmdb_id(item: CatalogItem) -> Optional[str]:
+    extra = item.extra or {}
+    ids_payload = extra.get("ids")
+    if isinstance(ids_payload, Mapping):
+        tmdb_id = ids_payload.get("tmdb")
+        if tmdb_id:
+            return str(tmdb_id)
+    return None
+
+
+def _catalog_item_poster_url(item: CatalogItem) -> Optional[str]:
+    if item.poster and item.poster.url:
+        return str(item.poster.url)
+
+    extra = item.extra or {}
+    raw_payload = extra.get("raw_payload")
+    if isinstance(raw_payload, Mapping):
+        images = raw_payload.get("images")
+        if isinstance(images, Mapping):
+            poster = images.get("poster")
+            if isinstance(poster, Mapping):
+                for key in ("full", "medium", "thumb"):
+                    value = poster.get(key)
+                    if isinstance(value, str) and value:
+                        return value
+        poster_url = raw_payload.get("poster") or raw_payload.get("poster_path")
+        if isinstance(poster_url, str) and poster_url:
+            return poster_url
+    return None
+
+
+def _catalog_item_backdrop_url(item: CatalogItem) -> Optional[str]:
+    extra = item.extra or {}
+    raw_payload = extra.get("raw_payload")
+    if isinstance(raw_payload, Mapping):
+        for key in ("backdrop", "background", "fanart"):
+            value = raw_payload.get(key)
+            if isinstance(value, str) and value:
+                return value
+        images = raw_payload.get("images")
+        if isinstance(images, Mapping):
+            for key in ("fanart", "screenshot", "background", "banner"):
+                image_entry = images.get(key)
+                if isinstance(image_entry, Mapping):
+                    for variant in ("full", "medium", "thumb"):
+                        candidate = image_entry.get(variant)
+                        if isinstance(candidate, str) and candidate:
+                            return candidate
+        backdrop_path = raw_payload.get("backdrop_path")
+        if isinstance(backdrop_path, str) and backdrop_path:
+            return backdrop_path
+    return None
 
 
 __all__ = ["InformationProviders", "SourceDescriptor"]
