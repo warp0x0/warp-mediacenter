@@ -104,9 +104,16 @@ OAuth device flow.
 | `trakt lists [--username USER]` | List custom Trakt lists for a user. |
 | `trakt list-items <LIST_ID> [--username USER] [--media-type TYPE]` | Render the entries from a specific Trakt list. |
 | `trakt history [--media-type TYPE] [--limit N]` | Display watched history for the authenticated user. |
-| `trakt catalog <CATEGORY> [--media-type movie|show] [--period WINDOW] [--limit N] [--username USER]` | Fetch Trakt catalog categories including trending, popular, watched, or user list collections. |
-| `trakt in-progress [--media-type movie|show] [--limit N]` | Show in-progress playback items filtered by media type with configurable page size. |
+| `trakt catalog <CATEGORY> [--media-type movie|show|both] [--page N] [--period WINDOW] [--refresh] [...]` | Show cached Trakt widgets (trending, popular, favorited, played, watched, collected, related) with 10-item pages and next-page cards. |
+| `trakt continue-watching [--movie-limit N] [--show-limit N] [--history-window N]` | Print the continue watching summary with movie progress percentages and show last-watched episode codes. |
 | `trakt search <QUERY> [...]` | Trakt search shortcut that requires authentication. |
+
+`trakt catalog` respects the daily widget cache populated by the application and
+returns 10-item pages augmented with a `next_page_card` indicator so scripts can
+request subsequent pages on demand. `trakt continue-watching` prints a
+human-friendly summary that lists in-progress movies with their progress
+percentages alongside shows annotated with the last watched episode code (for
+example `S02E05`) and resume progress when available.
 
 ### Endpoint inspection
 
