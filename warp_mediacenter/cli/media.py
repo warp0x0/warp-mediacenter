@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 from datetime import datetime
-from typing import Any, MutableMapping, Optional, Sequence
+from typing import Any, Mapping, MutableMapping, Optional, Sequence
 
 from warp_mediacenter.backend.information_handlers.models import MediaType
 from warp_mediacenter.backend.information_handlers.providers import InformationProviders
@@ -253,30 +253,228 @@ def _handle_trakt_history(args: argparse.Namespace) -> None:
 
 def _handle_trakt_catalog(args: argparse.Namespace) -> None:
     provider = _providers()
-    media_type = MediaType(args.media_type)
+    category = args.category.lower()
+    per_page = 10
+    fetch_kwargs: MutableMapping[str, Any] = {
+        "category": category,
+        "period": args.period,
+        "per_page": per_page,
+        "max_pages": args.max_pages,
+        "max_items": args.max_items,
+    }
+
+    related_ids: MutableMapping[MediaType, str] = {}
+    if category == "related" and args.related_id:
+        if args.media_type == "both":
+            targets: Sequence[MediaType] = (MediaType.MOVIE, MediaType.SHOW)
+        else:
+            targets = (MediaType(args.media_type),)
+        for media_type in targets:
+            related_ids[media_type] = args.related_id
+    if related_ids:
+        fetch_kwargs["related_ids"] = related_ids
+
     try:
-        results = provider.trakt_catalog(
-            media_type,
-            args.category,
-            period=args.period,
-            limit=args.limit,
-            username=args.username or "me",
+        if args.refresh:
+            payload = provider.refresh_trakt_catalog_widget(**fetch_kwargs)
+        else:
+            payload = provider.ensure_trakt_catalog_widget(**fetch_kwargs)
+    except Exception as exc:
+        exit_with_error(str(exc))
+        return
+
+    pages: list[Mapping[str, Any]] = []
+    if args.media_type in {"movie", "both"}:
+        pages.append(_serialize_widget_page(payload, "movies", args.page))
+    if args.media_type in {"show", "both"}:
+        pages.append(_serialize_widget_page(payload, "shows", args.page))
+
+    if args.media_type == "both":
+        output: Mapping[str, Any] = {
+            "category": payload.get("category", category),
+            "period": payload.get("period", args.period),
+            "pages": pages,
+        }
+    else:
+        output = pages[0] if pages else {
+            "category": payload.get("category", category),
+            "period": payload.get("period", args.period),
+            "media_type": args.media_type,
+            "page": args.page,
+            "items": [],
+            "has_next": False,
+            "next_page_card": None,
+            "pagination": None,
+        }
+
+    print_json(to_serializable(output))
+
+
+def _handle_trakt_continue_watching(args: argparse.Namespace) -> None:
+    provider = _providers()
+    try:
+        payload = provider.get_trakt_continue_watching(
+            movie_limit=args.movie_limit,
+            show_limit=args.show_limit,
+            history_window=args.history_window,
         )
     except Exception as exc:
         exit_with_error(str(exc))
         return
-    print_json(to_serializable(results))
+
+    _print_continue_watching(payload)
 
 
-def _handle_trakt_in_progress(args: argparse.Namespace) -> None:
-    provider = _providers()
-    media_type = MediaType(args.media_type)
-    try:
-        results = provider.trakt_playback(media_type, limit=args.limit)
-    except Exception as exc:
-        exit_with_error(str(exc))
+def _serialize_widget_page(
+    payload: Mapping[str, Any],
+    collection: str,
+    requested_page: int,
+) -> Mapping[str, Any]:
+    pages_key = f"{collection}_pages"
+    pages = payload.get(pages_key)
+    page_entry = _select_widget_page(pages, requested_page)
+    catalog_payload = payload.get(collection)
+    pagination = None
+    if isinstance(catalog_payload, Mapping):
+        pagination = catalog_payload.get("pagination")
+
+    media_type = "movie" if collection == "movies" else "show"
+
+    return {
+        "category": payload.get("category"),
+        "period": payload.get("period"),
+        "media_type": media_type,
+        "page": page_entry.get("page", 1),
+        "items": page_entry.get("items", []),
+        "has_next": bool(page_entry.get("has_next")),
+        "next_page_card": page_entry.get("next_page_card"),
+        "pagination": pagination,
+    }
+
+
+def _select_widget_page(pages: Any, requested_page: int) -> Mapping[str, Any]:
+    default: Mapping[str, Any] = {
+        "page": 1,
+        "items": [],
+        "has_next": False,
+        "next_page_card": None,
+    }
+
+    if not isinstance(pages, Sequence):
+        return default
+
+    normalized = requested_page if requested_page > 0 else 1
+    for entry in pages:
+        if not isinstance(entry, Mapping):
+            continue
+        page_value = entry.get("page")
+        try:
+            page_int = int(page_value)
+        except (TypeError, ValueError):
+            continue
+        if page_int == normalized:
+            return entry
+
+    fallback = pages[0]
+    return fallback if isinstance(fallback, Mapping) else default
+
+
+def _print_continue_watching(payload: Mapping[str, Any]) -> None:
+    movies = payload.get("movies")
+    if not isinstance(movies, Sequence):
+        movies = []
+
+    shows = payload.get("shows")
+    if not isinstance(shows, Sequence):
+        shows = []
+
+    print("Continue Watching — Movies")
+    if not movies:
+        print("  (no movies in progress)")
+    else:
+        for movie in movies:
+            if not isinstance(movie, Mapping):
+                continue
+            media = movie.get("media")
+            if not isinstance(media, Mapping):
+                media = {}
+            title = str(media.get("title") or "Unknown Title")
+            progress_value = _coerce_float(movie.get("progress"))
+            progress_text = _format_progress(progress_value)
+            print(f"  - {title} — Progress: {progress_text}")
+
+    print("\nContinue Watching — Shows")
+    if not shows:
+        print("  (no shows in progress)")
         return
-    print_json(to_serializable(results))
+
+    for show in shows:
+        if not isinstance(show, Mapping):
+            continue
+        show_media = show.get("show")
+        if not isinstance(show_media, Mapping):
+            show_media = {}
+        show_title = str(show_media.get("title") or "Unknown Show")
+        next_episode = show.get("next_episode")
+        if not isinstance(next_episode, Mapping):
+            print(f"  - {show_title} — Up to date")
+            continue
+
+        season = _coerce_int(next_episode.get("season"))
+        number = _coerce_int(next_episode.get("number"))
+        episode_label = _format_episode_code(season, number)
+        episode_media = next_episode.get("episode")
+        episode_title = None
+        if isinstance(episode_media, Mapping):
+            episode_title = episode_media.get("title")
+
+        progress_value = _coerce_float(next_episode.get("progress"))
+        completed = bool(next_episode.get("completed"))
+        progress_text = _format_progress(progress_value, completed=completed)
+
+        suffix = ""
+        if progress_value is None or progress_value == 0:
+            suffix = " (unwatched)"
+
+        detail = f"Last watched {episode_label}"
+        if episode_title:
+            detail += f' "{episode_title}"'
+        print(f"  - {show_title} — {detail} — Progress: {progress_text}{suffix}")
+
+
+def _coerce_int(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _coerce_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _format_progress(value: Optional[float], *, completed: bool = False) -> str:
+    if value is None:
+        return "0.0%" if not completed else "100.0%"
+    clamped = max(0.0, min(100.0, value))
+    return f"{clamped:.1f}%"
+
+
+def _format_episode_code(season: Optional[int], number: Optional[int]) -> str:
+    if season is None and number is None:
+        return "Unknown"
+    if season is None:
+        return f"E{number:02d}" if number is not None else "Unknown"
+    if number is None:
+        return f"S{season:02d}"
+    return f"S{season:02d}E{number:02d}"
 
 
 def _handle_endpoints(args: argparse.Namespace) -> None:
@@ -412,37 +610,83 @@ def _build_parser() -> argparse.ArgumentParser:
     trakt_history.add_argument("--limit", type=int, default=25, help="Maximum number of history entries to fetch.")
     trakt_history.set_defaults(func=_handle_trakt_history)
 
-    trakt_catalog = build_subparser(trakt_sub, "catalog", help="Fetch Trakt catalog categories (popular, trending, etc.).")
-    trakt_catalog.add_argument("category", help="Catalog category to fetch (popular, trending, watched, lists, ...).")
+    trakt_catalog = build_subparser(trakt_sub, "catalog", help="Render cached Trakt widgets (trending, popular, etc.).")
+    trakt_catalog.add_argument(
+        "category",
+        choices=[
+            "trending",
+            "popular",
+            "favorited",
+            "played",
+            "watched",
+            "collected",
+            "related",
+        ],
+        help="Catalog category to fetch.",
+    )
     trakt_catalog.add_argument(
         "--media-type",
-        choices=[MediaType.MOVIE.value, MediaType.SHOW.value],
-        default=MediaType.MOVIE.value,
-        help="Media type to query.",
+        choices=["movie", "show", "both"],
+        default="movie",
+        help="Which catalog lane to display (movies, shows, or both).",
     )
-    trakt_catalog.add_argument("--period", help="Optional period for time-based categories (e.g. weekly, monthly).")
-    trakt_catalog.add_argument("--limit", type=int, default=40, help="Maximum number of entries to return.")
-    trakt_catalog.add_argument("--username", help="Optional username for user-specific categories such as lists.")
+    trakt_catalog.add_argument(
+        "--period",
+        default="daily",
+        help="Time period for the widget when supported (default: daily).",
+    )
+    trakt_catalog.add_argument(
+        "--page",
+        type=int,
+        default=1,
+        help="Widget page to display (each page contains 10 items).",
+    )
+    trakt_catalog.add_argument(
+        "--max-pages",
+        type=int,
+        default=10,
+        help="Maximum number of pages to prefetch from Trakt (default: 10).",
+    )
+    trakt_catalog.add_argument(
+        "--max-items",
+        type=int,
+        help="Optional cap on the total number of catalog entries cached for the day.",
+    )
+    trakt_catalog.add_argument(
+        "--related-id",
+        help="Override the Trakt ID used for related lookups (falls back to recent history).",
+    )
+    trakt_catalog.add_argument(
+        "--refresh",
+        action="store_true",
+        help="Force a fresh fetch instead of using the cached widget payload.",
+    )
     trakt_catalog.set_defaults(func=_handle_trakt_catalog)
 
-    trakt_in_progress = build_subparser(
+    trakt_continue = build_subparser(
         trakt_sub,
-        "in-progress",
-        help="Fetch in-progress Trakt playback entries filtered by media type.",
+        "continue-watching",
+        help="Display continue watching movies and shows with progress summaries.",
     )
-    trakt_in_progress.add_argument(
-        "--media-type",
-        choices=[MediaType.MOVIE.value, MediaType.SHOW.value],
-        default=MediaType.MOVIE.value,
-        help="Media type to query.",
-    )
-    trakt_in_progress.add_argument(
-        "--limit",
+    trakt_continue.add_argument(
+        "--movie-limit",
         type=int,
-        default=50,
-        help="Maximum number of entries to request per page (Trakt allows up to 100).",
+        default=25,
+        help="Maximum number of in-progress movies to show.",
     )
-    trakt_in_progress.set_defaults(func=_handle_trakt_in_progress)
+    trakt_continue.add_argument(
+        "--show-limit",
+        type=int,
+        default=25,
+        help="Maximum number of shows to include.",
+    )
+    trakt_continue.add_argument(
+        "--history-window",
+        type=int,
+        default=20,
+        help="Number of recent shows from history to inspect when building the list.",
+    )
+    trakt_continue.set_defaults(func=_handle_trakt_continue_watching)
 
     trakt_search_cmd = build_subparser(trakt_sub, "search", help="Shortcut for the Trakt search command requiring authentication.")
     trakt_search_cmd.add_argument("query", help="Text to search for.")
