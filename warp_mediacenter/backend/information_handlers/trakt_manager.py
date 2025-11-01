@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass
+from collections import OrderedDict
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence
@@ -860,6 +861,32 @@ class TraktManager:
 
         episode_resume_entries = self.get_playback_resume(MediaType.EPISODE)
         resume_map: Dict[str, PlaybackEntry] = {}
+        show_candidates: "OrderedDict[str, CatalogItem]" = OrderedDict()
+
+        for entry in episode_resume_entries:
+            episode_trakt_id = self._catalog_trakt_id(entry.media)
+            if episode_trakt_id is not None:
+                resume_map[episode_trakt_id] = entry
+
+            show_payload = self._catalog_show_payload(entry.media)
+            show_trakt_id = self._payload_trakt_id(show_payload) if show_payload else None
+            if show_trakt_id and show_trakt_id not in show_candidates:
+                show_media = self._build_show_catalog_item(show_payload)
+                if show_media is not None:
+                    show_candidates[show_trakt_id] = show_media
+
+        history_entries = self.get_watched_history(MediaType.EPISODE, limit=history_window)
+        for history_entry in history_entries:
+            show_payload = self._catalog_show_payload(history_entry.media)
+            show_trakt_id = self._payload_trakt_id(show_payload) if show_payload else None
+            if not show_trakt_id or show_trakt_id in show_candidates:
+                continue
+            show_media = self._build_show_catalog_item(show_payload)
+            if show_media is not None:
+                show_candidates[show_trakt_id] = show_media
+
+        shows: list[ContinueWatchingShow] = []
+        for trakt_show_id, base_show_media in show_candidates.items():
         for entry in episode_resume_entries:
             trakt_id = self._catalog_trakt_id(entry.media)
             if trakt_id is None:
@@ -879,6 +906,12 @@ class TraktManager:
             progress_payload = self.get_show_watched_progress(trakt_show_id)
             if progress_payload is None:
                 continue
+
+            show_media = base_show_media
+            show_payload = progress_payload.get("show") if isinstance(progress_payload, Mapping) else None
+            updated_show_media = self._build_show_catalog_item(show_payload)
+            if updated_show_media is not None:
+                show_media = updated_show_media
 
             episode_progress = self._build_show_episode_progress(
                 show_media,
@@ -1045,6 +1078,7 @@ class TraktManager:
             "count_specials": "true" if count_specials else "false",
             "extended": "full",
         }
+        path = f"/shows/{trakt_show_id}/progress/watched"
         path = settings.get_provider_endpoints("trakt")["shows"]["progress_watched"].format(show_id=trakt_show_id)
         payload = self._authorized_get(path, params=params)
         if not isinstance(payload, Mapping):
@@ -1841,21 +1875,94 @@ class TraktManager:
         except ValueError:
             return None
 
-    def _extract_media_payload(self, entry: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
-        for key in ("movie", "show", "episode"):
+    def _extract_media_payload(
+        self,
+        entry: Mapping[str, Any],
+        *,
+        preferred: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        type_hint = preferred or entry.get("type")
+        preferred_keys: Sequence[str]
+        if isinstance(type_hint, str):
+            normalized = type_hint.lower()
+            if normalized == "episode":
+                preferred_keys = ("episode", "show", "movie")
+            elif normalized == "show":
+                preferred_keys = ("show", "movie", "episode")
+            elif normalized == "movie":
+                preferred_keys = ("movie", "show", "episode")
+            else:
+                preferred_keys = ("movie", "show", "episode")
+        else:
+            preferred_keys = ("movie", "show", "episode")
+
+        for key in preferred_keys:
             payload = entry.get(key)
-            if isinstance(payload, Mapping):
-                data = dict(payload)
-                data.setdefault("source_tag", _SERVICE_NAME)
-                if key == "episode":
-                    data.setdefault("media_type", MediaType.EPISODE.value)
-                elif key == "show":
-                    data.setdefault("media_type", MediaType.SHOW.value)
-                else:
-                    data.setdefault("media_type", MediaType.MOVIE.value)
-                return data
+            if not isinstance(payload, Mapping):
+                continue
+
+            data = dict(payload)
+            existing_extra = data.get("extra")
+            extra_payload: Dict[str, Any] = {}
+            if isinstance(existing_extra, Mapping):
+                extra_payload.update(existing_extra)
+
+            if key == "episode":
+                data.setdefault("media_type", MediaType.EPISODE.value)
+                show_payload = entry.get("show")
+                if isinstance(show_payload, Mapping):
+                    extra_payload.setdefault("show", dict(show_payload))
+            elif key == "show":
+                data.setdefault("media_type", MediaType.SHOW.value)
+            else:
+                data.setdefault("media_type", MediaType.MOVIE.value)
+
+            if "raw_payload" not in extra_payload:
+                extra_payload["raw_payload"] = {k: v for k, v in entry.items() if isinstance(k, str)}
+
+            if extra_payload:
+                data["extra"] = extra_payload
+
+            data.setdefault("source_tag", _SERVICE_NAME)
+            return data
 
         return None
+
+    def _catalog_show_payload(self, item: CatalogItem) -> Optional[Mapping[str, Any]]:
+        extra = item.extra or {}
+        show_payload = extra.get("show")
+        if isinstance(show_payload, Mapping):
+            return show_payload
+
+        raw_payload = extra.get("raw_payload")
+        if isinstance(raw_payload, Mapping):
+            candidate = raw_payload.get("show")
+            if isinstance(candidate, Mapping):
+                return candidate
+
+        return None
+
+    def _payload_trakt_id(self, payload: Optional[Mapping[str, Any]]) -> Optional[str]:
+        if not isinstance(payload, Mapping):
+            return None
+        ids_payload = payload.get("ids")
+        if isinstance(ids_payload, Mapping):
+            trakt_id = ids_payload.get("trakt")
+            if trakt_id:
+                return str(trakt_id)
+        return None
+
+    def _build_show_catalog_item(self, payload: Optional[Mapping[str, Any]]) -> Optional[CatalogItem]:
+        if not isinstance(payload, Mapping):
+            return None
+        try:
+            return self._facade.catalog_item(
+                payload,
+                source_tag=_SERVICE_NAME,
+                media_type=MediaType.SHOW,
+            )
+        except ValidationError:
+            return None
 
     def _resolve_media_type(self, value: Any, *, fallback: MediaType) -> MediaType:
         if isinstance(value, MediaType):
