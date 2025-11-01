@@ -379,7 +379,9 @@ class TraktManager:
 
     def start_device_auth(self) -> DeviceCode:
         payload = {"client_id": self._client_id}
-        response = self._session.post(_SERVICE_NAME, "/oauth/device/code", json_body=payload)
+        response = self._session.post(
+            _SERVICE_NAME, settings.get_provider_endpoints("trakt")["oauth"]["device_code"], json_body=payload
+        )
         data = self._parse_json(response)
 
         device = DeviceCode.model_validate(data)
@@ -399,7 +401,7 @@ class TraktManager:
         }
         response = self._session.post(
             _SERVICE_NAME,
-            "/oauth/device/token",
+            settings.get_provider_endpoints("trakt")["oauth"]["poll"],
             json_body=payload,
             allowed_statuses={400, 404, 409, 410, 418, 429},
         )
@@ -464,7 +466,9 @@ class TraktManager:
             "grant_type": "refresh_token",
             "refresh_token": token.refresh_token,
         }
-        response = self._session.post(_SERVICE_NAME, "/oauth/token", json_body=payload)
+        response = self._session.post(
+            _SERVICE_NAME, settings.get_provider_endpoints("trakt")["oauth"]["refresh"], json_body=payload
+        )
         data = self._parse_json(response)
         token = OAuthToken.model_validate(data)
         self._store_token(token)
@@ -522,7 +526,9 @@ class TraktManager:
     # User-facing operations
     # ------------------------------------------------------------------
     def get_profile(self, username: str = "me") -> TraktUserProfile:
-        payload = self._authorized_get(f"/users/{username}")
+        payload = self._authorized_get(
+            settings.get_provider_endpoints("trakt")["users"]["profile"].format(username=username)
+        )
 
         return TraktUserProfile.model_validate(payload)
 
@@ -720,7 +726,9 @@ class TraktManager:
         if end_at is not None:
             params["end_at"] = end_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
-        payload = self._authorized_get(f"/sync/playback/{trakt_type}", params=params)
+        payload = self._authorized_get(
+            settings.get_provider_endpoints("trakt")["sync"]["playback_by_type"].format(type=trakt_type), params=params
+        )
         if not isinstance(payload, Iterable):
             return []
 
@@ -783,7 +791,7 @@ class TraktManager:
 
         while page <= max_pages:
             response = self._authorized_get_response(
-                f"/sync/playback/{trakt_type}",
+                settings.get_provider_endpoints("trakt")["sync"]["playback_by_type"].format(type=trakt_type),
                 params={"limit": page_size, "page": page},
             )
             payload = self._parse_json(response)
@@ -879,6 +887,22 @@ class TraktManager:
 
         shows: list[ContinueWatchingShow] = []
         for trakt_show_id, base_show_media in show_candidates.items():
+        for entry in episode_resume_entries:
+            trakt_id = self._catalog_trakt_id(entry.media)
+            if trakt_id is None:
+                continue
+            resume_map[trakt_id] = entry
+
+        show_history = self.get_watched_history(MediaType.SHOW, limit=history_window)
+        show_map: Dict[str, CatalogItem] = {}
+        for history_entry in show_history:
+            trakt_id = self._catalog_trakt_id(history_entry.media)
+            if trakt_id is None or trakt_id in show_map:
+                continue
+            show_map[trakt_id] = history_entry.media
+
+        shows: list[ContinueWatchingShow] = []
+        for trakt_show_id, show_media in show_map.items():
             progress_payload = self.get_show_watched_progress(trakt_show_id)
             if progress_payload is None:
                 continue
@@ -914,7 +938,9 @@ class TraktManager:
         return ContinueWatchingPayload(movies=movies, shows=shows)
 
     def get_user_lists(self, username: str = "me") -> Sequence[UserList]:
-        payload = self._authorized_get(f"/users/{username}/lists")
+        payload = self._authorized_get(
+            settings.get_provider_endpoints("trakt")["users"]["lists"].format(username=username)
+        )
         if not isinstance(payload, Iterable):
             return []
 
@@ -939,10 +965,15 @@ class TraktManager:
         if not list_id:
             raise ValueError("A list identifier or slug must be provided")
 
-        path = f"/users/{username}/lists/{list_id}/items"
         if media_type is not None:
             segment = self._list_media_segment(media_type)
-            path = f"{path}/{segment}"
+            path = settings.get_provider_endpoints("trakt")["users"]["list_items_by_type"].format(
+                username=username, list_id=list_id, media_type=segment
+            )
+        else:
+            path = settings.get_provider_endpoints("trakt")["users"]["list_items"].format(
+                username=username, list_id=list_id
+            )
 
         payload = self._authorized_get(path)
         if not isinstance(payload, Iterable):
@@ -986,7 +1017,9 @@ class TraktManager:
         if end_at is not None:
             params["end_at"] = end_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
-        payload = self._authorized_get(f"/sync/history/{trakt_type}", params=params)
+        payload = self._authorized_get(
+            settings.get_provider_endpoints("trakt")["sync"]["history"].format(media_type=trakt_type), params=params
+        )
         if not isinstance(payload, Iterable):
             return []
 
@@ -1046,6 +1079,7 @@ class TraktManager:
             "extended": "full",
         }
         path = f"/shows/{trakt_show_id}/progress/watched"
+        path = settings.get_provider_endpoints("trakt")["shows"]["progress_watched"].format(show_id=trakt_show_id)
         payload = self._authorized_get(path, params=params)
         if not isinstance(payload, Mapping):
             return None
@@ -1165,7 +1199,7 @@ class TraktManager:
             body["show"] = self._normalize_media_selector(show)
 
         response = self._authorized_post_response(
-            f"/scrobble/{action}",
+            settings.get_provider_endpoints("trakt")["scrobble"]["base"].format(action=action),
             json_body=body,
             allowed_statuses={409},
         )
@@ -1208,7 +1242,7 @@ class TraktManager:
         )
 
     def get_user_settings(self) -> TraktUserSettings:
-        payload = self._authorized_get("/users/settings")
+        payload = self._authorized_get(settings.get_provider_endpoints("trakt")["users"]["settings"])
 
         return TraktUserSettings.model_validate(payload)
 
@@ -1228,7 +1262,7 @@ class TraktManager:
         if chosen_types:
             params["type"] = ",".join(sorted({t.value for t in chosen_types}))
 
-        payload = self._authorized_get("/search", params=params)
+        payload = self._authorized_get(settings.get_provider_endpoints("trakt")["search"]["text"], params=params)
         if not isinstance(payload, Iterable):
             return []
 
@@ -1284,20 +1318,17 @@ class TraktManager:
             raise ValueError(f"Unsupported media type for Trakt catalog: {media_type}")
 
         normalized = category.lower()
-        if normalized == "trending":
-            return f"/{base}/trending"
-        if normalized == "popular":
-            return f"/{base}/popular"
-        if normalized == "anticipated":
-            return f"/{base}/anticipated"
-        if normalized == "favorited":
-            window = (period or "weekly").lower()
-            return f"/{base}/favorited/{window}"
-        if normalized in {"watched", "played", "collected"}:
-            window = (period or "weekly").lower()
-            return f"/{base}/{normalized}/{window}"
+        endpoints = settings.get_provider_endpoints("trakt")
+
+        if normalized in endpoints[base]:
+            endpoint = endpoints[base][normalized]
+            if "{period}" in endpoint:
+                window = (period or "weekly").lower()
+                return endpoint.format(period=window)
+            return endpoint
+        
         if normalized == "lists":
-            return f"/users/{username}/lists/{base}"
+            return endpoints["users"]["lists_by_type"].format(username=username, base=base)
 
         raise ValueError(f"Unsupported Trakt catalog category '{category}'")
 
@@ -1317,18 +1348,18 @@ class TraktManager:
             raise ValueError(f"Unsupported media type for Trakt catalog widget: {media_type}")
 
         normalized = category.lower()
-        if normalized in {"trending", "popular"}:
-            return f"/{base}/{normalized}"
-        if normalized == "favorited":
-            window = (period or "daily").lower()
-            return f"/{base}/favorited/{window}"
-        if normalized in {"played", "watched", "collected"}:
-            window = (period or "daily").lower()
-            return f"/{base}/{normalized}/{window}"
-        if normalized == "related":
-            if not related_id:
-                return None
-            return f"/{base}/{related_id}/related"
+        endpoints = settings.get_provider_endpoints("trakt")
+
+        if normalized in endpoints[base]:
+            endpoint = endpoints[base][normalized]
+            if "{period}" in endpoint:
+                window = (period or "daily").lower()
+                return endpoint.format(period=window)
+            if "{slug}" in endpoint:
+                if not related_id:
+                    return None
+                return endpoint.format(slug=related_id)
+            return endpoint
 
         raise ValueError(f"Unsupported Trakt catalog widget category '{category}'")
 

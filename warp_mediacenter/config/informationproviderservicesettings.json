@@ -13,9 +13,25 @@
       },
       "images": {
         "secure_base_url": "https://image.tmdb.org/t/p",
-        "poster_sizes": ["w154", "w342", "w500", "w780", "original"],
-        "backdrop_sizes": ["w300", "w780", "w1280", "original"],
-        "profile_sizes": ["w185", "w300", "h632", "original"]
+        "poster_sizes": [
+          "w154",
+          "w342",
+          "w500",
+          "w780",
+          "original"
+        ],
+        "backdrop_sizes": [
+          "w300",
+          "w780",
+          "w1280",
+          "original"
+        ],
+        "profile_sizes": [
+          "w185",
+          "w300",
+          "h632",
+          "original"
+        ]
       },
       "endpoints": {
         "movies": {
@@ -68,40 +84,43 @@
           "refresh": "/oauth/token"
         },
         "sync": {
-          "playback": "/sync/playback",
-          "history": "/sync/history/{media_type}",
-          "collection": "/sync/collection/{media_type}"
+          "playback_by_type": "/sync/playback/{type}",
+          "history": "/sync/history/{media_type}"
         },
         "movies": {
           "trending": "/movies/trending",
           "popular": "/movies/popular",
-          "played": "/movies/played",
-          "watched": "/movies/watched",
-          "collected": "/movies/collected",
+          "played": "/movies/played/{period}",
+          "watched": "/movies/watched/{period}",
+          "collected": "/movies/collected/{period}",
           "anticipated": "/movies/anticipated",
-          "lists": "/movies/lists",
-          "people": "/movies/{slug}/people",
-          "ratings": "/movies/{slug}/ratings",
           "related": "/movies/{slug}/related",
-          "stats": "/movies/{slug}/stats",
-          "videos": "/movies/{slug}/videos"
+          "favorited": "/movies/favorited/{period}"
         },
         "shows": {
           "trending": "/shows/trending",
           "popular": "/shows/popular",
-          "played": "/shows/played",
-          "watched": "/shows/watched",
-          "collected": "/shows/collected",
+          "played": "/shows/played/{period}",
+          "watched": "/shows/watched/{period}",
+          "collected": "/shows/collected/{period}",
           "anticipated": "/shows/anticipated",
-          "lists": "/shows/lists",
-          "people": "/shows/{slug}/people",
-          "ratings": "/shows/{slug}/ratings",
           "related": "/shows/{slug}/related",
-          "stats": "/shows/{slug}/stats",
-          "videos": "/shows/{slug}/videos"
+          "progress_watched": "/shows/{show_id}/progress/watched",
+          "favorited": "/shows/favorited/{period}"
         },
         "search": {
-          "multi": "/search/{id_type}/{lookup}"
+          "text": "/search"
+        },
+        "scrobble": {
+          "base": "/scrobble/{action}"
+        },
+        "users": {
+          "profile": "/users/{username}",
+          "settings": "/users/settings",
+          "lists": "/users/{username}/lists",
+          "list_items": "/users/{username}/lists/{list_id}/items",
+          "list_items_by_type": "/users/{username}/lists/{list_id}/items/{media_type}",
+          "lists_by_type": "/users/{username}/lists/{base}"
         }
       }
     },
@@ -119,7 +138,9 @@
             "q": "collection:(feature_films) AND mediatype:(movies) AND licenseurl:(creativecommons.org)",
             "output": "json",
             "rows": 200,
-            "sort[]": ["downloads desc"],
+            "sort[]": [
+              "downloads desc"
+            ],
             "fl[]": [
               "identifier",
               "title",
@@ -140,7 +161,9 @@
             "q": "collection:(animationandcartoons) AND mediatype:(movies)",
             "output": "json",
             "rows": 200,
-            "sort[]": ["downloads desc"],
+            "sort[]": [
+              "downloads desc"
+            ],
             "fl[]": [
               "identifier",
               "title",
@@ -161,7 +184,9 @@
             "q": "collection:(classic_tv) AND mediatype:(movies)",
             "output": "json",
             "rows": 200,
-            "sort[]": ["downloads desc"],
+            "sort[]": [
+              "downloads desc"
+            ],
             "fl[]": [
               "identifier",
               "title",
@@ -251,10 +276,19 @@
   "pipelines": {
     "movies": {
       "primary_provider": "tmdb",
-      "supplementary_providers": ["trakt"],
+      "supplementary_providers": [
+        "trakt"
+      ],
       "id_strategies": {
-        "tmdb": ["tmdb_id", "imdb_id"],
-        "trakt": ["trakt", "imdb", "tmdb"]
+        "tmdb": [
+          "tmdb_id",
+          "imdb_id"
+        ],
+        "trakt": [
+          "trakt",
+          "imdb",
+          "tmdb"
+        ]
       },
       "public_domain_sources": [
         "public_domain.internet_archive_feature_films",
@@ -267,10 +301,18 @@
     },
     "shows": {
       "primary_provider": "tmdb",
-      "supplementary_providers": ["trakt"],
+      "supplementary_providers": [
+        "trakt"
+      ],
       "id_strategies": {
-        "tmdb": ["tmdb_id"],
-        "trakt": ["trakt", "tvdb", "tmdb"]
+        "tmdb": [
+          "tmdb_id"
+        ],
+        "trakt": [
+          "trakt",
+          "tvdb",
+          "tmdb"
+        ]
       },
       "public_domain_sources": [
         "public_domain.internet_archive_classic_tv",
