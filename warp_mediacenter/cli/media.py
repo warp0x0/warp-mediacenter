@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Mapping, MutableMapping, Optional, Sequence
+
+from pydantic import ValidationError
 
 from warp_mediacenter.backend.information_handlers.models import MediaType
 from warp_mediacenter.backend.information_handlers.providers import InformationProviders
 from warp_mediacenter.backend.information_handlers.trakt_manager import (
+    ContinueWatchingPayload,
     DeviceAuthPollingError,
     TraktManager,
 )
