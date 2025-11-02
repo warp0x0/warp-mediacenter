@@ -120,7 +120,8 @@
           "lists": "/users/{username}/lists",
           "list_items": "/users/{username}/lists/{list_id}/items",
           "list_items_by_type": "/users/{username}/lists/{list_id}/items/{media_type}",
-          "lists_by_type": "/users/{username}/lists/{base}"
+          "lists_by_type": "/users/{username}/lists/{base}",
+          "watching": "/users/{username}/watching"
         }
       }
     },
