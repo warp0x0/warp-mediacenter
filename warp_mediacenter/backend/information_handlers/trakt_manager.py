@@ -152,6 +152,7 @@ class TraktUserProfile(BaseModel):
     location: Optional[str] = None
     about: Optional[str] = None
     images: Optional[Mapping[str, Any]] = None
+    ids: Optional[Mapping[str, Any]] = None
 
 
 class UserList(BaseModel):
@@ -257,10 +258,11 @@ class CatalogWidget(BaseModel):
 class ContinueWatchingMovie(BaseModel):
     """Represents a movie resume entry."""
 
-    playback_id: int
-    progress: float
+    playback_id: Optional[int] = None
+    progress: Optional[float] = None
     paused_at: Optional[datetime] = None
     media: CatalogItem
+    resume_available: bool = False
 
 
 class EpisodeProgress(BaseModel):
@@ -358,6 +360,7 @@ class TraktManager:
         self._token: Optional[StoredToken] = None
         self._daily_refresh_attempted: Optional[str] = None
         self._reauth_reason: Optional[str] = None
+        self._user_slug: Optional[str] = None
         self._load_tokens()
 
         self._facade = facade or MediaModelFacade()
@@ -843,99 +846,195 @@ class TraktManager:
     ) -> ContinueWatchingPayload:
         """Return resume data for the Continue Watching widget."""
 
-        movie_entries = [
-            entry
-            for entry in self.get_playback_resume(MediaType.MOVIE)
-            if entry.id is not None and entry.progress is not None
-        ]
-        movies: list[ContinueWatchingMovie] = []
-        for entry in movie_entries[:movie_limit]:
-            movies.append(
-                ContinueWatchingMovie(
-                    playback_id=int(entry.id),
-                    progress=float(entry.progress),
-                    paused_at=entry.paused_at,
-                    media=entry.media,
-                )
-            )
+        user_slug = self._get_authenticated_user_slug()
+        if not user_slug:
+            raise RuntimeError("Unable to determine authenticated Trakt user slug")
+
+        endpoints = settings.get_provider_endpoints("trakt")
+        watching_path = endpoints["users"]["watching"].format(username=user_slug)
+        payload = self._authorized_get(watching_path)
+
+        if isinstance(payload, Mapping):
+            watching_entries: Sequence[Mapping[str, Any]] = [payload]
+        elif isinstance(payload, Iterable):
+            watching_entries = [entry for entry in payload if isinstance(entry, Mapping)]
+        else:
+            watching_entries = []
+
+        movie_resume_entries = self.get_playback_resume(MediaType.MOVIE)
+        movie_resume_map: Dict[str, PlaybackEntry] = {}
+        for resume_entry in movie_resume_entries:
+            trakt_id = self._catalog_trakt_id(resume_entry.media)
+            if trakt_id is not None and trakt_id not in movie_resume_map:
+                movie_resume_map[trakt_id] = resume_entry
 
         episode_resume_entries = self.get_playback_resume(MediaType.EPISODE)
-        resume_map: Dict[str, PlaybackEntry] = {}
-        show_candidates: "OrderedDict[str, CatalogItem]" = OrderedDict()
+        episode_resume_map: Dict[str, PlaybackEntry] = {}
+        for resume_entry in episode_resume_entries:
+            trakt_id = self._catalog_trakt_id(resume_entry.media)
+            if trakt_id is not None and trakt_id not in episode_resume_map:
+                episode_resume_map[trakt_id] = resume_entry
 
-        for entry in episode_resume_entries:
-            episode_trakt_id = self._catalog_trakt_id(entry.media)
-            if episode_trakt_id is not None:
-                resume_map[episode_trakt_id] = entry
+        movies: list[ContinueWatchingMovie] = []
+        shows_data: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+        unknown_show_index = 0
 
-            show_payload = self._catalog_show_payload(entry.media)
-            show_trakt_id = self._payload_trakt_id(show_payload) if show_payload else None
-            if show_trakt_id and show_trakt_id not in show_candidates:
-                show_media = self._build_show_catalog_item(show_payload)
-                if show_media is not None:
-                    show_candidates[show_trakt_id] = show_media
-
-        history_entries = self.get_watched_history(MediaType.EPISODE, limit=history_window)
-        for history_entry in history_entries:
-            show_payload = self._catalog_show_payload(history_entry.media)
-            show_trakt_id = self._payload_trakt_id(show_payload) if show_payload else None
-            if not show_trakt_id or show_trakt_id in show_candidates:
+        for entry in watching_entries:
+            media_payload = self._extract_media_payload(entry)
+            if media_payload is None:
                 continue
+
+            media_type = self._resolve_media_type(media_payload.get("media_type"), fallback=MediaType.MOVIE)
+
+            if media_type == MediaType.MOVIE:
+                try:
+                    movie_media = self._facade.catalog_item(
+                        media_payload,
+                        source_tag=_SERVICE_NAME,
+                        media_type=MediaType.MOVIE,
+                    )
+                except ValidationError:
+                    continue
+
+                trakt_id = self._catalog_trakt_id(movie_media)
+                resume_entry = movie_resume_map.get(trakt_id) if trakt_id else None
+                progress_value = resume_entry.progress if resume_entry else self._try_float(entry.get("progress"))
+                paused_at = resume_entry.paused_at if resume_entry else self._parse_datetime(entry.get("paused_at"))
+
+                movies.append(
+                    ContinueWatchingMovie(
+                        playback_id=resume_entry.id if resume_entry else None,
+                        progress=progress_value,
+                        paused_at=paused_at,
+                        media=movie_media,
+                        resume_available=resume_entry is not None,
+                    )
+                )
+                continue
+
+            if media_type not in {MediaType.EPISODE, MediaType.SHOW}:
+                continue
+
+            try:
+                episode_media = self._facade.catalog_item(
+                    media_payload,
+                    source_tag=_SERVICE_NAME,
+                    media_type=MediaType.EPISODE,
+                )
+            except ValidationError:
+                continue
+
+            episode_payload = entry.get("episode") if isinstance(entry.get("episode"), Mapping) else None
+            season_number = None
+            episode_number = None
+            if isinstance(episode_payload, Mapping):
+                season_number = self._try_int(episode_payload.get("season"))
+                episode_number = self._try_int(episode_payload.get("number"))
+
+            trakt_episode_id = self._catalog_trakt_id(episode_media)
+            resume_entry = episode_resume_map.get(trakt_episode_id) if trakt_episode_id else None
+            progress_value = resume_entry.progress if resume_entry else self._try_float(entry.get("progress"))
+            paused_at = resume_entry.paused_at if resume_entry else self._parse_datetime(entry.get("paused_at"))
+            started_at = self._parse_datetime(entry.get("started_at"))
+            last_watched = paused_at or started_at
+
+            show_payload = entry.get("show") if isinstance(entry.get("show"), Mapping) else None
             show_media = self._build_show_catalog_item(show_payload)
-            if show_media is not None:
-                show_candidates[show_trakt_id] = show_media
+            if show_media is None:
+                show_media = self._build_show_catalog_item(self._catalog_show_payload(episode_media))
 
-        shows: list[ContinueWatchingShow] = []
-        for trakt_show_id, base_show_media in show_candidates.items():
-        for entry in episode_resume_entries:
-            trakt_id = self._catalog_trakt_id(entry.media)
-            if trakt_id is None:
-                continue
-            resume_map[trakt_id] = entry
+            show_identifier = self._payload_trakt_id(show_payload) if show_payload else None
+            if show_identifier is None and show_media is not None:
+                show_identifier = self._catalog_trakt_id(show_media)
+            if show_identifier is None and isinstance(show_payload, Mapping):
+                ids_payload = show_payload.get("ids")
+                if isinstance(ids_payload, Mapping):
+                    slug_value = ids_payload.get("slug")
+                    if slug_value:
+                        show_identifier = str(slug_value)
+            if show_identifier is None:
+                show_identifier = f"unknown-{unknown_show_index}"
+                unknown_show_index += 1
 
-        show_history = self.get_watched_history(MediaType.SHOW, limit=history_window)
-        show_map: Dict[str, CatalogItem] = {}
-        for history_entry in show_history:
-            trakt_id = self._catalog_trakt_id(history_entry.media)
-            if trakt_id is None or trakt_id in show_map:
-                continue
-            show_map[trakt_id] = history_entry.media
+            container = shows_data.get(show_identifier)
+            if container is None:
+                container = {"show": show_media, "episodes": []}
+                shows_data[show_identifier] = container
+            elif container.get("show") is None and show_media is not None:
+                container["show"] = show_media
 
-        shows: list[ContinueWatchingShow] = []
-        for trakt_show_id, show_media in show_map.items():
-            progress_payload = self.get_show_watched_progress(trakt_show_id)
-            if progress_payload is None:
-                continue
-
-            show_media = base_show_media
-            show_payload = progress_payload.get("show") if isinstance(progress_payload, Mapping) else None
-            updated_show_media = self._build_show_catalog_item(show_payload)
-            if updated_show_media is not None:
-                show_media = updated_show_media
-
-            episode_progress = self._build_show_episode_progress(
-                show_media,
-                progress_payload,
-                resume_map,
+            episode_progress = EpisodeProgress(
+                episode=episode_media,
+                season=season_number,
+                number=episode_number,
+                completed=bool(progress_value is not None and progress_value >= 100),
+                last_watched_at=last_watched,
+                playback_id=resume_entry.id if resume_entry else None,
+                progress=progress_value,
+                paused_at=paused_at,
+                resume_available=resume_entry is not None,
             )
-            if not episode_progress:
+
+            container["episodes"].append(episode_progress)
+
+        movies = movies[: max(0, movie_limit)] if movie_limit >= 0 else movies
+
+        shows: list[ContinueWatchingShow] = []
+        for container in shows_data.values():
+            show_media = container.get("show")
+            episodes = container.get("episodes") or []
+            if show_media is None or not episodes:
                 continue
 
-            next_episode = next((item for item in episode_progress if not item.completed), None)
-            if next_episode is None:
-                continue
+            next_episode = next((item for item in episodes if not item.completed), None)
+            unwatched_count = sum(1 for item in episodes if not item.completed)
+            if next_episode is None and episodes:
+                next_episode = episodes[0]
+            if unwatched_count == 0:
+                unwatched_count = len(episodes)
+
             shows.append(
                 ContinueWatchingShow(
                     show=show_media,
-                    episodes=episode_progress,
+                    episodes=episodes,
                     next_episode=next_episode,
-                    unwatched_count=sum(1 for item in episode_progress if not item.completed),
+                    unwatched_count=unwatched_count,
                 )
             )
-            if len(shows) >= show_limit:
+            if 0 <= show_limit <= len(shows):
                 break
 
+        if show_limit >= 0:
+            shows = shows[:show_limit]
+
         return ContinueWatchingPayload(movies=movies, shows=shows)
+
+    def _get_authenticated_user_slug(self) -> Optional[str]:
+        if self._user_slug:
+            return self._user_slug
+
+        try:
+            user_settings = self.get_user_settings()
+        except Exception:
+            return None
+
+        slug: Optional[str] = None
+        if isinstance(user_settings, TraktUserSettings):
+            profile = user_settings.user
+            if isinstance(profile, TraktUserProfile):
+                ids_payload = profile.ids if isinstance(profile.ids, Mapping) else None
+                if ids_payload:
+                    raw_slug = ids_payload.get("slug")
+                    if raw_slug:
+                        slug = str(raw_slug)
+                if not slug and profile.username:
+                    slug = str(profile.username)
+
+        if slug:
+            self._user_slug = slug
+            return self._user_slug
+
+        return None
 
     def get_user_lists(self, username: str = "me") -> Sequence[UserList]:
         payload = self._authorized_get(

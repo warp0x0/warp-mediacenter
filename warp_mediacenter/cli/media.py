@@ -322,7 +322,7 @@ def _handle_trakt_continue_watching(args: argparse.Namespace) -> None:
         exit_with_error(str(exc))
         return
 
-    _print_continue_watching(payload)
+    print_json(to_serializable(payload))
 
 
 def _serialize_widget_page(
@@ -377,104 +377,6 @@ def _select_widget_page(pages: Any, requested_page: int) -> Mapping[str, Any]:
 
     fallback = pages[0]
     return fallback if isinstance(fallback, Mapping) else default
-
-
-def _print_continue_watching(payload: Mapping[str, Any]) -> None:
-    movies = payload.get("movies")
-    if not isinstance(movies, Sequence):
-        movies = []
-
-    shows = payload.get("shows")
-    if not isinstance(shows, Sequence):
-        shows = []
-
-    print("Continue Watching — Movies")
-    if not movies:
-        print("  (no movies in progress)")
-    else:
-        for movie in movies:
-            if not isinstance(movie, Mapping):
-                continue
-            media = movie.get("media")
-            if not isinstance(media, Mapping):
-                media = {}
-            title = str(media.get("title") or "Unknown Title")
-            progress_value = _coerce_float(movie.get("progress"))
-            progress_text = _format_progress(progress_value)
-            print(f"  - {title} — Progress: {progress_text}")
-
-    print("\nContinue Watching — Shows")
-    if not shows:
-        print("  (no shows in progress)")
-        return
-
-    for show in shows:
-        if not isinstance(show, Mapping):
-            continue
-        show_media = show.get("show")
-        if not isinstance(show_media, Mapping):
-            show_media = {}
-        show_title = str(show_media.get("title") or "Unknown Show")
-        next_episode = show.get("next_episode")
-        if not isinstance(next_episode, Mapping):
-            print(f"  - {show_title} — Up to date")
-            continue
-
-        season = _coerce_int(next_episode.get("season"))
-        number = _coerce_int(next_episode.get("number"))
-        episode_label = _format_episode_code(season, number)
-        episode_media = next_episode.get("episode")
-        episode_title = None
-        if isinstance(episode_media, Mapping):
-            episode_title = episode_media.get("title")
-
-        progress_value = _coerce_float(next_episode.get("progress"))
-        completed = bool(next_episode.get("completed"))
-        progress_text = _format_progress(progress_value, completed=completed)
-
-        suffix = ""
-        if progress_value is None or progress_value == 0:
-            suffix = " (unwatched)"
-
-        detail = f"Last watched {episode_label}"
-        if episode_title:
-            detail += f' "{episode_title}"'
-        print(f"  - {show_title} — {detail} — Progress: {progress_text}{suffix}")
-
-
-def _coerce_int(value: Any) -> Optional[int]:
-    if value is None:
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _coerce_float(value: Any) -> Optional[float]:
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _format_progress(value: Optional[float], *, completed: bool = False) -> str:
-    if value is None:
-        return "0.0%" if not completed else "100.0%"
-    clamped = max(0.0, min(100.0, value))
-    return f"{clamped:.1f}%"
-
-
-def _format_episode_code(season: Optional[int], number: Optional[int]) -> str:
-    if season is None and number is None:
-        return "Unknown"
-    if season is None:
-        return f"E{number:02d}" if number is not None else "Unknown"
-    if number is None:
-        return f"S{season:02d}"
-    return f"S{season:02d}E{number:02d}"
 
 
 def _handle_endpoints(args: argparse.Namespace) -> None:
