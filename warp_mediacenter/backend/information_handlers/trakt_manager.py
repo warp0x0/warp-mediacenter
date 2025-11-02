@@ -25,7 +25,7 @@ from warp_mediacenter.backend.network_handlers.session import (
 from warp_mediacenter.config import settings
 
 _SERVICE_NAME = "trakt"
-_TOKEN_FILENAME = "trakt.json"
+_TOKEN_FILENAME = "trakt_tokens.json"
 
 
 class DeviceCode(BaseModel):
