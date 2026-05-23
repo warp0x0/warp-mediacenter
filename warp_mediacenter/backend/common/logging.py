@@ -7,7 +7,6 @@ import time
 from typing import Any, Mapping, MutableMapping, Optional
 
 
-
 _LEVELS = {
     "CRITICAL": logging.CRITICAL,
     "ERROR": logging.ERROR,
@@ -40,7 +39,40 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, ensure_ascii=False)
 
 
+class StructuredLogger(logging.Logger):
+    """Logger that automatically wraps keyword arguments into `extra` for JSON formatting."""
+
+    def _log_with_extra(self, level: int, msg: str, args: Any, **kwargs: Any) -> None:
+        extra = kwargs.pop("extra", {}) or {}
+        extra.update(kwargs)
+        kwargs.clear()
+        kwargs["extra"] = extra
+        super()._log(level, msg, args, **kwargs)
+
+    def debug(self, msg: str, *args: Any, **kwargs: Any) -> None:
+        self._log_with_extra(logging.DEBUG, msg, args, **kwargs)
+
+    def info(self, msg: str, *args: Any, **kwargs: Any) -> None:
+        self._log_with_extra(logging.INFO, msg, args, **kwargs)
+
+    def warning(self, msg: str, *args: Any, **kwargs: Any) -> None:
+        self._log_with_extra(logging.WARNING, msg, args, **kwargs)
+
+    def error(self, msg: str, *args: Any, **kwargs: Any) -> None:
+        self._log_with_extra(logging.ERROR, msg, args, **kwargs)
+
+    def critical(self, msg: str, *args: Any, **kwargs: Any) -> None:
+        self._log_with_extra(logging.CRITICAL, msg, args, **kwargs)
+
+    def exception(self, msg: str, *args: Any, **kwargs: Any) -> None:
+        kwargs["exc_info"] = True
+        self._log_with_extra(logging.ERROR, msg, args, **kwargs)
+
+
 def init_logging(level: str = "INFO") -> None:
+    # Register our custom logger class
+    logging.setLoggerClass(StructuredLogger)
+
     root = logging.getLogger()
     
     # Idempotent: clear existing handlers to avoid duplication
@@ -52,5 +84,5 @@ def init_logging(level: str = "INFO") -> None:
     handler.setFormatter(JsonFormatter())
     root.addHandler(handler)
 
-def get_logger(name: Optional[str] = None) -> logging.Logger:
-    return logging.getLogger(name if name else __name__)
+def get_logger(name: Optional[str] = None) -> StructuredLogger:
+    return logging.getLogger(name if name else __name__)  # type: ignore[return-value]

@@ -13,3 +13,16 @@ python-vlc==3.0.20123
 
 # Filename parsing
 guessit==3.7.1
+
+# File system watching
+watchdog>=3.0.0
+
+# Fuzzy string matching (torrent name ranking)
+thefuzz==0.22.1
+
+# Async HTTP (torrent search, RealDebrid API)
+aiohttp==3.11.12
+
+# FastAPI (API layer + SSE endpoints)
+fastapi==0.115.6
+uvicorn==0.34.0

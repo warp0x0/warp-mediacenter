@@ -10,13 +10,17 @@ __all__ = [
     "InstalledPlugin",
     "LibraryMediaKind",
     "LibraryPaths",
+    "RealDebridSettings",
     "ResourceProfile",
     "Settings",
+    "TorrentDebridSettings",
+    "TorrentSettings",
     "core",
     "library",
     "paths",
     "plugins",
     "providers",
+    "torrent",
     "get_api_key_tmdb",
     "get_base_url",
     "get_cache_root",
@@ -39,6 +43,7 @@ __all__ = [
     "get_settings",
     "get_tmdb_image_config",
     "get_tokens_dir",
+    "get_torrent_debrid_settings",
     "get_trakt_keys",
     "get_user_settings_path",
     "get_vlc_runtime_root",
@@ -52,6 +57,8 @@ __all__ = [
     "remove_installed_plugin",
     "save_library_index",
     "update_library_path",
+    "update_realdebrid_settings",
+    "update_torrent_settings",
 ]
 
 _MODULE_EXPORTS = {
@@ -108,12 +115,20 @@ _MODULE_EXPORTS = {
         "load_information_provider_settings",
         "load_proxy_settings",
     },
+    "torrent": {
+        "RealDebridSettings",
+        "TorrentDebridSettings",
+        "TorrentSettings",
+        "get_torrent_debrid_settings",
+        "update_realdebrid_settings",
+        "update_torrent_settings",
+    },
 }
 
-_SUBMODULE_NAMES = {"core", "library", "paths", "plugins", "providers"}
+_SUBMODULE_NAMES = {"core", "library", "paths", "plugins", "providers", "torrent"}
 
 if TYPE_CHECKING:  # pragma: no cover - only for static analysis
-    from . import core, library, paths, plugins, providers
+    from . import core, library, paths, plugins, providers, torrent
     from .core import ResourceProfile, Settings, get_installed_plugins, get_settings, register_installed_plugin, remove_installed_plugin, update_library_path
     from .library import LibraryMediaKind, LibraryPaths, load_library_index, save_library_index
     from .paths import (
@@ -150,6 +165,14 @@ if TYPE_CHECKING:  # pragma: no cover - only for static analysis
         list_provider_configs,
         load_information_provider_settings,
         load_proxy_settings,
+    )
+    from .torrent import (
+        RealDebridSettings,
+        TorrentDebridSettings,
+        TorrentSettings,
+        get_torrent_debrid_settings,
+        update_realdebrid_settings,
+        update_torrent_settings,
     )
 
 

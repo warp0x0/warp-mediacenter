@@ -19,20 +19,15 @@ class _DisabledProvider(SubtitleProvider):
     reason: str = ""
 
     @property
-    def is_configured(self) -> bool:  # type: ignore[override]
+    def is_configured(self) -> bool:
         return False
 
-    def search(self, query: SubtitleQuery) -> List[SubtitleResult]:  # type: ignore[override]
+    def search(self, query: SubtitleQuery) -> List[SubtitleResult]:
         log.debug("subtitle_provider_disabled", provider=self.name, reason=self.reason)
         return []
 
-    def download(self, result: SubtitleResult) -> SubtitlePayload:  # type: ignore[override]
+    def download(self, result: SubtitleResult) -> SubtitlePayload:
         raise RuntimeError(f"Provider {self.name} is disabled: {self.reason}")
-
-
-class PodnapisiProvider(_DisabledProvider):
-    name = "podnapisi"
-    reason = "API integration pending credentials"
 
 
 class BSPlayerProvider(_DisabledProvider):

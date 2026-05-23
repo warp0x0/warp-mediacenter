@@ -34,16 +34,16 @@ def main() -> int:
     init_logging(settings.log_level)
     log = get_logger("warpmc.startup")
 
-    log.info("boot_begin", app=settings.app_name, env=settings.env, log_level=settings.log_level)
+    log.info("boot_begin", extra={"app": settings.app_name, "env": settings.env, "log_level": settings.log_level})
 
     # health check
     health = quick_self_check()
-    log.info("health_report", **health)
+    log.info("health_report", extra=health)
 
     # tiny task runner smoke test
     resource_manager = get_resource_manager()
     profile = resource_manager.build_profile(requested_workers=settings.task_workers)
-    log.info("resource_profile", **profile.as_dict())
+    log.info("resource_profile", extra=profile.as_dict())
 
     with TaskRunner(
         max_workers=settings.task_workers,
@@ -61,9 +61,9 @@ def main() -> int:
             )
         )
         result = fut.result(timeout=2)
-        log.info("task_result", task="sum", result=result)
+        log.info("task_result", extra={"task": "sum", "result": result})
 
-    log.info("boot_ready", version=__import__("warp_mediacenter").__version__)
+    log.info("boot_ready", extra={"version": __import__("warp_mediacenter").__version__})
     
     return 0
 

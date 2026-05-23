@@ -27,10 +27,12 @@ from warp_mediacenter.backend.player.subtitles.providers.base import SubtitlePro
 from warp_mediacenter.backend.player.subtitles.providers.opensubtitles import (
     OpenSubtitlesProvider,
 )
+from warp_mediacenter.backend.player.subtitles.providers.podnapisi import (
+    PodnapisiProvider,
+)
 from warp_mediacenter.backend.player.subtitles.providers.stub import (
     Addic7edProvider,
     BSPlayerProvider,
-    PodnapisiProvider,
     SubsceneProvider,
 )
 from warp_mediacenter.backend.resource_management import get_resource_manager
@@ -61,7 +63,6 @@ class SubtitleService:
             context="subtitle_service",
             resource_wait_timeout=20.0,
         )
-        self._task_runner = task_runner or TaskRunner(max_workers=4)
         self._providers = list(providers) if providers else self._default_providers()
         self._provider_map = {p.name: p for p in self._providers}
         self._temp_dir = temp_dir or Path(tempfile.gettempdir()) / "warp-mediacenter" / "subtitles"

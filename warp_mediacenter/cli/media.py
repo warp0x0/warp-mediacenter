@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from datetime import datetime, timezone
 from typing import Any, Mapping, MutableMapping, Optional, Sequence
 
@@ -15,6 +16,15 @@ from warp_mediacenter.backend.information_handlers.trakt_manager import (
     ContinueWatchingPayload,
     DeviceAuthPollingError,
     TraktManager,
+)
+from warp_mediacenter.backend.information_handlers.torrent_search import TorrentSearchService
+from warp_mediacenter.backend.player.debrid.client import RealDebridClient
+from warp_mediacenter.backend.player.debrid.oauth import RealDebridOAuthError
+from warp_mediacenter.backend.player.torrent_stream import TorrentStreamOrchestrator, TorrentStreamError
+from warp_mediacenter.backend.persistence import (
+    connection as db_connection,
+    has_local_source,
+    get_title_by_tmdb,
 )
 from ._utils import (
     build_subparser,
@@ -148,6 +158,281 @@ def _handle_tmdb_catalog(args: argparse.Namespace) -> None:
         exit_with_error(str(exc))
         return
     print_json(to_serializable(results))
+
+
+# ------------------------------------------------------------------
+# RealDebrid / Torrent CLI handlers
+# ------------------------------------------------------------------
+
+def _handle_debrid_auth(_: argparse.Namespace) -> None:
+    """Start RealDebrid OAuth2 device flow."""
+    client = RealDebridClient()
+    try:
+        info = client.start_device_auth()
+    except RealDebridOAuthError as exc:
+        exit_with_error(f"OAuth error: {exc}")
+        return
+    except Exception as exc:
+        exit_with_error(str(exc))
+        return
+
+    print(f"\nRealDebrid Device Authorization")
+    print(f"{'=' * 40}")
+    print(f"  URL:   {info['verification_url']}")
+    print(f"  Code:  {info['user_code']}")
+    print(f"  Expires in: {info['expires_in']} seconds")
+    print(f"\nOpen the URL in your browser and enter the code.")
+    print(f"Then run: media debrid complete <device_code>\n")
+    print_json(info)
+
+
+def _handle_debrid_complete(args: argparse.Namespace) -> None:
+    """Complete RealDebrid OAuth2 flow with device code."""
+    client = RealDebridClient()
+    try:
+        token = client.complete_device_auth(args.device_code)
+    except RealDebridOAuthError as exc:
+        exit_with_error(f"OAuth error: {exc}")
+        return
+    except Exception as exc:
+        exit_with_error(str(exc))
+        return
+
+    print("RealDebrid authentication successful!")
+    print_json(token)
+
+
+def _handle_debrid_status(_: argparse.Namespace) -> None:
+    """Show RealDebrid account info."""
+    client = RealDebridClient()
+    try:
+        user = client.get_user()
+    except RealDebridOAuthError as exc:
+        exit_with_error(f"Authentication required. Run: media debrid auth\nError: {exc}")
+        return
+    except Exception as exc:
+        exit_with_error(str(exc))
+        return
+
+    print_json(user)
+
+
+def _handle_torrent_auth(args: argparse.Namespace) -> None:
+    """Alias for debrid auth."""
+    _handle_debrid_auth(args)
+
+
+def _handle_torrent_search(args: argparse.Namespace) -> None:
+    """Search for torrents via Torrent-API-Py."""
+    service = TorrentSearchService()
+    try:
+        results = service.search(
+            query=args.query,
+            media_type=args.media_type or "movie",
+            season=args.season,
+            episode=args.episode,
+            year=args.year,
+            limit=args.limit,
+        )
+    except Exception as exc:
+        exit_with_error(f"Search failed: {exc}")
+        return
+
+    output = results.to_dict()
+    print(f"\nQuery: {results.query}")
+    print(f"Total results: {results.total_results}")
+    print(f"Cached (instant): {len(results.cached)}")
+    print(f"Uncached (needs download): {len(results.uncached)}")
+    print(f"\n--- Cached Results ---")
+    for i, t in enumerate(results.cached, 1):
+        print(f"  {i}. [{t.quality}] {t.name}")
+        print(f"     Seeders: {t.seeders} | Size: {t.size} | Source: {t.source_site}")
+        print(f"     Match: {t.match_score:.2f} | Hash: {t.hash}")
+    print(f"\n--- Uncached Results ---")
+    for i, t in enumerate(results.uncached, 1):
+        print(f"  {i}. [{t.quality}] {t.name}")
+        print(f"     Seeders: {t.seeders} | Size: {t.size} | Source: {t.source_site}")
+        print(f"     Match: {t.match_score:.2f} | Hash: {t.hash}")
+    print()
+    print_json(output)
+
+
+def _handle_torrent_play(args: argparse.Namespace) -> None:
+    """Full flow: search → prompt select → resolve → play."""
+    from warp_mediacenter.backend.player.adapter import PlayerAdapter
+    from warp_mediacenter.backend.player.vlc_adapter import VLCAdapter
+    from warp_mediacenter.backend.player.service import PlaybackService
+
+    service = TorrentSearchService()
+    try:
+        results = service.search(
+            query=args.query,
+            media_type=args.media_type or "movie",
+            season=args.season,
+            episode=args.episode,
+            year=args.year,
+        )
+    except Exception as exc:
+        exit_with_error(f"Search failed: {exc}")
+        return
+
+    if not results.all_results:
+        exit_with_error("No torrents found.")
+        return
+
+    all_results = results.all_results
+    print(f"\nFound {len(all_results)} torrents:")
+    for i, t in enumerate(all_results, 1):
+        cached_tag = "[CACHED]" if t.is_cached else "[UNCACHED]"
+        print(f"  {i:2d}. {cached_tag} [{t.quality}] {t.name}")
+        print(f"       Seeders: {t.seeders} | Size: {t.size} | Score: {t.match_score:.2f}")
+
+    try:
+        choice = int(input(f"\nSelect torrent (1-{len(all_results)}): "))
+        if choice < 1 or choice > len(all_results):
+            exit_with_error("Invalid selection.")
+            return
+    except ValueError:
+        exit_with_error("Invalid input.")
+        return
+
+    selected = all_results[choice - 1]
+
+    debrid = RealDebridClient()
+    player: PlayerAdapter = VLCAdapter()
+    playback = PlaybackService(player=player)
+    orchestrator = TorrentStreamOrchestrator(
+        search_service=service,
+        debrid_client=debrid,
+        playback_service=playback,
+    )
+
+    try:
+        url = orchestrator.play_selected(
+            torrent=selected,
+            title=args.query,
+            media_type=args.media_type or "movie",
+            season=args.season,
+            episode=args.episode,
+            year=args.year,
+        )
+        print(f"\nStream URL: {url[:80]}...")
+        print("Playback started. Press Ctrl+C to stop.")
+
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            playback.stop()
+            print("\nPlayback stopped.")
+    except TorrentStreamError as exc:
+        exit_with_error(f"Stream failed: {exc}")
+    except Exception as exc:
+        exit_with_error(str(exc))
+
+
+def _handle_torrent_status(_: argparse.Namespace) -> None:
+    """Show active RealDebrid torrents."""
+    client = RealDebridClient()
+    try:
+        torrents = client.list_torrents(limit=20)
+    except RealDebridOAuthError as exc:
+        exit_with_error(f"Authentication required. Run: media debrid auth\nError: {exc}")
+        return
+    except Exception as exc:
+        exit_with_error(str(exc))
+        return
+
+    if not torrents:
+        print("No active torrents.")
+        return
+
+    print(f"\nActive Torrents ({len(torrents)}):")
+    print(f"{'=' * 80}")
+    for t in torrents:
+        status = t.get("status", "unknown")
+        progress = t.get("progress", 0)
+        filename = t.get("filename", "unknown")
+        speed = t.get("speed", 0)
+        seeders = t.get("seeders", 0)
+        print(f"  [{status}] {progress}% - {filename}")
+        if speed:
+            print(f"    Speed: {speed / 1024 / 1024:.1f} MB/s | Seeders: {seeders}")
+    print()
+
+
+def _handle_torrent_cache_check(args: argparse.Namespace) -> None:
+    """Check instant availability for torrent hashes."""
+    debrid = RealDebridClient()
+    hashes = args.hashes.split(",") if args.hashes else []
+    if not hashes:
+        exit_with_error("Provide comma-separated torrent hashes to check.")
+        return
+
+    try:
+        availability = debrid.get_instant_availability(hashes)
+    except Exception as exc:
+        exit_with_error(f"Cache check failed: {exc}")
+        return
+
+    cached = [h for h in hashes if h in availability and availability[h].get("rd")]
+    uncached = [h for h in hashes if h not in availability or not availability[h].get("rd")]
+
+    print(f"\nCache Check Results:")
+    print(f"  Cached: {len(cached)}/{len(hashes)}")
+    for h in cached:
+        print(f"    [CACHED] {h}")
+    for h in uncached:
+        print(f"    [UNCACHED] {h}")
+    print()
+    print_json(availability)
+
+
+def _handle_scrobble_status(_: argparse.Namespace) -> None:
+    """Show Trakt scrobble authentication status."""
+    manager = _ensure_trakt()
+    status = manager.facade_status()
+    payload = {
+        "authenticated": not status.get("reauth_required", True),
+        "reason": status.get("reason"),
+        "expires_at": status.get("expires_at"),
+        "last_refresh_ymd": status.get("last_refresh_ymd"),
+    }
+    print_json(payload)
+
+
+def _handle_scrobble_user(_: argparse.Namespace) -> None:
+    """Show authenticated Trakt user profile."""
+    manager = _ensure_trakt()
+    try:
+        profile = manager.get_profile()
+        print_json({
+            "username": profile.username,
+            "name": profile.name,
+            "vip": profile.vip,
+            "joined_at": profile.joined_at.isoformat() if profile.joined_at else None,
+        })
+    except Exception as exc:
+        exit_with_error(str(exc))
+
+
+def _handle_scrobble_resume(args: argparse.Namespace) -> None:
+    """Show playback resume entries from Trakt."""
+    manager = _ensure_trakt()
+    try:
+        mt = MediaType(args.media_type)
+        entries = manager.get_playback_resume(mt)
+        print(f"\nResume Entries ({len(entries)}):")
+        print(f"{'=' * 60}")
+        for e in entries[:args.limit]:
+            media_title = e.media.title if hasattr(e.media, "title") else "Unknown"
+            print(f"  [{e.progress:.1f}%] {media_title}")
+            if e.paused_at:
+                print(f"    Paused: {e.paused_at.isoformat()}")
+        print()
+        print_json(to_serializable(entries[:args.limit]))
+    except Exception as exc:
+        exit_with_error(str(exc))
 
 
 def _handle_trakt_auth_start(_: argparse.Namespace) -> None:
@@ -387,6 +672,33 @@ def _handle_endpoints(args: argparse.Namespace) -> None:
     print_json(to_serializable(endpoints))
 
 
+def _handle_serve(args: argparse.Namespace) -> None:
+    """Start the Warp MediaCenter API server."""
+    from warp_mediacenter.cli.api_server import serve
+
+    serve(
+        host=args.host,
+        port=args.port,
+        log_level=args.log_level,
+        reload=args.reload,
+    )
+
+
+def _handle_warp_startup(args: argparse.Namespace) -> None:
+    """Start Torrent-API-Py + API server together."""
+    from warp_mediacenter.cli.warp_startup import warp_startup
+
+    warp_startup(
+        host=args.host,
+        port=args.port,
+        torrent_host=args.torrent_host,
+        torrent_port=args.torrent_port,
+        torrent_executable=args.torrent_executable,
+        log_level=args.log_level,
+        reload=args.reload,
+    )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="warp-media",
@@ -600,10 +912,92 @@ def _build_parser() -> argparse.ArgumentParser:
     trakt_search_cmd.add_argument("--year", type=int, help="Restrict search to a given year.")
     trakt_search_cmd.set_defaults(func=_handle_search_trakt)
 
+    # Torrent / RealDebrid ------------------------------------------------
+    torrent_parser = build_subparser(subparsers, "torrent", help="Search torrents and stream via RealDebrid.")
+    torrent_sub = torrent_parser.add_subparsers(dest="torrent_command")
+    require_subcommand(torrent_sub)
+
+    torrent_auth_cmd = build_subparser(torrent_sub, "auth", help="Start RealDebrid OAuth2 device flow.")
+    torrent_auth_cmd.set_defaults(func=_handle_torrent_auth)
+
+    torrent_search_cmd = build_subparser(torrent_sub, "search", help="Search for torrents by title.")
+    torrent_search_cmd.add_argument("query", help="Title to search for.")
+    torrent_search_cmd.add_argument("--media-type", choices=["movie", "tv"], default="movie", help="Media type.")
+    torrent_search_cmd.add_argument("--season", type=int, help="Season number (for TV).")
+    torrent_search_cmd.add_argument("--episode", type=int, help="Episode number (for TV).")
+    torrent_search_cmd.add_argument("--year", type=int, help="Release year.")
+    torrent_search_cmd.add_argument("--limit", type=int, default=20, help="Max results per site.")
+    torrent_search_cmd.set_defaults(func=_handle_torrent_search)
+
+    torrent_play_cmd = build_subparser(torrent_sub, "play", help="Search, select, and play a torrent.")
+    torrent_play_cmd.add_argument("query", help="Title to search and play.")
+    torrent_play_cmd.add_argument("--media-type", choices=["movie", "tv"], default="movie", help="Media type.")
+    torrent_play_cmd.add_argument("--season", type=int, help="Season number (for TV).")
+    torrent_play_cmd.add_argument("--episode", type=int, help="Episode number (for TV).")
+    torrent_play_cmd.add_argument("--year", type=int, help="Release year.")
+    torrent_play_cmd.set_defaults(func=_handle_torrent_play)
+
+    torrent_status_cmd = build_subparser(torrent_sub, "status", help="Show active RealDebrid torrents.")
+    torrent_status_cmd.set_defaults(func=_handle_torrent_status)
+
+    torrent_cache_cmd = build_subparser(torrent_sub, "cache-check", help="Check instant availability for torrent hashes.")
+    torrent_cache_cmd.add_argument("hashes", help="Comma-separated torrent info hashes.")
+    torrent_cache_cmd.set_defaults(func=_handle_torrent_cache_check)
+
+    # Debrid (alias) ------------------------------------------------------
+    debrid_parser = build_subparser(subparsers, "debrid", help="RealDebrid account and auth management.")
+    debrid_sub = debrid_parser.add_subparsers(dest="debrid_command")
+    require_subcommand(debrid_sub)
+
+    debrid_auth_cmd = build_subparser(debrid_sub, "auth", help="Start RealDebrid OAuth2 device flow.")
+    debrid_auth_cmd.set_defaults(func=_handle_debrid_auth)
+
+    debrid_complete_cmd = build_subparser(debrid_sub, "complete", help="Complete OAuth flow with device code.")
+    debrid_complete_cmd.add_argument("device_code", help="Device code from auth step.")
+    debrid_complete_cmd.set_defaults(func=_handle_debrid_complete)
+
+    debrid_status_cmd = build_subparser(debrid_sub, "status", help="Show RealDebrid account info.")
+    debrid_status_cmd.set_defaults(func=_handle_debrid_status)
+
+    # Scrobble ------------------------------------------------------------
+    scrobble_parser = build_subparser(subparsers, "scrobble", help="Trakt scrobble management and testing.")
+    scrobble_sub = scrobble_parser.add_subparsers(dest="scrobble_command")
+    require_subcommand(scrobble_sub)
+
+    scrobble_status_cmd = build_subparser(scrobble_sub, "status", help="Show Trakt scrobble auth status.")
+    scrobble_status_cmd.set_defaults(func=_handle_scrobble_status)
+
+    scrobble_user_cmd = build_subparser(scrobble_sub, "user", help="Show authenticated Trakt user profile.")
+    scrobble_user_cmd.set_defaults(func=_handle_scrobble_user)
+
+    scrobble_resume_cmd = build_subparser(scrobble_sub, "resume", help="Show playback resume entries from Trakt.")
+    scrobble_resume_cmd.add_argument("--media-type", choices=["movie", "episode"], default="movie", help="Media type.")
+    scrobble_resume_cmd.add_argument("--limit", type=int, default=25, help="Max entries to show.")
+    scrobble_resume_cmd.set_defaults(func=_handle_scrobble_resume)
+
     # Endpoints ----------------------------------------------------------
     endpoints_parser = build_subparser(subparsers, "endpoints", help="Display configured REST endpoints for a provider service.")
     endpoints_parser.add_argument("service", help="Provider service key (tmdb, trakt, public_domain, ...).")
     endpoints_parser.set_defaults(func=_handle_endpoints)
+
+    # Serve (API server) -------------------------------------------------
+    serve_parser = build_subparser(subparsers, "serve", help="Start the Warp MediaCenter API server.")
+    serve_parser.add_argument("--host", default="0.0.0.0", help="Bind address (default: 0.0.0.0).")
+    serve_parser.add_argument("--port", type=int, default=8000, help="Bind port (default: 8000).")
+    serve_parser.add_argument("--log-level", default="info", choices=["debug", "info", "warning", "error"], help="Log level.")
+    serve_parser.add_argument("--reload", action="store_true", help="Enable auto-reload (dev only).")
+    serve_parser.set_defaults(func=_handle_serve)
+
+    # Warp Startup (Torrent-API-Py + API server) ----------------------
+    warp_parser = build_subparser(subparsers, "warp-startup", help="Start Torrent-API-Py + API server together.")
+    warp_parser.add_argument("--host", default="0.0.0.0", help="API server bind address.")
+    warp_parser.add_argument("--port", type=int, default=8000, help="API server bind port.")
+    warp_parser.add_argument("--torrent-host", default="127.0.0.1", help="Torrent-API-Py bind address.")
+    warp_parser.add_argument("--torrent-port", type=int, default=8009, help="Torrent-API-Py bind port.")
+    warp_parser.add_argument("--torrent-executable", default=None, help="Path to Torrent-API-Py executable (auto-detected if omitted).")
+    warp_parser.add_argument("--log-level", default="info", choices=["debug", "info", "warning", "error"], help="Log level.")
+    warp_parser.add_argument("--reload", action="store_true", help="Enable auto-reload (dev only, skips Torrent-API-Py).")
+    warp_parser.set_defaults(func=_handle_warp_startup)
 
     return parser
 

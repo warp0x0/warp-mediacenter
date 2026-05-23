@@ -79,7 +79,7 @@ def resolve_vlc_runtime(explicit_root: Optional[str] = None) -> Optional[VLCRunt
         runtime = VLCRuntimePaths(candidate_root, lib_dir, plugin_dir)
         _apply_environment(runtime)
         return runtime
-    log.error("vlc_runtime_not_found", searched=[str(p) for p in _candidate_roots(Path(explicit_root) if explicit_root else None)])
+    log.error("vlc_runtime_not_found: %s", [str(p) for p in _candidate_roots(Path(explicit_root) if explicit_root else None)])
     return None
 
 
