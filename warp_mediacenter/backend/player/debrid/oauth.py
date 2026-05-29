@@ -21,6 +21,7 @@ from warp_mediacenter.config.settings.torrent import (
 log = get_logger(__name__)
 
 OAUTH_BASE = "https://api.real-debrid.com/oauth/v2"
+APP_CLIENT_ID = "X245A4XAIBGVM"
 
 
 class RealDebridOAuthError(RuntimeError):
@@ -45,10 +46,17 @@ class RealDebridOAuth:
     6. Persist tokens via settings; auto-refresh on expiry
     """
 
+    # How long to wait before retrying a failed token refresh (seconds).
+    # Prevents hammering the RD API after a bad response.
+    _REFRESH_BACKOFF_S: float = 60.0
+
     def __init__(self, settings: RealDebridSettings) -> None:
         self._settings = settings
         self._session = requests.Session()
         self._session.headers.update({"Content-Type": "application/json"})
+        # Timestamp of the last failed refresh attempt (in-process only).
+        # Reset to None on success so the next expiry triggers a fresh attempt.
+        self._refresh_failed_at: Optional[float] = None
 
     # ------------------------------------------------------------------
     # Step 1: Request device code
@@ -57,7 +65,7 @@ class RealDebridOAuth:
         """Initiate device flow. Returns user_code and verification_url for display."""
 
         params = {
-            "client_id": self._settings.oauth_client_id,
+            "client_id": APP_CLIENT_ID,
             "new_credentials": "yes",
         }
         resp = self._session.get(f"{OAUTH_BASE}/device/code", params=params, timeout=20)
@@ -86,35 +94,66 @@ class RealDebridOAuth:
 
         Returns client_id and client_secret bound to the user's account.
         """
-
         expires_in = timeout if timeout is not None else 1800
         deadline = time.time() + max(1, expires_in)
         interval = 5
+        poll_count = 0
+        consecutive_errors = 0
+
+        log.info("realdebrid_poll_start", device_code_len=len(device_code), expires_in=expires_in)
 
         while time.time() < deadline:
+            poll_count += 1
+            if poll_count % 5 == 1:
+                log.info("realdebrid_polling", poll=poll_count, remaining_s=int(deadline - time.time()))
+
             params = {
-                "client_id": self._settings.oauth_client_id,
+                "client_id": APP_CLIENT_ID,
                 "code": device_code,
             }
-            resp = self._session.get(
-                f"{OAUTH_BASE}/device/credentials",
-                params=params,
-                timeout=20,
-            )
+
+            try:
+                resp = self._session.get(
+                    f"{OAUTH_BASE}/device/credentials",
+                    params=params,
+                    timeout=20,
+                )
+            except Exception as exc:
+                consecutive_errors += 1
+                log.warning("realdebrid_poll_%d network_error consecutive=%d: %s", poll_count, consecutive_errors, exc)
+                if consecutive_errors > 10:
+                    raise RealDebridOAuthError("network_error", f"Too many network errors ({consecutive_errors}): {exc}")
+                time.sleep(interval)
+                continue
+
+            consecutive_errors = 0
+            log.info("realdebrid_poll_%d status=%s", poll_count, resp.status_code)
 
             if resp.status_code == 200:
-                data = resp.json()
-                creds = DeviceCredentialsResponse.model_validate(data)
-                log.info("realdebrid_credentials_received", client_id=creds.client_id)
-                return creds
+                try:
+                    data = resp.json()
+                    log.info("realdebrid_credentials_raw", keys=list(data.keys()) if isinstance(data, dict) else type(data).__name__)
+                    if not data.get("client_id") or not data.get("client_secret"):
+                        log.info("realdebrid_poll_%d still_pending (null credentials)", poll_count)
+                        time.sleep(interval)
+                        continue
+                    creds = DeviceCredentialsResponse.model_validate(data)
+                    log.info("realdebrid_credentials_received", client_id=creds.client_id)
+                    return creds
+                except Exception as exc:
+                    log.error("realdebrid_credentials_parse_failed", error=str(exc), raw=str(resp.text)[:500])
+                    raise RealDebridOAuthError("bad_response", f"Failed to parse credentials: {exc}")
 
             data = self._safe_json(resp)
-            error = data.get("error", "unknown")
+            error = data.get("error") or "authorization_pending"
+            log.info("realdebrid_poll_%d error=%s", poll_count, error)
+
             if error == "authorization_pending":
                 time.sleep(interval)
                 continue
             if error == "slow_down":
                 interval = min(interval + 5, 30)
+                log.info("realdebrid_slow_down", new_interval=interval)
                 time.sleep(interval)
                 continue
 
@@ -142,9 +181,20 @@ class RealDebridOAuth:
             "code": device_code,
             "grant_type": "http://oauth.net/grant_type/device/1.0",
         }
-        resp = self._session.post(f"{OAUTH_BASE}/token", data=data, timeout=20)
+        log.info("realdebrid_exchange_token_start", client_id=client_id)
+        resp = self._session.post(
+            f"{OAUTH_BASE}/token",
+            data=data,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=20,
+        )
+        log.info("realdebrid_exchange_token_status", status=resp.status_code)
+        if resp.status_code != 200:
+            log.error("realdebrid_exchange_token_error", status=resp.status_code, body=resp.text[:500])
         resp.raise_for_status()
-        token = TokenResponse.model_validate(resp.json())
+        raw = resp.json()
+        log.info("realdebrid_exchange_token_raw", keys=list(raw.keys()) if isinstance(raw, dict) else type(raw).__name__)
+        token = TokenResponse.model_validate(raw)
 
         log.info("realdebrid_token_obtained", expires_in=token.expires_in)
         return token
@@ -179,8 +229,11 @@ class RealDebridOAuth:
     def complete_flow(self, device_code: str) -> TokenResponse:
         """Poll for credentials and exchange for tokens. Persist to settings."""
 
+        log.info("realdebrid_complete_flow_start")
         creds = self.poll_credentials(device_code)
+        log.info("realdebrid_complete_flow_credentials_ok")
         token = self.exchange_token(device_code, creds.client_id, creds.client_secret)
+        log.info("realdebrid_complete_flow_token_ok")
 
         now = time.time()
         update_realdebrid_settings(
@@ -192,6 +245,7 @@ class RealDebridOAuth:
         )
 
         log.info("realdebrid_auth_complete", client_id=creds.client_id)
+        _clear_search_cache()
         return token
 
     # ------------------------------------------------------------------
@@ -209,7 +263,15 @@ class RealDebridOAuth:
             "grant_type": "refresh_token",
             "refresh_token": self._settings.refresh_token,
         }
-        resp = self._session.post(f"{OAUTH_BASE}/token", data=data, timeout=20)
+        log.info("rd_refresh_request", client_id=self._settings.oauth_client_id[:6] if self._settings.oauth_client_id else "none")
+        resp = self._session.post(
+            f"{OAUTH_BASE}/token",
+            data=data,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=20,
+        )
+        if resp.status_code != 200:
+            log.error("rd_refresh_response", status=resp.status_code, body=resp.text[:500])
         resp.raise_for_status()
         token = TokenResponse.model_validate(resp.json())
 
@@ -221,22 +283,101 @@ class RealDebridOAuth:
         )
 
         log.info("realdebrid_token_refreshed", expires_in=token.expires_in)
+        _clear_search_cache()
         return token
 
     def ensure_valid_token(self) -> str:
-        """Return a valid access token, refreshing if necessary."""
+        """Return a valid access token, refreshing silently if necessary.
+
+        Refresh is guarded by a short in-process backoff so a dead token does
+        not cause a storm of requests to RD on every API call.
+        """
+        import time as _time
 
         if self._settings.has_valid_token:
+            remaining = self._settings.token_expires_at - _time.time()
+            log.debug("rd_token_valid", remaining_s=int(remaining))
             return self._settings.access_token
 
+        log.info(
+            "rd_token_expired_or_missing",
+            has_access=bool(self._settings.access_token),
+            has_refresh=bool(self._settings.refresh_token),
+            expired_by_s=int(_time.time() - self._settings.token_expires_at) if self._settings.access_token else None,
+        )
+
         if self._settings.refresh_token:
-            token = self.refresh_token()
-            return token.access_token
+            # Backoff: if a refresh attempt just failed, don't hammer RD again
+            # immediately — wait until the backoff window expires.
+            now = _time.time()
+            if self._refresh_failed_at is not None:
+                elapsed = now - self._refresh_failed_at
+                if elapsed < self._REFRESH_BACKOFF_S:
+                    remaining = int(self._REFRESH_BACKOFF_S - elapsed)
+                    log.info("rd_refresh_backoff", retry_in_s=remaining)
+                    raise RealDebridOAuthError(
+                        "refresh_backoff",
+                        f"Recent token refresh failed — retrying in ~{remaining}s. "
+                        "If this persists, re-authenticate in Settings → Authentication.",
+                    )
+
+            log.info("rd_token_refresh_attempt", client_id=self._settings.oauth_client_id[:6] if self._settings.oauth_client_id else "none")
+            try:
+                token = self.refresh_token()
+                self._refresh_failed_at = None  # clear backoff on success
+                log.info("rd_token_refresh_success")
+                return token.access_token
+            except Exception as exc:
+                self._refresh_failed_at = _time.time()  # arm backoff
+                log.error("rd_token_refresh_failed", error=str(exc)[:200])
+                self._clear_dead_tokens(exc)
+                raise
 
         raise RealDebridOAuthError(
             "no_valid_token",
-            "No valid token and no refresh token. Run device auth flow first.",
+            "No valid token and no refresh token. "
+            "Re-authenticate in Settings → Authentication → Real Debrid.",
         )
+
+    # ------------------------------------------------------------------
+    # Token cleanup after failed refresh
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _clear_dead_tokens(exc: Exception) -> None:
+        """Clear the expired access token if RD says the credentials are wrong.
+
+        When RD returns error_code=2 (wrong_parameter) we know the access_token
+        is definitely invalid, so we zero it out and reset the expiry.
+
+        IMPORTANT: we intentionally do NOT nullify the refresh_token even when
+        RD says wrong_parameter.  Nullifying it would permanently block silent
+        refresh and force the user to manually re-authenticate from Settings.
+        The backoff in ensure_valid_token prevents immediate retry loops while
+        still allowing the next attempt after the backoff window expires.
+        If the refresh_token really is dead, the next attempt will fail again and
+        the user will receive a clear 401 / "re-authenticate" prompt.
+        """
+        import requests as _requests
+        if not isinstance(exc, _requests.HTTPError):
+            return
+        resp = exc.response
+        if resp is None or resp.status_code != 400:
+            return
+        try:
+            body = resp.json()
+        except (ValueError, KeyError):
+            return
+        if body.get("error_code") == 2 or body.get("error") == "wrong_parameter":
+            log.warning(
+                "rd_access_token_invalid",
+                note="Clearing access_token only; refresh_token preserved for future attempts",
+            )
+            update_realdebrid_settings(
+                access_token=None,
+                token_expires_at=0.0,
+                # refresh_token is intentionally NOT included here
+            )
+            _clear_search_cache()
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -247,3 +388,15 @@ class RealDebridOAuth:
             return resp.json()
         except (ValueError, KeyError):
             return {}
+
+
+def _clear_search_cache() -> None:
+    """Clear the torrent search cache so stale cached/uncached splits don't persist."""
+    try:
+        from warp_mediacenter.backend.persistence import connection, clear_all_torrent_cache
+        with connection() as conn:
+            removed = clear_all_torrent_cache(conn)
+            if removed:
+                log.info("torrent_search_cache_cleared", count=removed)
+    except Exception:
+        pass  # non-fatal — search cache is best-effort

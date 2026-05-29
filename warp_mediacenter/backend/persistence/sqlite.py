@@ -1103,6 +1103,12 @@ def clear_expired_torrent_cache(connection: sqlite3.Connection) -> int:
     return cursor.rowcount
 
 
+def clear_all_torrent_cache(connection: sqlite3.Connection) -> int:
+    """Remove all torrent search cache entries. Returns count removed."""
+    cursor = connection.execute("DELETE FROM torrent_cache")
+    return cursor.rowcount
+
+
 # ------------------------------------------------------------------
 # Debrid magnet map operations
 # ------------------------------------------------------------------

@@ -262,11 +262,20 @@ def _normalize_ids(payload: Mapping[str, Any]) -> Dict[str, str]:
 
 
 def _normalize_external_ids(payload: Mapping[str, Any]) -> Dict[str, str]:
+    result: Dict[str, str] = {}
+
+    # TMDb movie responses expose imdb_id at the root level; capture it first.
+    direct_imdb = payload.get("imdb_id")
+    if direct_imdb:
+        result["imdb_id"] = str(direct_imdb)
+
     external = payload.get("external_ids")
     if isinstance(external, Mapping):
-        return {str(k): str(v) for k, v in external.items() if v is not None}
+        result.update({str(k): str(v) for k, v in external.items() if v is not None})
+        return result
 
-    return _normalize_ids(payload)
+    result.update(_normalize_ids(payload))
+    return result
 
 
 def _extract_keywords(payload: Mapping[str, Any]) -> Sequence[str]:

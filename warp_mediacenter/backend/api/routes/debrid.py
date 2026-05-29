@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Query
 from warp_mediacenter.backend.common.logging import get_logger
 from warp_mediacenter.backend.api.middleware import get_container
 from warp_mediacenter.backend.player.debrid.client import RealDebridClient, RealDebridAPIError
+from warp_mediacenter.backend.player.debrid.oauth import RealDebridOAuthError
 
 log = get_logger(__name__)
 
@@ -76,18 +77,159 @@ async def debrid_auth_complete(payload: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Auth complete failed: {exc}")
 
 
-@router.get("/auth/status")
-async def debrid_auth_status() -> Dict[str, Any]:
-    """Get RealDebrid authentication status."""
+@router.post("/auth/refresh")
+async def debrid_auth_refresh() -> Dict[str, Any]:
+    """Try to silently refresh an expired RealDebrid token.
+
+    Does NOT start the device flow. Returns refreshed/failed/should-reauth.
+    """
     client = _get_debrid()
-    has_token = False
     try:
-        has_token = client._oauth.has_token() if client._oauth else False
+        client._reload_settings()
+        if client._oauth._settings.has_valid_token:
+            return {
+                "refreshed": False,
+                "authenticated": True,
+                "message": "Token is still valid. No refresh needed.",
+            }
     except Exception:
         pass
 
+    if not client._oauth._settings.refresh_token:
+        return {
+            "refreshed": False,
+            "authenticated": False,
+            "reason": "no_refresh_token",
+            "message": "No refresh token available. Full device auth required.",
+        }
+
+    try:
+        token = client._oauth.refresh_token()
+        client._reload_settings()
+        return {
+            "refreshed": True,
+            "authenticated": True,
+            "message": "Token refreshed successfully.",
+            "expires_in": token.expires_in,
+        }
+    except RealDebridOAuthError as exc:
+        return {
+            "refreshed": False,
+            "authenticated": False,
+            "reason": "refresh_failed",
+            "error": str(exc),
+            "message": "Token refresh failed. Full device auth required.",
+        }
+    except Exception as exc:
+        return {
+            "refreshed": False,
+            "authenticated": False,
+            "reason": "refresh_error",
+            "error": str(exc),
+            "message": f"Unexpected error during refresh: {exc}",
+        }
+
+
+@router.post("/auth/clear")
+async def debrid_auth_clear() -> Dict[str, Any]:
+    """Clear Real Debrid authentication tokens (Disconnect button).
+
+    Deletes ``var/tokens/realdebrid_tokens.json`` and strips any residual token
+    fields from ``user_settings.json``.  This mirrors what Trakt's ``/auth/clear``
+    does for Trakt tokens.
+
+    NOTE: this endpoint is only for the UI Disconnect button.  Silent token
+    refresh, backoff, and the access_token-only cleanup on a bad refresh are
+    unaffected.
+    """
+    from warp_mediacenter.config.settings.torrent import clear_realdebrid_tokens
+    try:
+        clear_realdebrid_tokens()
+        # Reload the singleton so the live client reflects the cleared state
+        client = _get_debrid()
+        client._reload_settings()
+        log.info("rd_auth_cleared")
+    except Exception as exc:
+        log.warning("rd_auth_clear_error", error=str(exc))
+    return {"authenticated": False}
+
+
+@router.get("/auth/status")
+async def debrid_auth_status() -> Dict[str, Any]:
+    """Get RealDebrid authentication status.
+
+    Response fields:
+      authenticated — access token is present and not expired
+      can_refresh   — a refresh_token exists (silent refresh is possible)
+      pending       — device auth flow is in progress
+      expired       — token existed but has expired (refresh may save it)
+      denied        — user denied the device auth request
+    """
+    client = _get_debrid()
+
+    # Always reload from disk so we reflect the latest persisted state,
+    # including tokens written by other requests (e.g. a just-completed refresh).
+    try:
+        client._reload_settings()
+    except Exception:
+        pass
+
+    # If a device auth flow is actively running, surface that state first.
+    state = client.poll_device_auth_status()
+    flow_status = state.get("status", "none")
+    log.debug(
+        "rd_auth_status_check",
+        flow=flow_status,
+        has_access=bool(client._settings.access_token),
+        has_refresh=bool(client._settings.refresh_token),
+    )
+
+    if flow_status == "authorized":
+        return {
+            "authenticated": True,
+            "can_refresh": True,
+            "pending": False,
+            "expired": False,
+            "denied": False,
+        }
+    if flow_status == "expired":
+        return {
+            "authenticated": False,
+            "can_refresh": bool(client._settings.refresh_token),
+            "pending": False,
+            "expired": True,
+            "denied": False,
+            "error": state.get("error"),
+        }
+    if flow_status == "denied":
+        return {
+            "authenticated": False,
+            "can_refresh": bool(client._settings.refresh_token),
+            "pending": False,
+            "expired": False,
+            "denied": True,
+            "error": state.get("error"),
+        }
+    if flow_status == "pending":
+        return {
+            "authenticated": False,
+            "can_refresh": bool(client._settings.refresh_token),
+            "pending": True,
+            "expired": False,
+            "denied": False,
+        }
+
+    # No active device flow — report current token state from settings.
+    has_valid = client._settings.has_valid_token
+    can_refresh = bool(client._settings.refresh_token)
+    token_expired = bool(client._settings.access_token) and not has_valid
+
     return {
-        "authenticated": has_token,
+        "authenticated": has_valid,
+        "can_refresh": can_refresh,
+        "pending": False,
+        "expired": token_expired,
+        "denied": False,
     }
 
 
@@ -102,6 +244,8 @@ async def debrid_account() -> Dict[str, Any]:
     try:
         user = client.get_user()
         return user
+    except RealDebridOAuthError as exc:
+        raise HTTPException(status_code=401, detail=f"RealDebrid not authenticated: {exc}")
     except RealDebridAPIError as exc:
         raise HTTPException(status_code=500, detail=f"Account fetch failed: {exc}")
 
@@ -129,6 +273,8 @@ async def debrid_add_magnet(payload: Dict[str, Any]) -> Dict[str, Any]:
             "torrent_id": torrent_id,
             "status": "added",
         }
+    except RealDebridOAuthError as exc:
+        raise HTTPException(status_code=401, detail=f"RealDebrid not authenticated: {exc}")
     except RealDebridAPIError as exc:
         raise HTTPException(status_code=500, detail=f"Magnet add failed: {exc}")
 
@@ -143,6 +289,8 @@ async def debrid_torrent_info(torrent_id: str) -> Dict[str, Any]:
         if hasattr(info, "model_dump"):
             result = info.model_dump(mode="json")
         return result
+    except RealDebridOAuthError as exc:
+        raise HTTPException(status_code=401, detail=f"RealDebrid not authenticated: {exc}")
     except RealDebridAPIError as exc:
         raise HTTPException(status_code=404, detail=f"Torrent not found: {exc}")
 
@@ -166,6 +314,8 @@ async def debrid_torrent_files(torrent_id: str) -> Dict[str, Any]:
             "files": files,
             "count": len(files),
         }
+    except RealDebridOAuthError as exc:
+        raise HTTPException(status_code=401, detail=f"RealDebrid not authenticated: {exc}")
     except RealDebridAPIError as exc:
         raise HTTPException(status_code=404, detail=f"Torrent not found: {exc}")
 
@@ -191,6 +341,8 @@ async def debrid_select_files(torrent_id: str, payload: Dict[str, Any]) -> Dict[
             "torrent_id": torrent_id,
             "selected": success,
         }
+    except RealDebridOAuthError as exc:
+        raise HTTPException(status_code=401, detail=f"RealDebrid not authenticated: {exc}")
     except RealDebridAPIError as exc:
         raise HTTPException(status_code=500, detail=f"File selection failed: {exc}")
 
@@ -205,6 +357,8 @@ async def debrid_delete_torrent(torrent_id: str) -> Dict[str, Any]:
             "torrent_id": torrent_id,
             "deleted": success,
         }
+    except RealDebridOAuthError as exc:
+        raise HTTPException(status_code=401, detail=f"RealDebrid not authenticated: {exc}")
     except RealDebridAPIError as exc:
         raise HTTPException(status_code=500, detail=f"Delete failed: {exc}")
 
@@ -236,6 +390,8 @@ async def debrid_list_torrents(
             "offset": offset,
             "limit": limit,
         }
+    except RealDebridOAuthError as exc:
+        raise HTTPException(status_code=401, detail=f"RealDebrid not authenticated: {exc}")
     except RealDebridAPIError as exc:
         raise HTTPException(status_code=500, detail=f"List failed: {exc}")
 
@@ -255,23 +411,31 @@ async def debrid_stream_url(
         info = client.get_torrent_info(torrent_id)
 
         target_file = None
-        for f in info.files:
+        target_idx = -1
+        for idx, f in enumerate(info.files):
             if f.id == file_id:
                 target_file = f
+                target_idx = idx
                 break
 
         if target_file is None:
             raise HTTPException(status_code=404, detail=f"File {file_id} not found")
 
-        if not target_file.link:
-            raise HTTPException(status_code=400, detail="File link not available yet")
+        if info.links and target_idx < len(info.links):
+            stream_url = info.links[target_idx]
+        elif info.links:
+            stream_url = info.links[0]
+        else:
+            raise HTTPException(status_code=400, detail="No download links available yet")
 
         return {
             "torrent_id": torrent_id,
             "file_id": file_id,
             "file_name": target_file.path,
-            "stream_url": target_file.link,
+            "stream_url": stream_url,
         }
+    except RealDebridOAuthError as exc:
+        raise HTTPException(status_code=401, detail=f"RealDebrid not authenticated: {exc}")
     except RealDebridAPIError as exc:
         raise HTTPException(status_code=500, detail=f"Stream URL fetch failed: {exc}")
 
@@ -299,5 +463,7 @@ async def debrid_cache_check(
             "total": len(hash_list),
             "details": availability,
         }
+    except RealDebridOAuthError as exc:
+        raise HTTPException(status_code=401, detail=f"RealDebrid not authenticated: {exc}")
     except RealDebridAPIError as exc:
         raise HTTPException(status_code=500, detail=f"Cache check failed: {exc}")

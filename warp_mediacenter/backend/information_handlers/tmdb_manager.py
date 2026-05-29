@@ -66,6 +66,7 @@ class TMDbManager:
         default_language: str = "en-US",
     ) -> None:
         self._session = session or HttpSession()
+        self._session.proxym.enabled = False
         self._cache = cache or InformationProviderCache()
         self._facade = facade or MediaModelFacade()
         self._default_language = default_language
@@ -122,12 +123,13 @@ class TMDbManager:
         if media_type not in {MediaType.MOVIE, MediaType.SHOW}:
             raise ValueError("Catalog lists are only available for movies or shows")
 
-        path = self._catalog_path(media_type, category)
+        path, extra_params = self._catalog_path(media_type, category)
         payload = self._request_json(
             path,
             params={
                 "language": self._normalize_language(language),
                 "page": page,
+                **extra_params,
             },
         )
 
@@ -161,7 +163,7 @@ class TMDbManager:
     ) -> Show:
         params: Dict[str, Any] = {"language": self._normalize_language(language)}
         if include_credits:
-            params["append_to_response"] = "credits,keywords"
+            params["append_to_response"] = "credits,keywords,external_ids"
 
         payload = self._request_json(f"/tv/{show_id}", params=params)
         credits_payload = payload.get("credits") if include_credits else None
@@ -366,24 +368,113 @@ class TMDbManager:
 
         raise RuntimeError("Unexpected TMDb payload structure")
 
-    def _catalog_path(self, media_type: MediaType, category: str) -> str:
-        key = category.lower()
-        segment = "movie" if media_type == MediaType.MOVIE else "tv"
-        if key == "popular":
-            return f"/{segment}/popular"
-        if key in {"top_rated", "toprated"}:
-            return f"/{segment}/top_rated"
-        if key in {"upcoming", "up_next"} and media_type == MediaType.MOVIE:
-            return "/movie/upcoming"
-        if key in {"airing_today", "airingtoday"} and media_type == MediaType.SHOW:
-            return "/tv/airing_today"
-        if key.startswith("trending"):
-            window = "day"
-            if "week" in key:
-                window = "week"
-            return f"/trending/{segment}/{window}"
+    def _catalog_path(self, media_type: MediaType, category: str) -> tuple[str, Dict[str, Any]]:
+        """Return ``(api_path, extra_query_params)`` for the given catalog category.
 
-        raise ValueError(f"Unsupported TMDb catalog category '{category}' for {media_type.value}")
+        The path is relative to the TMDb base URL (no leading slash needed by
+        the session layer, but we keep them for readability).  ``extra_params``
+        are merged with the standard ``language`` and ``page`` params before the
+        request is sent — this is how discover-endpoint filters (genre, decade,
+        sort order) are passed through.
+
+        Supported category patterns
+        ---------------------------
+        Standard list endpoints (shared):
+            popular, top_rated, trending_day, trending_week
+
+        Movies only:
+            now_playing, upcoming
+
+        Shows only:
+            airing_today, on_the_air
+
+        Discover — sort-based (both types):
+            discover_revenue      → sort_by=revenue.desc
+            discover_most_voted   → sort_by=vote_count.desc
+            discover_best_rated   → sort_by=vote_average.desc + min-vote filter
+            discover_latest       → sort_by=primary_release_date.desc (movie)
+                                    or first_air_date.desc (tv)
+
+        Discover — by genre (encoded as "genre_<id>"):
+            e.g. genre_28, genre_878, genre_10751 …
+
+        Discover — by decade (encoded as "decade_<start_year>"):
+            e.g. decade_2020, decade_1990, decade_1960 …
+        """
+        key = category.lower().replace("-", "_")
+        seg = "movie" if media_type == MediaType.MOVIE else "tv"
+        is_movie = media_type == MediaType.MOVIE
+
+        # ── Standard list endpoints ──────────────────────────────────────────
+        if key == "popular":
+            return f"/{seg}/popular", {}
+
+        if key in {"top_rated", "toprated"}:
+            return f"/{seg}/top_rated", {}
+
+        # Trending (day / week)
+        if key.startswith("trending"):
+            window = "week" if "week" in key else "day"
+            return f"/trending/{seg}/{window}", {}
+
+        # Movies-only standard lists
+        if is_movie:
+            if key in {"upcoming", "up_next"}:
+                return "/movie/upcoming", {}
+            if key in {"now_playing", "nowplaying"}:
+                return "/movie/now_playing", {}
+
+        # Shows-only standard lists
+        if not is_movie:
+            if key in {"airing_today", "airingtoday"}:
+                return "/tv/airing_today", {}
+            if key in {"on_the_air", "ontheair"}:
+                return "/tv/on_the_air", {}
+
+        # ── Discover: sort-based ─────────────────────────────────────────────
+        if key == "discover_revenue":
+            return f"/discover/{seg}", {"sort_by": "revenue.desc"}
+
+        if key == "discover_most_voted":
+            return f"/discover/{seg}", {"sort_by": "vote_count.desc"}
+
+        if key == "discover_best_rated":
+            # Require a minimum vote count so obscure titles don't flood the top
+            min_votes = "300" if is_movie else "200"
+            return f"/discover/{seg}", {
+                "sort_by": "vote_average.desc",
+                "vote_count.gte": min_votes,
+            }
+
+        if key in {"discover_latest", "discover_newest"}:
+            date_field = "primary_release_date" if is_movie else "first_air_date"
+            return f"/discover/{seg}", {"sort_by": f"{date_field}.desc"}
+
+        # ── Discover: by genre ("genre_<tmdb_genre_id>") ────────────────────
+        if key.startswith("genre_"):
+            genre_id = key.split("_", 1)[1]
+            return f"/discover/{seg}", {
+                "with_genres": genre_id,
+                "sort_by": "popularity.desc",
+            }
+
+        # ── Discover: by decade ("decade_<start_year>") ─────────────────────
+        if key.startswith("decade_"):
+            try:
+                start = int(key.split("_", 1)[1])
+            except (ValueError, IndexError):
+                raise ValueError(f"Invalid decade category: '{category}'")
+            end = start + 9
+            date_field = "primary_release_date" if is_movie else "first_air_date"
+            return f"/discover/{seg}", {
+                f"{date_field}.gte": f"{start}-01-01",
+                f"{date_field}.lte": f"{end}-12-31",
+                "sort_by": "popularity.desc",
+            }
+
+        raise ValueError(
+            f"Unsupported TMDb catalog category '{category}' for {media_type.value}"
+        )
 
     def _parse_catalog_results(
         self,

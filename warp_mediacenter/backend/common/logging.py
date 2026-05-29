@@ -44,7 +44,9 @@ class StructuredLogger(logging.Logger):
 
     def _log_with_extra(self, level: int, msg: str, args: Any, **kwargs: Any) -> None:
         extra = kwargs.pop("extra", {}) or {}
-        extra.update(kwargs)
+        for k, v in kwargs.items():
+            if k not in _LOG_RECORD_ATTRS:
+                extra[k] = v
         kwargs.clear()
         kwargs["extra"] = extra
         super()._log(level, msg, args, **kwargs)
@@ -69,11 +71,45 @@ class StructuredLogger(logging.Logger):
         self._log_with_extra(logging.ERROR, msg, args, **kwargs)
 
 
+_LOG_RECORD_ATTRS = frozenset((
+    "name", "msg", "args", "levelname", "levelno", "pathname", "filename",
+    "module", "exc_info", "exc_text", "stack_info", "lineno", "funcName",
+    "created", "relativeCreated", "msecs", "thread", "threadName",
+    "process", "processName", "message", "taskName",
+))
+
+
+def _patch_logger_to_structured(logger: logging.Logger) -> None:
+    """Patch an existing logger to use StructuredLogger methods."""
+    if hasattr(logger, "_structured_patched"):
+        return
+    logger._structured_patched = True  # type: ignore
+
+    original_log = logger._log
+
+    def patched_log(level, msg, *args, **kwargs):
+        extra = kwargs.pop("extra", {}) or {}
+        for k, v in kwargs.items():
+            if k not in _LOG_RECORD_ATTRS:
+                extra[k] = v
+        kwargs.clear()
+        kwargs["extra"] = extra
+        original_log(level, msg, *args, **kwargs)
+
+    logger._log = patched_log
+
+
 def init_logging(level: str = "INFO") -> None:
-    # Register our custom logger class
+    # Register our custom logger class for future loggers
     logging.setLoggerClass(StructuredLogger)
 
+    # Patch ALL existing loggers to use StructuredLogger methods
     root = logging.getLogger()
+    _patch_logger_to_structured(root)
+    for name in logging.root.manager.loggerDict:
+        logger = logging.getLogger(name)
+        if isinstance(logger, logging.Logger):
+            _patch_logger_to_structured(logger)
     
     # Idempotent: clear existing handlers to avoid duplication
     for h in list(root.handlers):
@@ -85,4 +121,7 @@ def init_logging(level: str = "INFO") -> None:
     root.addHandler(handler)
 
 def get_logger(name: Optional[str] = None) -> StructuredLogger:
-    return logging.getLogger(name if name else __name__)  # type: ignore[return-value]
+    logger = logging.getLogger(name if name else __name__)
+    if not isinstance(logger, StructuredLogger):
+        _patch_logger_to_structured(logger)
+    return logger  # type: ignore[return-value]

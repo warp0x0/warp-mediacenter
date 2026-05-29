@@ -14,6 +14,7 @@ from warp_mediacenter.backend.api.middleware import get_container
 from warp_mediacenter.backend.player.torrent_stream import TorrentStreamOrchestrator, TorrentStreamError
 from warp_mediacenter.backend.information_handlers.torrent_models import TorrentResult
 from warp_mediacenter.backend.player.debrid.client import RealDebridClient, RealDebridAPIError
+from warp_mediacenter.backend.player.debrid.oauth import RealDebridOAuthError
 
 log = get_logger(__name__)
 
@@ -146,8 +147,13 @@ async def resolve_torrent(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     magnet = f"magnet:?xt=urn:btih:{torrent_hash}"
 
+    log.info("torrent_resolve_start", hash=torrent_hash[:12], title=title, media_type=media_type)
+
     try:
+        log.info("torrent_resolve_adding_magnet", hash=torrent_hash[:12])
         torrent_id = debrid.add_magnet(magnet)
+
+        log.info("torrent_resolve_selecting_files", torrent_id=torrent_id)
         debrid.select_files(torrent_id)
 
         orchestrator._active_torrents[torrent_id] = {
@@ -167,15 +173,36 @@ async def resolve_torrent(payload: Dict[str, Any]) -> Dict[str, Any]:
             if video_files:
                 selected_file = video_files[0].path
 
+        log.info(
+            "torrent_resolve_complete",
+            torrent_id=torrent_id,
+            status=torrent_info.status,
+            file_count=len(torrent_info.files) if torrent_info.files else 0,
+            selected_file=selected_file,
+        )
+
         return {
             "torrent_id": torrent_id,
             "status": torrent_info.status,
             "selected_file": selected_file,
             "message": "Torrent added. Poll /status/{torrent_id}/events for progress.",
         }
+    except RealDebridOAuthError as exc:
+        log.error("resolve_auth_error", error=str(exc)[:200])
+        raise HTTPException(
+            status_code=401,
+            detail=f"RealDebrid not authenticated. Run 'media debrid auth' to set up. Error: {exc}",
+        )
     except RealDebridAPIError as exc:
+        log.error("resolve_rd_error", status=exc.status_code, error=exc.error, code=exc.error_code)
+        if exc.status_code == 451:
+            raise HTTPException(
+                status_code=422,
+                detail=f"RealDebrid blocked this torrent (copyright). Try a different torrent from the search results.",
+            )
         raise HTTPException(status_code=500, detail=f"RealDebrid error: {exc}")
     except Exception as exc:
+        log.error("resolve_unexpected_error", error=str(exc)[:200], type=type(exc).__name__)
         raise HTTPException(status_code=500, detail=f"Resolve failed: {exc}")
 
 

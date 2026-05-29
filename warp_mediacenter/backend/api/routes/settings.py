@@ -23,6 +23,28 @@ router = APIRouter()
 _scan_status: Dict[str, Any] = {"running": False, "progress": 0, "message": "idle"}
 _scan_lock = threading.Lock()
 
+# ---------------------------------------------------------------------------
+# Default widget configurations (6 slots each)
+# ---------------------------------------------------------------------------
+
+_DEFAULT_MOVIE_WIDGETS: List[Dict[str, Any]] = [
+    {"provider": "tmdb", "category": "trending_day",  "title": "Trending Today"},
+    {"provider": "tmdb", "category": "popular",       "title": "Popular"},
+    {"provider": "tmdb", "category": "top_rated",     "title": "Top Rated"},
+    {"provider": "tmdb", "category": "now_playing",   "title": "Now Playing"},
+    {"provider": "tmdb", "category": "upcoming",      "title": "Upcoming"},
+    {"provider": "tmdb", "category": "trending_week", "title": "Trending This Week"},
+]
+
+_DEFAULT_SHOW_WIDGETS: List[Dict[str, Any]] = [
+    {"provider": "tmdb", "category": "trending_day",  "title": "Trending Today"},
+    {"provider": "tmdb", "category": "popular",       "title": "Popular"},
+    {"provider": "tmdb", "category": "top_rated",     "title": "Top Rated"},
+    {"provider": "tmdb", "category": "airing_today",  "title": "Airing Today"},
+    {"provider": "tmdb", "category": "on_the_air",    "title": "On The Air"},
+    {"provider": "tmdb", "category": "trending_week", "title": "Trending This Week"},
+]
+
 
 def _get_providers() -> InformationProviders:
     """Get InformationProviders from container or create default."""
@@ -57,6 +79,67 @@ async def get_all_settings() -> Dict[str, Any]:
             settings[key] = value
 
     return {"settings": settings}
+
+
+@router.get("/widgets")
+async def get_widget_config() -> Dict[str, Any]:
+    """Get the 6-slot widget configuration for Movies and Shows pages.
+
+    Returns saved configuration from ``user_settings.json``.  Falls back to
+    built-in defaults when no configuration has been saved yet.
+    """
+    from warp_mediacenter.config.settings.library import load_user_settings
+
+    user_cfg = load_user_settings()
+    widgets_cfg = user_cfg.get("widgets", {})
+    movies = widgets_cfg.get("movies")
+    shows = widgets_cfg.get("shows")
+
+    # Validate length — fall back to defaults if the stored data is corrupt
+    if not isinstance(movies, list) or len(movies) != 6:
+        movies = _DEFAULT_MOVIE_WIDGETS
+    if not isinstance(shows, list) or len(shows) != 6:
+        shows = _DEFAULT_SHOW_WIDGETS
+
+    return {"movies": movies, "shows": shows}
+
+
+@router.put("/widgets")
+async def save_widget_config(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Persist the 6-slot widget configuration for Movies and Shows pages.
+
+    Accepts ``movies`` and/or ``shows`` arrays (each exactly 6 items) and
+    writes them to ``user_settings.json`` under the ``widgets`` key.
+    """
+    from warp_mediacenter.config.settings.library import load_user_settings, write_user_settings
+    from datetime import datetime, timezone
+
+    movies = payload.get("movies")
+    shows = payload.get("shows")
+
+    if movies is not None and not isinstance(movies, list):
+        raise HTTPException(status_code=400, detail="movies must be a list")
+    if shows is not None and not isinstance(shows, list):
+        raise HTTPException(status_code=400, detail="shows must be a list")
+
+    user_cfg = load_user_settings()
+    widgets_cfg = dict(user_cfg.get("widgets", {}))
+
+    if movies is not None:
+        widgets_cfg["movies"] = movies
+    if shows is not None:
+        widgets_cfg["shows"] = shows
+
+    user_cfg["widgets"] = widgets_cfg
+    user_cfg["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    write_user_settings(user_cfg)
+
+    log.info("widget_config_saved", movies=len(movies or []), shows=len(shows or []))
+    return {
+        "message": "Widget configuration saved",
+        "movies_count": len(movies) if movies else 0,
+        "shows_count": len(shows) if shows else 0,
+    }
 
 
 @router.put("/{key}")
@@ -106,10 +189,14 @@ async def provider_status() -> Dict[str, Any]:
     try:
         container = get_container()
         if container.debrid_client:
-            debrid_status["authenticated"] = container.debrid_client._oauth.has_token() if container.debrid_client._oauth else False
+            debrid_status["authenticated"] = container.debrid_client._settings.has_valid_token
+            debrid_status["api_key_configured"] = bool(
+                container.debrid_client._settings.access_token
+                or container.debrid_client._settings.refresh_token
+            )
         else:
             debrid_status["authenticated"] = False
-        debrid_status["api_key_configured"] = True
+            debrid_status["api_key_configured"] = False
     except Exception:
         debrid_status["status"] = "error"
         debrid_status["authenticated"] = False

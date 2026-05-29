@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+import threading
 import time
 from typing import Any, Dict, List, Optional
 
@@ -53,12 +54,85 @@ class RealDebridClient:
         self._session = requests.Session()
         self._timeout = timeout
 
+        self._device_auth_state: Dict[str, Any] = {}
+        self._device_auth_lock = threading.Lock()
+        self._device_auth_thread: Optional[threading.Thread] = None
+
     # ------------------------------------------------------------------
     # Authentication
     # ------------------------------------------------------------------
     def start_device_auth(self) -> Dict[str, Any]:
-        """Start OAuth2 device flow. Returns display info for the user."""
-        return self._oauth.full_device_flow()
+        """Start OAuth2 device flow. Returns display info for the user.
+
+        Spawns a background thread that polls credentials + exchanges tokens
+        so the caller only needs to check poll_device_auth_status().
+        """
+        info = self._oauth.full_device_flow()
+        device_code = info.get("device_code", "")
+
+        with self._device_auth_lock:
+            self._device_auth_state = {
+                "status": "pending",
+                "error": None,
+                "access_token": None,
+                "refresh_token": None,
+            }
+
+        self._device_auth_thread = threading.Thread(
+            target=self._debrid_poll_loop,
+            args=(device_code,),
+            daemon=True,
+            name="debrid-device-poll",
+        )
+        self._device_auth_thread.start()
+
+        log.info("realdebrid_device_auth_started_bg_poll", device_code=device_code[:8] if device_code else "...")
+        return info
+
+    def _debrid_poll_loop(self, device_code: str) -> None:
+        """Background thread: poll credentials and exchange for tokens."""
+        log.info("realdebrid_bg_thread_started", device_code_len=len(device_code))
+        if not device_code:
+            with self._device_auth_lock:
+                self._device_auth_state = {"status": "error", "error": "No device code"}
+            return
+
+        for attempt in range(1, 4):
+            try:
+                token = self._oauth.complete_flow(device_code)
+                with self._device_auth_lock:
+                    self._device_auth_state = {
+                        "status": "authorized",
+                        "error": None,
+                        "access_token": token.access_token,
+                        "refresh_token": token.refresh_token,
+                    }
+                log.info("realdebrid_device_auth_success")
+                return
+            except RealDebridOAuthError as exc:
+                with self._device_auth_lock:
+                    self._device_auth_state = {
+                        "status": "expired" if exc.error in ("expired",) else "denied",
+                        "error": str(exc),
+                    }
+                log.warning("realdebrid_device_auth_failed", error=exc.error, description=exc.description)
+                return
+            except Exception as exc:
+                log.error("realdebrid_device_auth_attempt_%d_failed: %s", attempt, exc)
+                if attempt < 3:
+                    time.sleep(3)
+                else:
+                    with self._device_auth_lock:
+                        self._device_auth_state = {"status": "error", "error": str(exc)}
+                    log.error("realdebrid_device_auth_unexpected", error=str(exc))
+
+    def poll_device_auth_status(self) -> Dict[str, Any]:
+        """Return the current device auth state (background thread handles polling)."""
+        with self._device_auth_lock:
+            state = dict(self._device_auth_state) if self._device_auth_state else {}
+        if not state:
+            return {"status": "none", "error": None}
+        return state
 
     def complete_device_auth(self, device_code: str) -> Dict[str, Any]:
         """Complete device flow: poll credentials, exchange tokens, persist."""
@@ -71,6 +145,15 @@ class RealDebridClient:
 
     def _get_auth_header(self) -> Dict[str, str]:
         """Return Authorization header with a valid token."""
+        import time as _time
+        has_token = bool(self._oauth._settings.access_token)
+        is_expired = not self._oauth._settings.has_valid_token
+        log.debug(
+            "rd_auth_header_request",
+            has_token=has_token,
+            expired=is_expired,
+            expired_by_s=int(_time.time() - self._oauth._settings.token_expires_at) if has_token and is_expired else None,
+        )
         token = self._oauth.ensure_valid_token()
         return {"Authorization": f"Bearer {token}"}
 
@@ -102,6 +185,7 @@ class RealDebridClient:
             data["host"] = host
 
         resp = self._post("/torrents/addMagnet", data=data)
+        log.info("rd_add_magnet_response", keys=list(resp.keys()) if isinstance(resp, dict) else type(resp).__name__)
         torrent_id = resp.get("id")
         if not torrent_id:
             raise RealDebridAPIError(0, "No torrent ID returned from addMagnet")
@@ -347,7 +431,9 @@ class RealDebridClient:
         return backoff + jitter
 
     def _reload_settings(self) -> None:
-        self._settings = get_torrent_debrid_settings().realdebrid
+        new_settings = get_torrent_debrid_settings(reload=True).realdebrid
+        self._settings = new_settings
+        self._oauth._settings = new_settings
 
     # ------------------------------------------------------------------
     # Magnet hash mapping

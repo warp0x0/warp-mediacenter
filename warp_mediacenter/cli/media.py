@@ -699,6 +699,17 @@ def _handle_warp_startup(args: argparse.Namespace) -> None:
     )
 
 
+def _handle_ui(args: argparse.Namespace) -> None:
+    """Launch the Warp MediaCenter desktop client."""
+    from warp_mediacenter.ui.app import run_ui
+
+    run_ui(
+        server_url=args.server,
+        fullscreen=args.fullscreen,
+        windowed=args.windowed,
+    )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="warp-media",
@@ -998,6 +1009,13 @@ def _build_parser() -> argparse.ArgumentParser:
     warp_parser.add_argument("--log-level", default="info", choices=["debug", "info", "warning", "error"], help="Log level.")
     warp_parser.add_argument("--reload", action="store_true", help="Enable auto-reload (dev only, skips Torrent-API-Py).")
     warp_parser.set_defaults(func=_handle_warp_startup)
+
+    # UI (Desktop Client) ----------------------------------------------------
+    ui_parser = build_subparser(subparsers, "ui", help="Launch the Warp MediaCenter desktop client.")
+    ui_parser.add_argument("--server", default="http://localhost:8000", help="API server URL (default: http://localhost:8000).")
+    ui_parser.add_argument("--fullscreen", action="store_true", help="Start in fullscreen mode.")
+    ui_parser.add_argument("--windowed", action="store_true", help="Start in windowed mode (1280x720).")
+    ui_parser.set_defaults(func=_handle_ui)
 
     return parser
 

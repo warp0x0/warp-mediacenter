@@ -2,18 +2,108 @@
 
 from __future__ import annotations
 
+import json
 import os
 import threading
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from warp_mediacenter.backend.common.logging import get_logger
-from warp_mediacenter.config.settings.library import load_user_settings
+from warp_mediacenter.config.settings.library import load_user_settings, write_user_settings
+
+# Fields that are persisted in the dedicated token file (var/tokens/realdebrid_tokens.json).
+# Everything else (non-sensitive config) stays in user_settings.json.
+_RD_TOKEN_FIELDS: frozenset[str] = frozenset({
+    "access_token",
+    "refresh_token",
+    "oauth_client_id",
+    "oauth_client_secret",
+    "token_expires_at",
+})
+_RD_CONFIG_FIELDS: frozenset[str] = frozenset({
+    "base_url",
+    "poll_interval",
+    "download_timeout",
+    "prefer_instant",
+})
 
 log = get_logger(__name__)
 
 _SETTINGS_LOCK = threading.Lock()
 _SETTINGS_SINGLETON: Optional["TorrentDebridSettings"] = None
+
+
+# ---------------------------------------------------------------------------
+# RealDebrid token-file helpers
+# ---------------------------------------------------------------------------
+
+def _get_rd_tokens_path() -> Path:
+    """Absolute path to var/tokens/realdebrid_tokens.json."""
+    from warp_mediacenter.config.settings.paths import get_tokens_dir
+    return Path(get_tokens_dir()) / "realdebrid_tokens.json"
+
+
+def _load_rd_tokens() -> Dict[str, Any]:
+    """Read RD token data from the dedicated token file.
+
+    Returns an empty dict when the file does not yet exist (e.g. fresh install
+    or immediately after a Disconnect).  Falls back gracefully on parse errors.
+    """
+    path = _get_rd_tokens_path()
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:
+        return {}
+
+
+def _write_rd_tokens(data: Dict[str, Any]) -> None:
+    """Persist RD token fields to var/tokens/realdebrid_tokens.json.
+
+    Creates the tokens directory if it doesn't exist yet.
+    """
+    path = _get_rd_tokens_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2, ensure_ascii=False, sort_keys=True)
+
+
+def clear_realdebrid_tokens() -> None:
+    """Delete the RD token file and strip any residual token fields from
+    user_settings.json.
+
+    Called exclusively by the Disconnect button in the UI.  Does NOT touch the
+    silent-refresh logic or the access_token-only cleanup performed by
+    ``_clear_dead_tokens`` on a bad token response — those paths are left intact.
+    """
+    # Remove dedicated token file
+    try:
+        _get_rd_tokens_path().unlink(missing_ok=True)
+    except Exception:
+        pass
+
+    # Strip any residual token fields that may still sit in user_settings.json
+    # (present when disconnect is called before the first post-migration write).
+    try:
+        user_cfg = load_user_settings()
+        rd_cfg = dict(user_cfg.get("realdebrid", {}))
+        changed = any(f in rd_cfg for f in _RD_TOKEN_FIELDS)
+        if changed:
+            for f in _RD_TOKEN_FIELDS:
+                rd_cfg.pop(f, None)
+            user_cfg["realdebrid"] = rd_cfg
+            write_user_settings(user_cfg)
+    except Exception:
+        pass
+
+    # Reload in-memory singleton so subsequent calls see no tokens
+    try:
+        get_torrent_debrid_settings(reload=True)
+    except Exception:
+        pass
 
 
 @dataclass
@@ -115,8 +205,16 @@ def _build_settings() -> TorrentDebridSettings:
     torrent_cfg = user_cfg.get("torrent", {})
     rd_cfg = user_cfg.get("realdebrid", {})
 
+    # Token fields live in a separate file (var/tokens/realdebrid_tokens.json).
+    # We merge both sources so that:
+    #   • New installs / post-Disconnect: token file is absent → rd_tokens = {}
+    #   • Normal operation: token file exists and wins over any stale token
+    #     fields still present in user_settings.json (backward-compat fallback).
+    rd_tokens = _load_rd_tokens()
+    rd_merged = {**rd_cfg, **rd_tokens}  # token file takes precedence
+
     torrent = TorrentSettings.from_dict(torrent_cfg)
-    realdebrid = RealDebridSettings.from_dict(rd_cfg)
+    realdebrid = RealDebridSettings.from_dict(rd_merged)
 
     env_base_url = os.getenv("TORRENT_API_URL")
     if env_base_url:
@@ -171,12 +269,24 @@ def update_realdebrid_settings(**kwargs: Any) -> TorrentDebridSettings:
 
 def _save_and_reload(current: TorrentDebridSettings) -> TorrentDebridSettings:
     from datetime import datetime, timezone
+
+    rd_dict = current.realdebrid.to_dict()
+
+    # Split: auth credentials → token file; non-sensitive config → user_settings.json
+    token_dict = {k: v for k, v in rd_dict.items() if k in _RD_TOKEN_FIELDS}
+    config_dict = {k: v for k, v in rd_dict.items() if k in _RD_CONFIG_FIELDS}
+
+    _write_rd_tokens(token_dict)
+
     user_cfg = load_user_settings()
     user_cfg["torrent"] = current.torrent.to_dict()
-    user_cfg["realdebrid"] = current.realdebrid.to_dict()
+    # Write only non-sensitive config; also strip any legacy token fields that
+    # may have been stored here before the token-file migration.
+    rd_section = {k: v for k, v in user_cfg.get("realdebrid", {}).items()
+                  if k not in _RD_TOKEN_FIELDS}
+    rd_section.update(config_dict)
+    user_cfg["realdebrid"] = rd_section
     user_cfg["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-    from warp_mediacenter.config.settings.library import write_user_settings
     write_user_settings(user_cfg)
 
     return get_torrent_debrid_settings(reload=True)
@@ -186,6 +296,7 @@ __all__ = [
     "TorrentSettings",
     "RealDebridSettings",
     "TorrentDebridSettings",
+    "clear_realdebrid_tokens",
     "get_torrent_debrid_settings",
     "update_torrent_settings",
     "update_realdebrid_settings",

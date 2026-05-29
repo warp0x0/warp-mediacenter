@@ -97,15 +97,51 @@ async def trakt_auth_complete(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 @router.get("/auth/status")
 async def trakt_auth_status() -> Dict[str, Any]:
-    """Get Trakt authentication status."""
+    """Get Trakt authentication status (background poll handles Trakt API calls)."""
     manager = _get_trakt()
-    status = manager.facade_status()
+    state = manager.poll_device_auth_status()
+    status = state.get("status", "none")
+    log.debug("Trakt device auth state: %s", status)
+
+    if status == "authorized":
+        return {"authenticated": True, "pending": False, "expired": False, "denied": False}
+
+    if status == "expired":
+        return {"authenticated": False, "pending": False, "expired": True, "denied": False, "error": state.get("error")}
+
+    if status == "denied":
+        return {"authenticated": False, "pending": False, "expired": False, "denied": True, "error": state.get("error")}
+
+    if status == "pending":
+        manager_status = manager.facade_status()
+        return {
+            "authenticated": not manager_status.get("reauth_required", True),
+            "pending": True,
+            "expired": False,
+            "denied": False,
+            "reason": manager_status.get("reason"),
+            "expires_at": manager_status.get("expires_at"),
+            "last_refresh_ymd": manager_status.get("last_refresh_ymd"),
+        }
+
+    manager_status = manager.facade_status()
     return {
-        "authenticated": not status.get("reauth_required", True),
-        "reason": status.get("reason"),
-        "expires_at": status.get("expires_at"),
-        "last_refresh_ymd": status.get("last_refresh_ymd"),
+        "authenticated": not manager_status.get("reauth_required", True),
+        "pending": False,
+        "expired": False,
+        "denied": False,
+        "reason": manager_status.get("reason"),
+        "expires_at": manager_status.get("expires_at"),
+        "last_refresh_ymd": manager_status.get("last_refresh_ymd"),
     }
+
+
+@router.post("/auth/clear")
+async def trakt_auth_clear() -> Dict[str, Any]:
+    """Clear Trakt authentication tokens."""
+    manager = _get_trakt()
+    manager.clear_token()
+    return {"authenticated": False}
 
 
 # ------------------------------------------------------------------

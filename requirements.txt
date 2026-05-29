@@ -26,3 +26,6 @@ aiohttp==3.11.12
 # FastAPI (API layer + SSE endpoints)
 fastapi==0.115.6
 uvicorn==0.34.0
+
+# Desktop UI
+PySide6>=6.6.0

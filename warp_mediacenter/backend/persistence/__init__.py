@@ -2,6 +2,7 @@
 
 from .sqlite import (
     cache_torrent_search,
+    clear_all_torrent_cache,
     clear_expired_torrent_cache,
     connect,
     connection,
@@ -48,6 +49,7 @@ from .sqlite import (
 
 __all__ = [
     "cache_torrent_search",
+    "clear_all_torrent_cache",
     "clear_expired_torrent_cache",
     "connect",
     "connection",

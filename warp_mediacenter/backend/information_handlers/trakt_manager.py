@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+import threading
 from dataclasses import dataclass
 from collections import OrderedDict
 from datetime import date, datetime, timezone
@@ -97,9 +98,18 @@ class StoredToken(BaseModel):
     expires_at: int
     token_type: str
     last_refresh_ymd: Optional[str] = None
+    client_id: Optional[str] = None
+    client_secret: Optional[str] = None
 
     @classmethod
-    def from_oauth(cls, token: OAuthToken, *, last_refresh_ymd: Optional[str] = None) -> "StoredToken":
+    def from_oauth(
+        cls,
+        token: OAuthToken,
+        *,
+        last_refresh_ymd: Optional[str] = None,
+        client_id: Optional[str] = None,
+        client_secret: Optional[str] = None,
+    ) -> "StoredToken":
         created_at = token.ensure_created_at()
         expires_at = created_at + int(token.expires_in)
         refresh = token.refresh_token or ""
@@ -114,6 +124,8 @@ class StoredToken(BaseModel):
             expires_at=expires_at,
             token_type=token.token_type,
             last_refresh_ymd=last_refresh_ymd or date.today().isoformat(),
+            client_id=client_id,
+            client_secret=client_secret,
         )
 
     def to_oauth(self) -> OAuthToken:
@@ -363,10 +375,21 @@ class TraktManager:
         self._user_slug: Optional[str] = None
         self._load_tokens()
 
+        if self._token is not None and self._token.client_id:
+            self._client_id = self._token.client_id
+        if self._token is not None and self._token.client_secret:
+            self._client_secret = self._token.client_secret
+
         self._facade = facade or MediaModelFacade()
         self._rate_limit: Optional[RateLimitInfo] = None
 
         self._session.register_token_refresher(_SERVICE_NAME, self._token_refresh_callback)
+
+        self._active_device_code: Optional[str] = None
+        self._active_device_expires_at: float = 0.0
+        self._device_auth_state: Dict[str, Any] = {}
+        self._device_auth_lock = threading.Lock()
+        self._device_auth_thread: Optional[threading.Thread] = None
 
     # ------------------------------------------------------------------
     # Authentication helpers
@@ -380,6 +403,56 @@ class TraktManager:
             "interval": device.interval,
         }
 
+    def _device_poll_loop(self, device: DeviceCode) -> None:
+        """Background thread: poll Trakt device/token every <interval> seconds."""
+        deadline = time.time() + device.expires_in
+        interval = max(5, int(device.interval))
+        poll_count = 0
+
+        while time.time() < deadline:
+            poll_count += 1
+            self._log.debug("Background poll #%d at %.0fs remaining", poll_count, deadline - time.time())
+
+            try:
+                token = self.poll_device_token(device.device_code)
+                with self._device_auth_lock:
+                    self._device_auth_state = {
+                        "status": "authorized",
+                        "error": None,
+                        "access_token": token.access_token,
+                        "refresh_token": token.refresh_token,
+                    }
+                self._log.info("Trakt device auth SUCCESS after %d polls", poll_count)
+                return
+            except DeviceAuthPollingError as exc:
+                error_code = exc.error
+                self._log.debug("Poll #%d result: %s", poll_count, error_code)
+
+                if error_code in ("expired", "410"):
+                    with self._device_auth_lock:
+                        self._device_auth_state = {"status": "expired", "error": str(exc)}
+                    self._log.warning("Trakt device code expired after %d polls", poll_count)
+                    return
+                if error_code in ("denied", "418"):
+                    with self._device_auth_lock:
+                        self._device_auth_state = {"status": "denied", "error": str(exc)}
+                    self._log.warning("Trakt device auth denied by user after %d polls", poll_count)
+                    return
+                if error_code in ("already_used", "409"):
+                    with self._device_auth_lock:
+                        self._device_auth_state = {"status": "denied", "error": "Code already used"}
+                    self._log.warning("Trakt device code already used after %d polls", poll_count)
+                    return
+
+            except Exception as exc:
+                self._log.error("Poll #%d unexpected error: %s", poll_count, exc)
+
+            time.sleep(interval)
+
+        with self._device_auth_lock:
+            self._device_auth_state = {"status": "expired", "error": "Polling deadline exceeded"}
+        self._log.warning("Trakt device auth deadline exceeded after %d polls", poll_count)
+
     def start_device_auth(self) -> DeviceCode:
         payload = {"client_id": self._client_id}
         response = self._session.post(
@@ -388,8 +461,27 @@ class TraktManager:
         data = self._parse_json(response)
 
         device = DeviceCode.model_validate(data)
+        self._active_device_code = device.device_code
+        self._active_device_expires_at = time.time() + device.expires_in
+
+        with self._device_auth_lock:
+            self._device_auth_state = {
+                "status": "pending",
+                "error": None,
+                "access_token": None,
+                "refresh_token": None,
+            }
+
+        self._device_auth_thread = threading.Thread(
+            target=self._device_poll_loop,
+            args=(device,),
+            daemon=True,
+            name="trakt-device-poll",
+        )
+        self._device_auth_thread.start()
+
         self._log.info(
-            "Trakt device code issued; user must visit %s and enter %s",
+            "Trakt device code issued; user must visit %s and enter %s (background poll started)",
             device.verification_url,
             device.user_code,
         )
@@ -420,6 +512,9 @@ class TraktManager:
                 description or "no description",
             )
             raise DeviceAuthPollingError(error, description, retry_interval=interval)
+
+        if not isinstance(data, Mapping):
+            raise RuntimeError(f"Trakt returned unexpected response type: {type(data).__name__}")
 
         token = OAuthToken.model_validate(data)
         self._store_token(token)
@@ -456,6 +551,14 @@ class TraktManager:
 
                 self._log.debug("Waiting %s seconds before next Trakt device poll", retry_delay)
                 time.sleep(retry_delay)
+
+    def poll_device_auth_status(self) -> Dict[str, Any]:
+        """Return the current device auth state (background thread handles polling)."""
+        with self._device_auth_lock:
+            state = dict(self._device_auth_state) if self._device_auth_state else {}
+        if not state:
+            return {"status": "none", "error": None}
+        return state
 
     def refresh_tokens(self) -> OAuthToken:
         token = self._token
@@ -1160,6 +1263,52 @@ class TraktManager:
 
         return entries
 
+    def get_watched_shows(self) -> List[Mapping[str, Any]]:
+        """Return all shows the user has at least one watched episode for.
+
+        Calls ``/sync/watched/shows?extended=noseasons`` which is a single
+        lightweight request (no per-season detail).  Each item looks like:
+        ``{"plays": N, "last_watched_at": "…", "show": {"title": "…", "ids": {…}}}``.
+        """
+        try:
+            payload = self._authorized_get(
+                "/sync/watched/shows",
+                params={"extended": "noseasons"},
+            )
+        except Exception:
+            return []
+        if not isinstance(payload, list):
+            return []
+        return [item for item in payload if isinstance(item, Mapping)]
+
+    def lookup_by_tmdb_id(
+        self,
+        tmdb_id: str | int,
+        media_type: MediaType,
+    ) -> Optional[str]:
+        """Return the Trakt slug for a given TMDb ID, or None if not found."""
+        type_str = "show" if media_type == MediaType.SHOW else "movie"
+        try:
+            payload = self._authorized_get(
+                f"/search/tmdb/{tmdb_id}",
+                params={"type": type_str},
+            )
+        except Exception:
+            return None
+        if not isinstance(payload, list) or not payload:
+            return None
+        first = payload[0]
+        if not isinstance(first, Mapping):
+            return None
+        item = first.get(type_str) or {}
+        if not isinstance(item, Mapping):
+            return None
+        ids = item.get("ids") or {}
+        if not isinstance(ids, Mapping):
+            return None
+        slug = ids.get("slug") or str(ids.get("trakt") or "")
+        return slug if slug else None
+
     def get_show_watched_progress(
         self,
         trakt_show_id: str,
@@ -1760,10 +1909,18 @@ class TraktManager:
 
     def _parse_json(self, response) -> Any:
         self._rate_limit = self._extract_rate_limit(response)
+        text = ""
+        try:
+            text = response.text
+        except Exception:
+            pass
+        if not text or not text.strip():
+            return {"status_code": response.status_code}
         try:
             return response.json()
-        except ValueError as exc:  # pragma: no cover - defensive
-            raise RuntimeError("Trakt returned invalid JSON") from exc
+        except (ValueError, json.JSONDecodeError):
+            self._log.debug("Trakt response was not valid JSON (status %s): %s", response.status_code, text[:200])
+            return {"status_code": response.status_code, "_raw": text[:500]}
 
     def _extract_rate_limit(self, response) -> RateLimitInfo:
         headers = response.headers or {}
@@ -1875,7 +2032,11 @@ class TraktManager:
         return headers
 
     def _store_token(self, token: OAuthToken) -> None:
-        stored = StoredToken.from_oauth(token)
+        stored = StoredToken.from_oauth(
+            token,
+            client_id=self._client_id,
+            client_secret=self._client_secret,
+        )
         self._token = stored
         self._reauth_reason = None
         self._daily_refresh_attempted = stored.last_refresh_ymd
@@ -1889,6 +2050,8 @@ class TraktManager:
             "expires_at": stored.expires_at,
             "token_type": stored.token_type,
             "last_refresh_ymd": stored.last_refresh_ymd,
+            "client_id": stored.client_id,
+            "client_secret": stored.client_secret,
         }
 
         try:
@@ -1922,11 +2085,22 @@ class TraktManager:
                     "expires_at": expires_at,
                     "token_type": payload.get("token_type") or "bearer",
                     "last_refresh_ymd": payload.get("last_refresh_ymd"),
+                    "client_id": payload.get("client_id"),
+                    "client_secret": payload.get("client_secret"),
                 }
             )
         except (ValidationError, TypeError, ValueError):
             self._log.warning("Stored Trakt token payload invalid; ignoring")
             return
+
+        if stored.client_id and stored.client_id != self._client_id:
+            self._log.warning(
+                "trakt_client_id_mismatch", file_id=stored.client_id, env_id=self._client_id
+            )
+        if stored.client_secret and stored.client_secret != self._client_secret:
+            self._log.warning(
+                "trakt_client_secret_mismatch", env_secret=(self._client_secret or "")[:6]
+            )
 
         # Backfill expires_at if an older payload omitted it.
         if not stored.expires_at:

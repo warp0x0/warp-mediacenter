@@ -9,6 +9,7 @@ Usage:
 
 from __future__ import annotations
 
+import logging
 import signal
 import sys
 from typing import Optional

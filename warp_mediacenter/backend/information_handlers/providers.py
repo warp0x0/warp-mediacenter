@@ -17,7 +17,7 @@ from __future__ import annotations
 import hashlib
 import random
 from datetime import date, datetime, timezone
-from typing import Any, Mapping, Optional, Sequence, Tuple
+from typing import Any, List, Mapping, Optional, Sequence, Tuple
 
 from pydantic import ValidationError
 
@@ -662,6 +662,31 @@ class InformationProviders:
 
         self.cache_widget(_trakt_widget_key(category), payload, ttl_seconds=60 * 60 * 24)
         return payload
+
+    def trakt_lookup_by_tmdb_id(
+        self,
+        tmdb_id: str | int,
+        media_type: MediaType,
+    ) -> Optional[str]:
+        """Return the Trakt slug for a given TMDb ID, or None."""
+        if self._trakt is None:
+            return None
+        return self._trakt.lookup_by_tmdb_id(tmdb_id, media_type)
+
+    def trakt_get_show_watched_progress(
+        self,
+        trakt_show_id: str,
+    ) -> Optional[Mapping[str, Any]]:
+        """Return episode-level watched progress for a show from Trakt."""
+        if self._trakt is None:
+            return None
+        return self._trakt.get_show_watched_progress(trakt_show_id)
+
+    def get_trakt_watched_shows(self) -> List[Mapping[str, Any]]:
+        """Return all shows with at least one watched episode (no season detail)."""
+        if self._trakt is None:
+            return []
+        return self._trakt.get_watched_shows()
 
     def get_trakt_continue_watching(
         self,

@@ -41,7 +41,7 @@ class ServiceManager:
         self._process = subprocess.Popen(
             self.command,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             preexec_fn=None if sys.platform == "win32" else lambda: signal.signal(signal.SIGPIPE, signal.SIG_DFL),
         )
 
@@ -59,7 +59,12 @@ class ServiceManager:
         while time.monotonic() - start < self.health_timeout:
             # Check if process is still running
             if self._process.poll() is not None:
-                log.error("service_crashed", name=self.name, returncode=self._process.returncode)
+                stdout_data = ""
+                try:
+                    stdout_data = self._process.stdout.read().decode("utf-8", errors="replace")[:500] if self._process.stdout else ""
+                except Exception:
+                    pass
+                log.error("service_crashed", name=self.name, returncode=self._process.returncode, stderr=stdout_data)
                 return False
 
             # Try health check
@@ -119,6 +124,7 @@ class TorrentApiPyManager(ServiceManager):
         self.executable = executable or self._find_executable()
 
         command = [
+            "python",
             self.executable,
             "--host", host,
             "--port", str(port),
@@ -127,39 +133,38 @@ class TorrentApiPyManager(ServiceManager):
         super().__init__(
             name="torrent-api-py",
             command=command,
-            health_url=f"http://{host}:{port}/api/v1/health",
+            health_url=f"http://{host}:{port}/health",
             health_timeout=30.0,
             health_interval=1.0,
         )
 
     @staticmethod
     def _find_executable() -> str:
-        """Find Torrent-API-Py executable."""
-        # Try common locations
-        candidates = [
-            "torrent-api-py",  # In PATH
-            str(Path.home() / ".local" / "bin" / "torrent-api-py"),
-            str(Path.home() / "torrent-api-py" / "torrent-api-py"),
-            "/usr/local/bin/torrent-api-py",
-            "/opt/torrent-api-py/torrent-api-py",
-        ]
+        """Find Torrent-API-Py main.py entry point."""
+        import os
 
+        # 1. Env var override
+        env_path = os.environ.get("TORRENT_API_MAIN_PATH")
+        if env_path:
+            p = Path(env_path)
+            if p.exists() and p.is_file():
+                return str(p)
+
+        # 2. Sibling directory relative to warp-mediacenter project
+        project_root = Path(__file__).resolve().parents[3]
+        sibling_main = project_root / "Torrent-Api-py" / "main.py"
+        if sibling_main.exists() and sibling_main.is_file():
+            return str(sibling_main)
+
+        # 3. Common locations
+        candidates = [
+            str(Path.home() / "Torrent-Api-py" / "main.py"),
+            str(Path.home() / "torrent-api-py" / "main.py"),
+            "/opt/torrent-api-py/main.py",
+        ]
         for path in candidates:
             p = Path(path)
             if p.exists() and p.is_file():
                 return str(p)
 
-        # Try which command
-        try:
-            result = subprocess.run(
-                ["which", "torrent-api-py"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if result.returncode == 0:
-                return result.stdout.strip()
-        except Exception:
-            pass
-
-        return "torrent-api-py"  # Fall back to PATH
+        return "torrent-api-py"  # Fallback
