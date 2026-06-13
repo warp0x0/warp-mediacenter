@@ -1,6 +1,7 @@
 import { motion } from 'framer-motion'
 import { Star } from 'lucide-react'
 import { useTmdbEnrichment } from '@/hooks/useTmdbEnrichment'
+import CollectionButtons from './CollectionButtons'
 import type { MediaItem } from '@/lib/types'
 
 interface PosterCardProps {
@@ -22,7 +23,7 @@ export default function PosterCard({ item, onSelect, onNavigate }: PosterCardPro
       onClick={() => onSelect(item)}
       onDoubleClick={() => onNavigate(item)}
       tabIndex={0}
-      onFocus={() => onSelect(item)}
+      onFocus={(e) => { if (e.target === e.currentTarget) onSelect(item) }}
       className="flex-shrink-0 flex flex-col gap-[clamp(4px,0.31vw,8px)] cursor-pointer rounded-[var(--card-radius)] focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary focus-visible:outline-none group"
       style={{ width: 'var(--poster-width)' }}
     >
@@ -42,6 +43,8 @@ export default function PosterCard({ item, onSelect, onNavigate }: PosterCardPro
             No Poster
           </div>
         )}
+
+        <CollectionButtons item={item} />
 
         {rating != null && (
           <div

@@ -7,6 +7,7 @@ import { useMovieDetail, useShowDetail, useImdbRating } from '@/hooks/useDetail'
 import { useTmdbEnrichment } from '@/hooks/useTmdbEnrichment'
 import TrailerDialog from './TrailerDialog'
 import RatingBadges from './RatingBadges'
+import CollectionButtons from '@/components/cards/CollectionButtons'
 import type { MediaItem } from '@/lib/types'
 
 // ── Ribbon item ───────────────────────────────────────────────────────────────
@@ -21,10 +22,13 @@ interface WidgetRibbonItemProps {
 function WidgetRibbonItem({ item, isSelected, onSelect, onNavigate }: WidgetRibbonItemProps) {
   const { posterUrl } = useTmdbEnrichment(item, 'w300')
   return (
-    <button
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onSelect}
       onDoubleClick={onNavigate}
-      className={`flex-shrink-0 relative rounded-[var(--card-radius)] transition-all duration-200 cursor-pointer focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none ${
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onSelect() }}
+      className={`flex-shrink-0 relative rounded-[var(--card-radius)] group transition-all duration-200 cursor-pointer focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none ${
         isSelected
           ? 'ring-2 ring-accent scale-105 shadow-[0_0_20px_rgba(13,178,226,0.3)] z-10'
           : 'hover:scale-105 hover:shadow-[0_0_16px_rgba(0,0,0,0.4)]'
@@ -49,6 +53,8 @@ function WidgetRibbonItem({ item, isSelected, onSelect, onNavigate }: WidgetRibb
           </div>
         )}
 
+        <CollectionButtons item={item} iconSize={12} />
+
         {typeof item.extra?.progress === 'number' && (item.extra.progress as number) > 0 && (
           <div className="absolute left-0 right-0 h-[6px] bg-white/15" style={{ bottom: '1.5px' }}>
             <div
@@ -58,7 +64,7 @@ function WidgetRibbonItem({ item, isSelected, onSelect, onNavigate }: WidgetRibb
           </div>
         )}
       </div>
-    </button>
+    </div>
   )
 }
 
