@@ -9,8 +9,11 @@ import TorrentDialog from '@/components/media/TorrentDialog'
 import TrailerDialog from '@/components/media/TrailerDialog'
 import LoadingSpinner from '@/components/shared/LoadingSpinner'
 import { useApi } from '@/hooks/useApi'
+import { useIsLiked, useIsWishlisted } from '@/hooks/useCollections'
+import { playMedia } from '@/hooks/usePlayer'
+import { isTauriRuntime, openPlayerWindow } from '@/lib/tauri'
 import { IMAGE_BASE } from '@/lib/constants'
-import type { CastMember, EpisodeDetail, MediaItem, SourceRow, WatchProvidersResponse, SeasonDetail } from '@/lib/types'
+import type { CastMember, CollectionItemPayload, EpisodeDetail, MediaItem, SourceRow, WatchProvidersResponse, SeasonDetail } from '@/lib/types'
 
 type DetailLocationState = { item?: MediaItem }
 
@@ -24,6 +27,9 @@ export default function DetailViewPage() {
   const [torrentEpisode, setTorrentEpisode] = useState<number | null>(null)
   const [trailerPlaying, setTrailerPlaying] = useState(false)
   const [trailerModalUrl, setTrailerModalUrl] = useState<string | null>(null)
+  // Resume modal state
+  const [resumeModalOpen, setResumeModalOpen] = useState(false)
+  const [resumePercent, setResumePercent] = useState<number | null>(null)
   const state = location.state as DetailLocationState | null
 
   const media = state?.item ?? null
@@ -34,6 +40,9 @@ export default function DetailViewPage() {
   const mediaKind = ((media?.type || detail?.type) === 'show' ? 'tv' : 'movie') as 'movie' | 'tv'
   const isShow = mediaKind === 'tv'
   const tmdbId = (media?.tmdb_id ?? detail?.tmdb_id ?? null)
+
+  const { isLiked, toggle: toggleLiked } = useIsLiked(tmdbId)
+  const { isWishlisted, toggle: toggleWishlisted } = useIsWishlisted(tmdbId)
 
   const movieDetail = useMovieDetail(isShow ? null : tmdbId)
   const showDetail = useShowDetail(isShow ? tmdbId : null)
@@ -59,16 +68,16 @@ export default function DetailViewPage() {
       if ((season.number ?? 0) === 0) continue
       for (const ep of (season.episodes ?? [])) {
         if (ep.scrobble_progress != null && ep.scrobble_progress > 0) {
-          return { season: season.number, episode: ep.number, isScrobbled: true }
+          return { season: season.number, episode: ep.number, isScrobbled: true, progress: ep.scrobble_progress }
         }
       }
     }
-    // 2. Fall back to first uncompleted episode
+    // 2. Fall back to first uncompleted episode (no partial progress)
     for (const season of (seasons ?? [])) {
       if ((season.number ?? 0) === 0) continue
       for (const ep of (season.episodes ?? [])) {
         if (!ep.completed) {
-          return { season: season.number, episode: ep.number, isScrobbled: false }
+          return { season: season.number, episode: ep.number, isScrobbled: false, progress: 0 }
         }
       }
     }
@@ -109,9 +118,15 @@ export default function DetailViewPage() {
     setTrailerPlaying(false)
   }
 
-  function handlePlayEpisode(ep: EpisodeDetail, seasonNumber: number) {
+  function handlePlayEpisode(ep: EpisodeDetail, seasonNumber: number, epScrobblePct: number | null) {
     setTorrentSeason(seasonNumber)
     setTorrentEpisode(ep.episode_number ?? null)
+    if (epScrobblePct != null && epScrobblePct > 0) {
+      setResumePercent(epScrobblePct)
+      setResumeModalOpen(true)
+      return
+    }
+    setResumePercent(null)
     setTorrentOpen(true)
   }
 
@@ -128,26 +143,135 @@ export default function DetailViewPage() {
   const writers = (richDetail?.credits?.crew as CrewMember[] | undefined)?.filter((c) => c.department === 'Writing')?.slice(0, 2).map((c) => c.name).filter((n): n is string => !!n) ?? []
   
   useEffect(() => {
-    const backdropPath = media?.backdrop_path || detail?.backdrop_path || null
+    const backdropPath =
+      media?.backdrop_path ||
+      richDetail?.backdrop?.url ||
+      detail?.backdrop_path ||
+      null
     if (backdropPath) setBackdrop(backdropPath)
     else clearBackdrop()
     return () => clearBackdrop()
-  }, [media?.backdrop_path, detail?.backdrop_path, clearBackdrop, setBackdrop])
+  }, [media?.backdrop_path, richDetail?.backdrop?.url, detail?.backdrop_path, clearBackdrop, setBackdrop])
 
   function handleBack() { navigate(-1) }
 
-  function handlePlaySource(source: SourceRow) {
+  async function handlePlaySource(source: SourceRow) {
     const playableSource = source.file_path || source.url
     if (!playableSource) return
-    navigate('/playback', { state: { source: playableSource, title, isStream: source.source_type !== 'local', media_kind: mediaKind, year: year ?? undefined, tmdb_id: media?.tmdb_id ?? detail?.tmdb_id ?? undefined, item: media || undefined, sourceType: source.source_type } })
+    const navState = {
+      source: playableSource,
+      title,
+      isStream: source.source_type !== 'local',
+      media_kind: mediaKind,
+      year: year ?? undefined,
+      tmdb_id: media?.tmdb_id ?? detail?.tmdb_id ?? undefined,
+      item: media || undefined,
+      sourceType: source.source_type,
+    }
+    try {
+      const result = await playMedia({
+        source: playableSource,
+        title,
+        media_kind: mediaKind,
+        is_stream: source.source_type !== 'local',
+        year: year ?? undefined,
+        tmdb_id: media?.tmdb_id ?? detail?.tmdb_id ?? undefined,
+        media_payload: media || undefined,
+        source_type: source.source_type,
+      })
+      // Desktop (VLC) mode — VLC window is already open, no need to navigate away.
+      if (result.player_mode === 'desktop') return
+      // Thin-client (in-browser) mode — navigate to the playback page.
+      navigate('/playback', { state: { ...navState, alreadyStarted: true } })
+    } catch {
+      // On error fall through to playback page so user sees an error state.
+      navigate('/playback', { state: navState })
+    }
   }
 
-  function handleTorrentStreamReady(payload: { source: string; title: string; isStream: boolean; media_kind: 'movie' | 'tv'; tmdb_id?: string | null; year?: number | null; season?: number | null; episode?: number | null }) {
-    navigate('/playback', { state: { ...payload, item: media || undefined, sourceType: 'debrid' } })
+  async function handleTorrentStreamReady(payload: {
+    source: string
+    /** StreamProxy loopback URL with real filename — preferred by mpv for demux hint. */
+    local_source?: string
+    session_id?: string | null
+    title: string
+    isStream: boolean
+    media_kind: 'movie' | 'tv'
+    tmdb_id?: string | null
+    year?: number | null
+    season?: number | null
+    episode?: number | null
+    resumePercent?: number | null
+  }) {
+    // Tauri mode: open a borderless player window with the stream URL.
+    // Prefer local_source (StreamProxy URL with real filename extension) over
+    // source (opaque FastAPI proxy URL) so mpv gets a proper demuxer hint and
+    // byte-range seeks hit the StreamProxy directly without the extra hop.
+    if (isTauriRuntime()) {
+      await openPlayerWindow({
+        source: payload.local_source ?? payload.source,
+        session_id: payload.session_id ?? null,
+        title: payload.title,
+        media_kind: payload.media_kind,
+        tmdb_id: payload.tmdb_id ?? media?.tmdb_id ?? null,
+        trakt_id: media?.trakt_id ?? null,
+        year: payload.year ?? null,
+        season: payload.season ?? null,
+        episode: payload.episode ?? null,
+        resume_percent: payload.resumePercent ?? null,
+      })
+      return
+    }
+
+    // Non-Tauri: fall through to backend player (VLC desktop or thin-client browser).
+    try {
+      const result = await playMedia({
+        source: payload.source,
+        session_id: payload.session_id ?? undefined,
+        title: payload.title,
+        media_kind: payload.media_kind,
+        is_stream: payload.isStream,
+        tmdb_id: payload.tmdb_id ?? undefined,
+        year: payload.year ?? undefined,
+        season: payload.season ?? undefined,
+        episode: payload.episode ?? undefined,
+        media_payload: media || undefined,
+        source_type: 'debrid',
+      })
+      // Desktop (VLC) mode — VLC is already playing, stay on this page.
+      if (result.player_mode === 'desktop') return
+      // Thin-client mode — hand off to the in-browser playback page.
+      navigate('/playback', {
+        state: { ...payload, item: media || undefined, sourceType: 'debrid', alreadyStarted: true },
+      })
+    } catch {
+      navigate('/playback', {
+        state: { ...payload, item: media || undefined, sourceType: 'debrid' },
+      })
+    }
   }
 
-  const posterUrl = media?.poster_path ? `${IMAGE_BASE}/w500${media.poster_path}` : detail?.poster_path ? `${IMAGE_BASE}/w500${detail.poster_path}` : richDetail?.poster?.url ? `${IMAGE_BASE}/w500${richDetail.poster.url}` : null
-  const backdropUrl = media?.backdrop_path ? `${IMAGE_BASE}/w1280${media.backdrop_path}` : detail?.backdrop_path ? `${IMAGE_BASE}/w1280${detail.backdrop_path}` : null
+  const posterUrl =
+    media?.poster_path ? `${IMAGE_BASE}/w500${media.poster_path}` :
+    detail?.poster_path ? `${IMAGE_BASE}/w500${detail.poster_path}` :
+    richDetail?.poster?.url ?? null
+  const backdropUrl =
+    media?.backdrop_path ? `${IMAGE_BASE}/w1280${media.backdrop_path}` :
+    detail?.backdrop_path ? `${IMAGE_BASE}/w1280${detail.backdrop_path}` :
+    richDetail?.backdrop?.url ?? null
+
+  const collectionPayload: CollectionItemPayload | undefined = tmdbId ? {
+    tmdb_id: tmdbId,
+    type: isShow ? 'show' : 'movie',
+    title,
+    year: year ?? null,
+    overview: media?.overview || richDetail?.overview || detail?.overview || null,
+    poster_path: media?.poster_path || richDetail?.poster?.url || detail?.poster_path || null,
+    backdrop_path: media?.backdrop_path || richDetail?.backdrop?.url || detail?.backdrop_path || null,
+    rating: richDetail?.vote_average ?? rating ?? null,
+    vote_count: richDetail?.vote_count ?? null,
+    genres: (genres as string[]).filter((g): g is string => typeof g === 'string'),
+  } : undefined
 
   return (
     <div className="w-full h-screen overflow-y-auto overflow-x-hidden bg-[#0a0a0a]">
@@ -210,9 +334,17 @@ export default function DetailViewPage() {
               if (isShow && showResumeInfo) {
                 setTorrentSeason(showResumeInfo.season)
                 setTorrentEpisode(showResumeInfo.episode)
-              } else if (!isShow && isMovieResumeAvailable) {
-                // movies: open dialog at top (no season/ep pre-set needed)
+                if (showResumeInfo.isScrobbled) {
+                  setResumePercent(showResumeInfo.progress)
+                  setResumeModalOpen(true)
+                  return  // modal decides whether to open TorrentDialog
+                }
+              } else if (!isShow && isMovieResumeAvailable && movieResumeProgress != null) {
+                setResumePercent(movieResumeProgress)
+                setResumeModalOpen(true)
+                return  // modal decides whether to open TorrentDialog
               }
+              setResumePercent(null)
               setTorrentOpen(true)
             }}
             className="flex items-center justify-center gap-2 px-8 py-3.5 rounded-lg text-base font-semibold text-white transition-all duration-200 hover:-translate-y-0.5"
@@ -243,14 +375,32 @@ export default function DetailViewPage() {
             </span>
           </button>
           
-          <button className="w-12 h-12 rounded-full bg-black/40 backdrop-blur-3xl border border-red flex items-center justify-center text-white hover:bg-white/20 hover:border-white/40 hover:scale-110 transition-all duration-200">
-            <Plus size={20} />
+          <button
+            onClick={() => toggleWishlisted(collectionPayload)}
+            title={isWishlisted ? 'Remove from Wishlist' : 'Add to Wishlist'}
+            className="w-12 h-12 rounded-full backdrop-blur-3xl flex items-center justify-center hover:scale-110 transition-all duration-200"
+            style={{
+              background: isWishlisted ? 'rgba(16,185,129,0.25)' : 'rgba(0,0,0,0.40)',
+              border: isWishlisted ? '1px solid rgba(16,185,129,0.60)' : '1px solid rgba(255,255,255,0.20)',
+              color: isWishlisted ? 'rgb(52,211,153)' : 'white',
+            }}
+          >
+            {isWishlisted ? <CheckCircle2 size={20} /> : <Plus size={20} />}
           </button>
-          <button className="w-12 h-12 rounded-full bg-black/40 backdrop-blur-3xl border border-red flex items-center justify-center text-white hover:bg-white/20 hover:border-white/40 hover:scale-110 transition-all duration-200">
+          <button className="w-12 h-12 rounded-full bg-black/40 backdrop-blur-3xl border border-white/20 flex items-center justify-center text-white hover:bg-white/20 hover:border-white/40 hover:scale-110 transition-all duration-200">
             <Share2 size={18} />
           </button>
-          <button className="w-12 h-12 rounded-full bg-black/40 backdrop-blur-3xl border border-red flex items-center justify-center text-white hover:bg-white/20 hover:border-white/40 hover:scale-110 transition-all duration-200">
-            <Heart size={18} />
+          <button
+            onClick={() => toggleLiked(collectionPayload)}
+            title={isLiked ? 'Unlike' : 'Like'}
+            className="w-12 h-12 rounded-full backdrop-blur-3xl flex items-center justify-center hover:scale-110 transition-all duration-200"
+            style={{
+              background: isLiked ? 'rgba(239,68,68,0.25)' : 'rgba(0,0,0,0.40)',
+              border: isLiked ? '1px solid rgba(239,68,68,0.60)' : '1px solid rgba(255,255,255,0.20)',
+              color: isLiked ? 'rgb(248,113,113)' : 'white',
+            }}
+          >
+            <Heart size={18} fill={isLiked ? 'currentColor' : 'none'} />
           </button>
         </div>
 
@@ -597,7 +747,7 @@ export default function DetailViewPage() {
                       </div>
 
                       <button
-                        onClick={() => handlePlayEpisode(ep, seasonNum)}
+                        onClick={() => handlePlayEpisode(ep, seasonNum, epScrobblePct)}
                         className="flex-shrink-0 flex items-center gap-2 font-semibold cursor-pointer transition-all duration-200 hover:scale-105 hover:brightness-110"
                         style={{
                           padding: '10px 22px',
@@ -824,15 +974,68 @@ export default function DetailViewPage() {
         </div>
       )}
 
+      {/* Resume modal — appears before TorrentDialog opens */}
+      {resumeModalOpen && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center"
+          style={{ background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)' }}
+          onClick={() => setResumeModalOpen(false)}
+        >
+          <div
+            className="flex flex-col gap-6 border border-white/10 rounded-2xl shadow-2xl"
+            style={{ width: 360, padding: '32px', background: 'rgba(12,12,16,0.98)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div>
+              <h3 className="text-white font-bold text-xl" style={{ marginBottom: 8 }}>Resume Playback</h3>
+              <p className="text-white/50 text-sm leading-relaxed">
+                {resumePercent != null ? `You were ${Math.round(resumePercent)}% through. ` : ''}
+                Continue from where you left off or start over?
+              </p>
+            </div>
+            <div className="flex flex-col gap-3">
+              <button
+                onClick={() => {
+                  setResumeModalOpen(false)
+                  setTorrentOpen(true)
+                }}
+                className="w-full py-3 rounded-xl text-white font-semibold text-base transition-all hover:brightness-110"
+                style={{ background: 'rgb(217,119,6)', boxShadow: '0 4px 16px rgba(217,119,6,0.35)', height: '40px' }}
+              >
+                Continue Watching
+              </button>
+              <button
+                onClick={() => {
+                  setResumePercent(null)
+                  setResumeModalOpen(false)
+                  setTorrentOpen(true)
+                }}
+                className="w-full py-3 rounded-xl font-semibold text-base border transition-all hover:border-white/20 hover:text-white"
+                style={{ background: 'rgba(255,255,255,0.04)', borderColor: 'rgba(255,255,255,0.10)', color: 'rgba(255,255,255,0.65)', height: '40px' }}
+              >
+                Start Over
+              </button>
+              <button
+                onClick={() => setResumeModalOpen(false)}
+                className="text-white/35 text-sm hover:text-white/55 transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <TorrentDialog
         open={torrentOpen}
         title={title}
         mediaKind={mediaKind}
-        onClose={() => { setTorrentOpen(false); setTorrentSeason(null); setTorrentEpisode(null) }}
+        onClose={() => { setTorrentOpen(false); setTorrentSeason(null); setTorrentEpisode(null); setResumePercent(null) }}
         item={media || undefined}
         year={year ?? undefined}
         season={torrentSeason}
         episode={torrentEpisode}
+        resumePercent={resumePercent}
         onStreamReady={handleTorrentStreamReady}
       />
 

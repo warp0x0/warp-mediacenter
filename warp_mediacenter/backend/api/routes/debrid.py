@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any, Dict, List, Optional
 
+import requests as _requests
 from fastapi import APIRouter, HTTPException, Query
 
 from warp_mediacenter.backend.common.logging import get_logger
@@ -82,15 +84,21 @@ async def debrid_auth_refresh() -> Dict[str, Any]:
     """Try to silently refresh an expired RealDebrid token.
 
     Does NOT start the device flow. Returns refreshed/failed/should-reauth.
+    Respects the same in-process backoff used by ensure_valid_token() so that
+    repeated frontend calls (AppShell startup, Settings panel) cannot hammer the
+    RealDebrid token endpoint.
     """
     client = _get_debrid()
     try:
         client._reload_settings()
-        if client._oauth._settings.has_valid_token:
+        # Use the same buffer-aware check as ensure_valid_token() / refresh_token()
+        # so all three paths agree on when a refresh is actually warranted.
+        if not client._oauth._token_needs_refresh():
+            remaining = int(client._oauth._settings.token_expires_at - time.time())
             return {
                 "refreshed": False,
                 "authenticated": True,
-                "message": "Token is still valid. No refresh needed.",
+                "message": f"Token is still valid ({remaining}s remaining). No refresh needed.",
             }
     except Exception:
         pass
@@ -103,8 +111,29 @@ async def debrid_auth_refresh() -> Dict[str, Any]:
             "message": "No refresh token available. Full device auth required.",
         }
 
+    # Honour the same backoff that ensure_valid_token() uses so we never
+    # hammer RD after a recent failure regardless of how often the frontend
+    # calls this endpoint.
+    now = time.time()  # must match the time.time() used inside ensure_valid_token()
+    failed_at = client._oauth._refresh_failed_at
+    if failed_at is not None:
+        elapsed = now - failed_at
+        if elapsed < client._oauth._REFRESH_BACKOFF_S:
+            remaining = int(client._oauth._REFRESH_BACKOFF_S - elapsed)
+            log.info("rd_refresh_endpoint_backoff", retry_in_s=remaining)
+            return {
+                "refreshed": False,
+                "authenticated": False,
+                "reason": "refresh_backoff",
+                "message": (
+                    f"Recent token refresh failed — retrying in ~{remaining}s. "
+                    "If this persists, re-authenticate in Settings → Authentication."
+                ),
+            }
+
     try:
         token = client._oauth.refresh_token()
+        client._oauth._refresh_failed_at = None  # clear backoff on success
         client._reload_settings()
         return {
             "refreshed": True,
@@ -112,7 +141,36 @@ async def debrid_auth_refresh() -> Dict[str, Any]:
             "message": "Token refreshed successfully.",
             "expires_in": token.expires_in,
         }
+    except _requests.HTTPError as exc:
+        # refresh_token() calls resp.raise_for_status() — we get HTTPError for
+        # 400 wrong_parameter, 401, etc.  Mirror what ensure_valid_token() does:
+        # arm the backoff and clear the dead access token from disk.
+        client._oauth._refresh_failed_at = time.time()
+        client._oauth._clear_dead_tokens(exc)
+        reason = "refresh_failed"
+        detail: Optional[str] = None
+        if exc.response is not None:
+            try:
+                body = exc.response.json()
+                if body.get("error") == "wrong_parameter" or body.get("error_code") == 2:
+                    reason = "token_revoked"
+                    detail = (
+                        "The stored refresh token is no longer valid (RealDebrid returned "
+                        "'wrong_parameter'). This usually means the token was revoked or "
+                        "has expired. Please re-authenticate."
+                    )
+            except Exception:
+                pass
+        log.warning("rd_refresh_endpoint_http_error", status=exc.response.status_code if exc.response is not None else None, reason=reason)
+        return {
+            "refreshed": False,
+            "authenticated": False,
+            "reason": reason,
+            "error": str(exc),
+            "message": detail or "Token refresh failed. Full device auth required.",
+        }
     except RealDebridOAuthError as exc:
+        client._oauth._refresh_failed_at = time.time()
         return {
             "refreshed": False,
             "authenticated": False,
@@ -121,6 +179,7 @@ async def debrid_auth_refresh() -> Dict[str, Any]:
             "message": "Token refresh failed. Full device auth required.",
         }
     except Exception as exc:
+        client._oauth._refresh_failed_at = time.time()
         return {
             "refreshed": False,
             "authenticated": False,
@@ -422,17 +481,35 @@ async def debrid_stream_url(
             raise HTTPException(status_code=404, detail=f"File {file_id} not found")
 
         if info.links and target_idx < len(info.links):
-            stream_url = info.links[target_idx]
+            raw_link = info.links[target_idx]
         elif info.links:
-            stream_url = info.links[0]
+            raw_link = info.links[0]
         else:
             raise HTTPException(status_code=400, detail="No download links available yet")
+
+        # info.links contains pre-unrestricted RD torrent links (https://real-debrid.com/d/HASH).
+        # These cannot be streamed directly — VLC cannot authenticate to them.
+        # We must call unrestrict_link() to get the actual CDN download URL.
+        unrestricted = client.unrestrict_link(raw_link)
+        stream_url = unrestricted.download
+        if not stream_url:
+            raise HTTPException(status_code=502, detail="RealDebrid did not return a download URL")
+
+        log.info(
+            "debrid_stream_url_resolved",
+            torrent_id=torrent_id,
+            file_id=file_id,
+            host=unrestricted.host,
+            streamable=unrestricted.streamable,
+        )
 
         return {
             "torrent_id": torrent_id,
             "file_id": file_id,
             "file_name": target_file.path,
             "stream_url": stream_url,
+            "mime_type": unrestricted.mimeType,
+            "filesize": unrestricted.filesize,
         }
     except RealDebridOAuthError as exc:
         raise HTTPException(status_code=401, detail=f"RealDebrid not authenticated: {exc}")

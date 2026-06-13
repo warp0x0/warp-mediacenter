@@ -7,7 +7,7 @@ export default function BackdropLayer() {
   const { backdrop } = useBackdrop()
 
   const backdropUrl = backdrop.url
-    ? `${IMAGE_BASE}/w1280${backdrop.url}`
+    ? (backdrop.url.startsWith('http') ? backdrop.url : `${IMAGE_BASE}/w1280${backdrop.url}`)
     : null
 
   return (

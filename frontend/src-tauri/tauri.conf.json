@@ -1,0 +1,39 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Warp MediaCenter",
+  "version": "0.0.1",
+  "identifier": "com.warp.mediacenter",
+  "build": {
+    "beforeDevCommand": "npm run tauri:prepare-sidecar && npm run dev",
+    "beforeBuildCommand": "npm run tauri:prepare-sidecar && npm run build",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "macOSPrivateApi": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Warp MediaCenter",
+        "width": 1280,
+        "height": 720,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "externalBin": ["bin/mpv"],
+    "resources": [
+      "bin/macos-arm64/lib/*",
+      "resources/mpv-config/scripts/uosc.lua",
+      "resources/mpv-config/scripts/uosc_shared/main.lua",
+      "resources/mpv-config/scripts/uosc_shared/elements/*.lua",
+      "resources/mpv-config/scripts/uosc_shared/lib/*.lua",
+      "resources/mpv-config/fonts/*"
+    ]
+  }
+}

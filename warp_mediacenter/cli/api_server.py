@@ -29,6 +29,7 @@ from warp_mediacenter.backend.information_handlers.torrent_search import Torrent
 from warp_mediacenter.backend.player.controller import PlayerController
 from warp_mediacenter.backend.player.debrid.client import RealDebridClient
 from warp_mediacenter.backend.player.service import PlaybackService
+from warp_mediacenter.backend.player.preload_session_manager import PreloadSessionManager
 from warp_mediacenter.backend.player.subtitles.service import SubtitleService
 from warp_mediacenter.backend.player.torrent_stream import TorrentStreamOrchestrator
 from warp_mediacenter.config.settings import get_settings
@@ -88,6 +89,9 @@ def _init_services() -> ServiceContainer:
     # Playback service (extracted from player controller for orchestrator)
     playback_service = player_controller._service
 
+    # Buffered preload session manager for thin-client/Tauri flow
+    preload_session_manager = PreloadSessionManager()
+
     # Torrent stream orchestrator
     torrent_orchestrator = TorrentStreamOrchestrator(
         search_service=torrent_search,
@@ -102,6 +106,7 @@ def _init_services() -> ServiceContainer:
         debrid_client=debrid_client,
         player_controller=player_controller,
         playback_service=playback_service,
+        preload_session_manager=preload_session_manager,
         trakt_manager=trakt_manager,
         information_providers=providers,
         torrent_search_service=torrent_search,
@@ -158,6 +163,11 @@ def serve(
     # Graceful shutdown handling
     def _shutdown(signum, frame):
         log.info("api_server_shutdown_signal", signal=signal.Signals(signum).name)
+        try:
+            if container.preload_session_manager is not None:
+                container.preload_session_manager.close()
+        except Exception as exc:
+            log.warning("preload_session_manager_close_failed", error=str(exc))
         sys.exit(0)
 
     signal.signal(signal.SIGINT, _shutdown)

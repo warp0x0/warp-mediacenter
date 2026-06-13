@@ -28,6 +28,7 @@ from warp_mediacenter.backend.player.service import PlaybackService
 from warp_mediacenter.backend.player.subtitles.models import SubtitleQuery, SubtitleResult
 from warp_mediacenter.backend.player.subtitles.service import SubtitleService
 from warp_mediacenter.backend.player.vlc_adapter import VLCAdapter
+from warp_mediacenter.backend.player.vlc_subprocess_adapter import SubprocessVLCAdapter
 
 log = get_logger(__name__)
 
@@ -68,7 +69,16 @@ class PlayerController:
         trakt_manager: Optional[TraktManager] = None,
     ) -> None:
         if mode == "desktop":
-            player: PlayerAdapter = VLCAdapter(vlc_root=vlc_root)
+            # Prefer the subprocess adapter — it uses the full system VLC binary
+            # which has better HTTPS/TLS support than the embedded libvlc used by
+            # python-vlc.  Fall back to the python-vlc binding adapter if the
+            # system VLC binary cannot be located.
+            try:
+                player: PlayerAdapter = SubprocessVLCAdapter()
+                log.info("player_using_subprocess_vlc")
+            except PlayerError as exc:
+                log.warning("subprocess_vlc_unavailable_trying_python_vlc", reason=str(exc))
+                player = VLCAdapter(vlc_root=vlc_root)
         elif mode == "thin_client":
             player = HTTPAdapter()
         else:
@@ -207,6 +217,45 @@ class PlayerController:
     # ------------------------------------------------------------------
     def on_state_change(self, callback: Callable[[PlaybackState], None]) -> None:
         self._service.on_state_change(callback)
+
+    # ------------------------------------------------------------------
+    # Stream preloading
+    # ------------------------------------------------------------------
+    def preload_stream(self, url: str) -> None:
+        """Start pre-downloading a remote stream URL without launching VLC.
+
+        Only effective in desktop mode (SubprocessVLCAdapter).  A no-op for
+        other adapter types.
+        """
+        player = self._service._player
+        if isinstance(player, SubprocessVLCAdapter):
+            player.preload(url)
+
+    def preload_status(self) -> dict:
+        """Return current preload progress (percent, bytes, etc.)."""
+        player = self._service._player
+        if isinstance(player, SubprocessVLCAdapter):
+            return player.preload_status()
+        return {
+            "url": "",
+            "active": False,
+            "bytes_downloaded": 0,
+            "total_size": 0,
+            "percent": 0.0,
+            "download_complete": False,
+        }
+
+    # ------------------------------------------------------------------
+    # Player mode
+    # ------------------------------------------------------------------
+    @property
+    def player_mode(self) -> str:
+        """Return ``'desktop'`` when using local VLC, ``'thin_client'`` otherwise."""
+        from warp_mediacenter.backend.player.vlc_adapter import VLCAdapter
+        player = self._service._player
+        if isinstance(player, (SubprocessVLCAdapter, VLCAdapter)):
+            return "desktop"
+        return "thin_client"
 
     # ------------------------------------------------------------------
     # Cleanup

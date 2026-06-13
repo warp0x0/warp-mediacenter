@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 from typing import Any, Dict, List, Optional
 
@@ -20,7 +21,7 @@ log = get_logger(__name__)
 
 router = APIRouter()
 
-_scan_status: Dict[str, Any] = {"running": False, "progress": 0, "message": "idle"}
+_scan_status: Dict[str, Any] = {"running": False, "progress": 0, "message": "idle", "logs": []}
 _scan_lock = threading.Lock()
 
 # ---------------------------------------------------------------------------
@@ -142,6 +143,31 @@ async def save_widget_config(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+@router.get("/search-history")
+async def get_search_history() -> Dict[str, Any]:
+    """Get the last 10 search queries."""
+    with db_connection() as conn:
+        value = get_setting(conn, "search_history")
+    history: List[str] = json.loads(value) if value else []
+    return {"history": history}
+
+
+@router.post("/search-history")
+async def add_search_query(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Add a query to search history (max 10 entries, most-recent first, deduped)."""
+    query = str(payload.get("query", "")).strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="query is required")
+    with db_connection() as conn:
+        existing = get_setting(conn, "search_history")
+        history: List[str] = json.loads(existing) if existing else []
+        history = [q for q in history if q != query]
+        history.insert(0, query)
+        history = history[:10]
+        set_setting(conn, "search_history", json.dumps(history))
+    return {"history": history}
+
+
 @router.put("/{key}")
 async def update_setting(key: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     """Update a setting by key.
@@ -256,24 +282,40 @@ async def trigger_library_scan(payload: Dict[str, Any]) -> Dict[str, Any]:
         _scan_status["running"] = True
         _scan_status["progress"] = 0
         _scan_status["message"] = "starting"
+        _scan_status["logs"] = []
+        _scan_status.pop("result", None)
+
+    def _append_log(msg: str) -> None:
+        with _scan_lock:
+            _scan_status["logs"].append(msg)
 
     def _run_scan():
         try:
             path_objs = [Path(p) for p in paths]
+            _append_log(f"Starting scan of {len(path_objs)} path(s): {', '.join(paths)}")
             result = scan_once(path_objs, incremental=incremental)
+
+            summary = (
+                f"Scan complete in {result.duration_sec:.1f}s — "
+                f"{result.total} files, {result.movies} movies, "
+                f"{result.shows} shows ({result.matched} matched, "
+                f"{result.errors} errors)"
+            )
+            _append_log(summary)
 
             with _scan_lock:
                 _scan_status["running"] = False
                 _scan_status["progress"] = 100
                 _scan_status["message"] = "complete"
                 _scan_status["result"] = {
-                    "total_files": result.total_files,
-                    "new_titles": result.new_titles,
-                    "updated_titles": result.updated_titles,
-                    "new_episodes": result.new_episodes,
+                    "total_files": result.total,
+                    "new_titles": result.movies + result.shows,
+                    "updated_titles": result.matched,
+                    "new_episodes": result.episodes,
                     "duration_sec": round(result.duration_sec, 2),
                 }
         except Exception as exc:
+            _append_log(f"Error: {exc}")
             with _scan_lock:
                 _scan_status["running"] = False
                 _scan_status["message"] = f"error: {exc}"

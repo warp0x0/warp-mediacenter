@@ -4,18 +4,74 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Play, Loader2, ChevronLeft, ChevronRight } from 'lucide-react'
 import { IMAGE_BASE } from '@/lib/constants'
 import { useMovieDetail, useShowDetail, useImdbRating } from '@/hooks/useDetail'
+import { useTmdbEnrichment } from '@/hooks/useTmdbEnrichment'
 import TrailerDialog from './TrailerDialog'
 import RatingBadges from './RatingBadges'
 import type { MediaItem } from '@/lib/types'
+
+// ── Ribbon item ───────────────────────────────────────────────────────────────
+
+interface WidgetRibbonItemProps {
+  item: MediaItem
+  isSelected: boolean
+  onSelect: () => void
+  onNavigate: () => void
+}
+
+function WidgetRibbonItem({ item, isSelected, onSelect, onNavigate }: WidgetRibbonItemProps) {
+  const { posterUrl } = useTmdbEnrichment(item, 'w300')
+  return (
+    <button
+      onClick={onSelect}
+      onDoubleClick={onNavigate}
+      className={`flex-shrink-0 relative rounded-[var(--card-radius)] transition-all duration-200 cursor-pointer focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none ${
+        isSelected
+          ? 'ring-2 ring-accent scale-105 shadow-[0_0_20px_rgba(13,178,226,0.3)] z-10'
+          : 'hover:scale-105 hover:shadow-[0_0_16px_rgba(0,0,0,0.4)]'
+      }`}
+      style={{ width: 'clamp(110px, 9vw, 170px)' }}
+    >
+      <div className="relative overflow-hidden rounded-[var(--card-radius)] w-full">
+        {posterUrl ? (
+          <img
+            src={posterUrl}
+            alt={item.title}
+            loading="lazy"
+            className="w-full object-cover"
+            style={{ aspectRatio: '2/3' }}
+          />
+        ) : (
+          <div
+            className="w-full bg-white/5 flex items-center justify-center text-fg-muted"
+            style={{ aspectRatio: '2/3', fontSize: 'clamp(9px,0.56vw,11px)' }}
+          >
+            No Poster
+          </div>
+        )}
+
+        {typeof item.extra?.progress === 'number' && (item.extra.progress as number) > 0 && (
+          <div className="absolute left-0 right-0 h-[6px] bg-white/15" style={{ bottom: '1.5px' }}>
+            <div
+              className="h-full bg-amber-400 rounded-r-full"
+              style={{ width: `${Math.min(100, item.extra.progress as number)}%` }}
+            />
+          </div>
+        )}
+      </div>
+    </button>
+  )
+}
 
 interface WidgetSectionProps {
   title: string
   items: MediaItem[]
   isLoading?: boolean
   mediaType?: 'movie' | 'show'
+  provider?: string
+  category?: string
 }
 
-export default function WidgetSection({ title, items, isLoading, mediaType = 'movie' }: WidgetSectionProps) {
+export default function WidgetSection({ title, items, isLoading, mediaType = 'movie', provider, category }: WidgetSectionProps) {
   const navigate = useNavigate()
   const [selectedIdx, setSelectedIdx] = useState(0)
   const [playing, setPlaying] = useState(false)
@@ -24,12 +80,6 @@ export default function WidgetSection({ title, items, isLoading, mediaType = 'mo
   const synopsisRef = useRef<HTMLParagraphElement>(null)
   const [synopsisClamped, setSynopsisClamped] = useState(true)
 
-  const handleWheel = useCallback((e: React.WheelEvent) => {
-    const el = ribbonRef.current
-    if (!el) return
-    e.preventDefault()
-    el.scrollLeft += e.deltaY
-  }, [])
 
   const selected = items[selectedIdx] ?? null
   const tmdbId = selected?.tmdb_id ?? null
@@ -283,13 +333,21 @@ export default function WidgetSection({ title, items, isLoading, mediaType = 'mo
             >
               {title}
             </p>
-            <button
-              onClick={() => navigate(`/search?q=${encodeURIComponent(title)}`)}
-              className="uppercase tracking-[0.15em] text-white font-bold cursor-pointer hover:text-accent transition-colors"
-              style={{ fontSize: 'clamp(12px, 0.8vw, 14px)' }}
-            >
-              See More &rarr;
-            </button>
+            {!(category === 'continue_watching' && items.length <= 10) && (
+              <button
+                onClick={() =>
+                  provider && category
+                    ? navigate(
+                        `/catalog/${provider}/${category}?type=${mediaType}&title=${encodeURIComponent(title)}`,
+                      )
+                    : navigate(`/search?q=${encodeURIComponent(title)}`)
+                }
+                className="uppercase tracking-[0.15em] text-white font-bold cursor-pointer hover:text-accent transition-colors"
+                style={{ fontSize: 'clamp(12px, 0.8vw, 14px)' }}
+              >
+                See More &rarr;
+              </button>
+            )}
           </div>
 
         <div className="relative group">
@@ -310,59 +368,18 @@ export default function WidgetSection({ title, items, isLoading, mediaType = 'mo
 
           <div
             ref={ribbonRef}
-            onWheel={handleWheel}
             className="flex gap-[var(--card-gap)] overflow-hidden scrollbar-hidden"
             style={{ paddingTop: '8px', paddingBottom: '8px', paddingLeft: '4px' }}
           >
-          {items.map((item, idx) => {
-            const isSelected = idx === selectedIdx
-            const posterUrl = item.poster_path
-              ? `${IMAGE_BASE}/w300${item.poster_path}`
-              : null
-
-            return (
-              <button
-                key={item.id}
-                onClick={() => handleSelect(idx)}
-                onDoubleClick={() => handleNavigate(item)}
-                className={`flex-shrink-0 relative rounded-[var(--card-radius)] transition-all duration-200 cursor-pointer focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none ${
-                  isSelected
-                    ? 'ring-2 ring-accent scale-105 shadow-[0_0_20px_rgba(13,178,226,0.3)] z-10'
-                    : 'hover:scale-105 hover:shadow-[0_0_16px_rgba(0,0,0,0.4)]'
-                }`}
-                style={{ width: 'clamp(110px, 9vw, 170px)' }}
-              >
-                <div className="relative overflow-hidden rounded-[var(--card-radius)] w-full">
-                  {posterUrl ? (
-                    <img
-                      src={posterUrl}
-                      alt={item.title}
-                      loading="lazy"
-                      className="w-full object-cover"
-                      style={{ aspectRatio: '2/3' }}
-                    />
-                  ) : (
-                    <div
-                      className="w-full bg-white/5 flex items-center justify-center text-fg-muted"
-                      style={{ aspectRatio: '2/3', fontSize: 'clamp(9px,0.56vw,11px)' }}
-                    >
-                      No Poster
-                    </div>
-                  )}
-
-                  {/* Amber progress bar for continue-watching items */}
-                  {typeof item.extra?.progress === 'number' && (item.extra.progress as number) > 0 && (
-                    <div className="absolute left-0 right-0 h-[6px] bg-white/15" style={{ bottom: '1.5px' }}>
-                      <div
-                        className="h-full bg-amber-400 rounded-r-full"
-                        style={{ width: `${Math.min(100, item.extra.progress as number)}%` }}
-                      />
-                    </div>
-                  )}
-                </div>
-              </button>
-            )
-          })}
+          {items.map((item, idx) => (
+            <WidgetRibbonItem
+              key={item.id}
+              item={item}
+              isSelected={idx === selectedIdx}
+              onSelect={() => handleSelect(idx)}
+              onNavigate={() => handleNavigate(item)}
+            />
+          ))}
           </div>
         </div>
       </div>

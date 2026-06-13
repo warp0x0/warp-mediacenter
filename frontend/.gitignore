@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Generated Tauri sidecar artifacts
+src-tauri/bin/macos-arm64/

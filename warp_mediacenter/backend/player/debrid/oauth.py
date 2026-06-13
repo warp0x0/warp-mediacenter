@@ -50,6 +50,12 @@ class RealDebridOAuth:
     # Prevents hammering the RD API after a bad response.
     _REFRESH_BACKOFF_S: float = 60.0
 
+    # Proactive-refresh window: if the token expires within this many seconds,
+    # treat it as needing a refresh even before it has technically expired.
+    # Guards against clock skew, in-flight request latency, and back-to-back
+    # API calls that could race a token right at its expiry boundary.
+    _EXPIRY_BUFFER_S: float = 300.0  # 5 minutes
+
     def __init__(self, settings: RealDebridSettings) -> None:
         self._settings = settings
         self._session = requests.Session()
@@ -57,6 +63,25 @@ class RealDebridOAuth:
         # Timestamp of the last failed refresh attempt (in-process only).
         # Reset to None on success so the next expiry triggers a fresh attempt.
         self._refresh_failed_at: Optional[float] = None
+
+    # ------------------------------------------------------------------
+    # Token-state helpers
+    # ------------------------------------------------------------------
+    def _token_needs_refresh(self) -> bool:
+        """Return True when a token refresh is warranted.
+
+        A refresh is needed when:
+        - There is no access token at all, OR
+        - The token has already expired, OR
+        - The token will expire within ``_EXPIRY_BUFFER_S`` seconds.
+
+        Using a buffer (default 5 min) prevents races where a token expires
+        between the validity check and the API call that uses it, and handles
+        typical clock-skew between client and RealDebrid servers.
+        """
+        if not self._settings.access_token:
+            return True
+        return time.time() + self._EXPIRY_BUFFER_S >= self._settings.token_expires_at
 
     # ------------------------------------------------------------------
     # Step 1: Request device code
@@ -252,7 +277,23 @@ class RealDebridOAuth:
     # Token refresh
     # ------------------------------------------------------------------
     def refresh_token(self) -> TokenResponse:
-        """Refresh an expired access token using the stored refresh_token."""
+        """Refresh an expired access token using the stored refresh_token.
+
+        No-op if the current token still has more than ``_EXPIRY_BUFFER_S``
+        seconds remaining — returns a synthetic TokenResponse backed by the
+        current stored values so callers never need to special-case this.
+        """
+        # Guard: skip the network round-trip when the token is still healthy.
+        # This makes every callsite safe — no need for each caller to check
+        # token_expires_at independently before calling refresh_token().
+        if not self._token_needs_refresh():
+            remaining = int(self._settings.token_expires_at - time.time())
+            log.debug("rd_refresh_skipped_token_still_valid", remaining_s=remaining)
+            return TokenResponse(
+                access_token=self._settings.access_token,
+                refresh_token=self._settings.refresh_token or "",
+                expires_in=remaining,
+            )
 
         if not self._settings.refresh_token:
             raise RealDebridOAuthError("no_refresh_token", "No refresh token available")
@@ -289,27 +330,30 @@ class RealDebridOAuth:
     def ensure_valid_token(self) -> str:
         """Return a valid access token, refreshing silently if necessary.
 
-        Refresh is guarded by a short in-process backoff so a dead token does
-        not cause a storm of requests to RD on every API call.
-        """
-        import time as _time
+        Uses ``_token_needs_refresh()`` (buffer-aware) rather than a bare
+        expiry comparison so the token is proactively refreshed before it
+        reaches the hard expiry boundary.
 
-        if self._settings.has_valid_token:
-            remaining = self._settings.token_expires_at - _time.time()
-            log.debug("rd_token_valid", remaining_s=int(remaining))
+        Refresh is also guarded by a short in-process backoff so a dead token
+        does not cause a storm of requests to RD on every API call.
+        """
+        if not self._token_needs_refresh():
+            remaining = int(self._settings.token_expires_at - time.time())
+            log.debug("rd_token_valid", remaining_s=remaining)
             return self._settings.access_token
 
         log.info(
             "rd_token_expired_or_missing",
             has_access=bool(self._settings.access_token),
             has_refresh=bool(self._settings.refresh_token),
-            expired_by_s=int(_time.time() - self._settings.token_expires_at) if self._settings.access_token else None,
+            expires_at=self._settings.token_expires_at,
+            expired_by_s=int(time.time() - self._settings.token_expires_at) if self._settings.access_token else None,
         )
 
         if self._settings.refresh_token:
             # Backoff: if a refresh attempt just failed, don't hammer RD again
             # immediately — wait until the backoff window expires.
-            now = _time.time()
+            now = time.time()
             if self._refresh_failed_at is not None:
                 elapsed = now - self._refresh_failed_at
                 if elapsed < self._REFRESH_BACKOFF_S:
@@ -328,7 +372,7 @@ class RealDebridOAuth:
                 log.info("rd_token_refresh_success")
                 return token.access_token
             except Exception as exc:
-                self._refresh_failed_at = _time.time()  # arm backoff
+                self._refresh_failed_at = time.time()  # arm backoff
                 log.error("rd_token_refresh_failed", error=str(exc)[:200])
                 self._clear_dead_tokens(exc)
                 raise

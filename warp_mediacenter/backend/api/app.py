@@ -8,7 +8,7 @@ from typing import Any, AsyncIterator, Dict, Optional
 from fastapi import FastAPI
 
 from warp_mediacenter.backend.common.logging import get_logger
-from warp_mediacenter.backend.api.routes import torrent, stream, images, scrobble, library, player, subtitles, trakt, debrid, settings
+from warp_mediacenter.backend.api.routes import torrent, stream, images, scrobble, library, player, subtitles, trakt, debrid, settings, collections, files
 from warp_mediacenter.backend.api.routes.discovery import search_router, catalog_router
 from warp_mediacenter.backend.api.middleware import (
     setup_cors,
@@ -71,6 +71,8 @@ def create_app(
     app.include_router(trakt.router, prefix="/api/v1/trakt", tags=["trakt"])
     app.include_router(debrid.router, prefix="/api/v1/debrid", tags=["debrid"])
     app.include_router(settings.router, prefix="/api/v1/settings", tags=["settings"])
+    app.include_router(collections.router, prefix="/api/v1/collections", tags=["collections"])
+    app.include_router(files.router, prefix="/api/v1/files", tags=["files"])
 
     # Health check
     @app.get("/api/v1/health")

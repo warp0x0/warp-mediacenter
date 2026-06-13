@@ -5,6 +5,7 @@ from __future__ import annotations
 import random
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import date
 from threading import Lock
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -55,6 +56,38 @@ def _tc_set(key: str, value: Any) -> None:
     """Store value in cache with current timestamp."""
     with _tcache_lock:
         _tcache[key] = (time.monotonic(), value)
+
+
+# ---------------------------------------------------------------------------
+# Daily shuffle cache — one shuffled list per (catalog-key, calendar-day).
+# Keyed by "provider:category:media_type".  Automatically stale next day.
+# ---------------------------------------------------------------------------
+_CATALOG_FULL_LIMIT = 100        # Trakt: items fetched to fill the shuffle pool
+_TMDB_CATALOG_FULL_PAGES = 5    # TMDb: pages pre-fetched (5 × ~20 = ~100 items)
+
+_shuffle_cache: Dict[str, Tuple[date, List[Dict[str, Any]]]] = {}
+_shuffle_lock = Lock()
+
+
+def _get_daily_shuffled(
+    cache_key: str,
+    items: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Return a deterministically shuffled copy of *items* for today's date.
+    The same (cache_key, date) pair always produces the same order.
+    Results are stored in-process so repeated requests within a day hit memory,
+    not the upstream API.
+    """
+    today = date.today()
+    with _shuffle_lock:
+        entry = _shuffle_cache.get(cache_key)
+        if entry is not None and entry[0] == today:
+            return entry[1]
+        shuffled = list(items)
+        random.Random(f"{today.isoformat()}-{cache_key}").shuffle(shuffled)
+        _shuffle_cache[cache_key] = (today, shuffled)
+        return shuffled
 
 
 # Max watched-show candidates to fetch progress for in parallel.
@@ -271,24 +304,68 @@ async def search_unified(
 async def tmdb_catalog(
     category: str,
     media_type: str = Query(default="movie", regex="^(movie|show)$"),
-    page: int = Query(default=1, ge=1),
+    limit: int = Query(default=20, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     language: Optional[str] = Query(default=None),
 ) -> Dict[str, Any]:
-    """Get a TMDb catalog (trending, popular, top_rated, upcoming, now_playing)."""
+    """Get a TMDb catalog with daily-seeded shuffle and offset-based pagination.
+
+    On first request for the day, fetches all pages (up to _TMDB_CATALOG_FULL_PAGES)
+    in parallel, deduplicates, shuffles the full pool once, and caches it.
+    Subsequent requests for any offset serve from that in-memory list.
+    """
     providers = _get_providers()
     mt = MediaType.MOVIE if media_type == "movie" else MediaType.SHOW
+    cache_key = f"tmdb:{category}:{media_type}"
+    today = date.today()
 
-    try:
-        items = providers.tmdb.catalog_list(mt, category, language=language, page=page)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"TMDb catalog error: {exc}")
+    with _shuffle_lock:
+        entry = _shuffle_cache.get(cache_key)
+        shuffled = entry[1] if (entry is not None and entry[0] == today) else None
+
+    if shuffled is None:
+        def _fetch_page(page_num: int) -> List[Dict[str, Any]]:
+            page_items = providers.tmdb.catalog_list(mt, category, language=language, page=page_num)
+            return [_catalog_item_to_dict(i) for i in page_items]
+
+        page_results: Dict[int, List[Dict[str, Any]]] = {}
+        with ThreadPoolExecutor(max_workers=_TMDB_CATALOG_FULL_PAGES) as ex:
+            fut_to_page = {
+                ex.submit(_fetch_page, p): p
+                for p in range(1, _TMDB_CATALOG_FULL_PAGES + 1)
+            }
+            for fut in as_completed(fut_to_page, timeout=30):
+                p = fut_to_page[fut]
+                try:
+                    page_results[p] = fut.result()
+                except Exception as exc:
+                    log.warning("tmdb_catalog_page_failed: page=%d error=%s", p, exc)
+
+        # Merge pages in insertion order (1→N) so dedup is deterministic
+        all_dicts: List[Dict[str, Any]] = []
+        seen_ids: set = set()
+        for p in range(1, _TMDB_CATALOG_FULL_PAGES + 1):
+            for d in page_results.get(p, []):
+                item_id = str(d.get("id") or d.get("tmdb_id") or "")
+                if item_id and item_id not in seen_ids:
+                    seen_ids.add(item_id)
+                    all_dicts.append(d)
+
+        if not all_dicts:
+            raise HTTPException(status_code=500, detail="TMDb catalog error: no items fetched")
+
+        shuffled = _get_daily_shuffled(cache_key, all_dicts)
+
+    page_items = shuffled[offset: offset + limit]
 
     return {
         "category": category,
         "media_type": media_type,
-        "page": page,
-        "items": [_catalog_item_to_dict(i) for i in items],
-        "count": len(items),
+        "items": page_items,
+        "count": len(page_items),
+        "total": len(shuffled),
+        "offset": offset,
+        "limit": limit,
     }
 
 
@@ -852,23 +929,41 @@ async def trakt_catalog(
     category: str,
     media_type: str = Query(default="movie", regex="^(movie|show)$"),
     period: str = Query(default="daily", regex="^(daily|weekly|monthly|yearly|all)$"),
-    limit: int = Query(default=40, ge=1, le=100),
+    limit: int = Query(default=20, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
 ) -> Dict[str, Any]:
-    """Get a Trakt catalog (trending, popular, anticipated, watched, played)."""
+    """Get a Trakt catalog with daily-seeded shuffle and offset-based pagination."""
     providers = _get_providers()
     mt = MediaType.MOVIE if media_type == "movie" else MediaType.SHOW
+    cache_key = f"trakt:{category}:{media_type}"
+    today = date.today()
 
-    try:
-        items = providers.trakt_catalog(mt, category, period=period, limit=limit)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Trakt catalog error: {exc}")
+    # Serve from shuffle cache when today's list is already built.
+    with _shuffle_lock:
+        entry = _shuffle_cache.get(cache_key)
+        cached_today = entry is not None and entry[0] == today
+
+    if cached_today:
+        shuffled = _shuffle_cache[cache_key][1]
+    else:
+        # Fetch the full pool, convert to dicts, then shuffle + cache.
+        try:
+            raw = providers.trakt_catalog(mt, category, period=period, limit=_CATALOG_FULL_LIMIT)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Trakt catalog error: {exc}")
+        shuffled = _get_daily_shuffled(cache_key, [_catalog_item_to_dict(i) for i in raw])
+
+    page_items = shuffled[offset: offset + limit]
 
     return {
         "category": category,
         "media_type": media_type,
         "period": period,
-        "items": [_catalog_item_to_dict(i) for i in items],
-        "count": len(items),
+        "items": page_items,
+        "count": len(page_items),
+        "total": len(shuffled),
+        "offset": offset,
+        "limit": limit,
     }
 
 

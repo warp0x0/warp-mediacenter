@@ -50,13 +50,15 @@ export default function ShowsPage() {
         scrollBehavior: 'smooth',
       }}
     >
-      {catalogResults.map(({ title, data }) => (
+      {catalogResults.map(({ title, data }, idx) => (
         <WidgetSection
           key={title}
           title={title}
           items={data?.items ?? []}
           isLoading={isLoading}
           mediaType="show"
+          provider={w[idx]?.provider}
+          category={w[idx]?.category}
         />
       ))}
     </div>

@@ -14,7 +14,7 @@ from warp_mediacenter.config.settings import get_database_path
 
 log = get_logger(__name__)
 
-_SCHEMA_VERSION = 4
+_SCHEMA_VERSION = 5
 
 
 def _resolve_path(path: Optional[Path]) -> Path:
@@ -74,6 +74,8 @@ def migrate(connection: sqlite3.Connection) -> None:
         _apply_v3(connection)
     if current < 4:
         _apply_v4(connection)
+    if current < 5:
+        _apply_v5(connection)
 
     connection.execute(
         "INSERT OR REPLACE INTO schema_version (version) VALUES (?)",
@@ -236,6 +238,36 @@ def _apply_v4(connection: sqlite3.Connection) -> None:
         );
 
         CREATE INDEX IF NOT EXISTS idx_debrid_magnet_created ON debrid_magnet_map(created_at);
+        """
+    )
+
+
+def _apply_v5(connection: sqlite3.Connection) -> None:
+    """User collections (liked and wishlist) table."""
+
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS user_collections (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            collection_type  TEXT NOT NULL,
+            tmdb_id          TEXT NOT NULL,
+            type             TEXT NOT NULL,
+            title            TEXT NOT NULL,
+            year             INTEGER,
+            overview         TEXT,
+            poster_path      TEXT,
+            backdrop_path    TEXT,
+            rating           REAL,
+            vote_count       INTEGER,
+            genres_json      TEXT,
+            added_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+            UNIQUE(collection_type, tmdb_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_user_collections_type
+            ON user_collections(collection_type, type);
+        CREATE INDEX IF NOT EXISTS idx_user_collections_added_at
+            ON user_collections(collection_type, added_at DESC);
         """
     )
 
@@ -1148,6 +1180,118 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+# ------------------------------------------------------------------
+# User collection operations
+# ------------------------------------------------------------------
+
+def upsert_collection_item(
+    connection: sqlite3.Connection,
+    item: Dict[str, Any],
+) -> int:
+    """Insert or update a user collection item. Returns the row id."""
+    cursor = connection.execute(
+        """
+        INSERT INTO user_collections
+            (collection_type, tmdb_id, type, title, year, overview,
+             poster_path, backdrop_path, rating, vote_count, genres_json, added_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(collection_type, tmdb_id) DO UPDATE SET
+            type=excluded.type,
+            title=excluded.title,
+            year=excluded.year,
+            overview=excluded.overview,
+            poster_path=excluded.poster_path,
+            backdrop_path=excluded.backdrop_path,
+            rating=excluded.rating,
+            vote_count=excluded.vote_count,
+            genres_json=excluded.genres_json
+        """,
+        (
+            item["collection_type"],
+            item["tmdb_id"],
+            item["type"],
+            item["title"],
+            item.get("year"),
+            item.get("overview"),
+            item.get("poster_path"),
+            item.get("backdrop_path"),
+            item.get("rating"),
+            item.get("vote_count"),
+            item.get("genres_json", "[]"),
+            _utcnow(),
+        ),
+    )
+    row = connection.execute(
+        "SELECT id FROM user_collections WHERE collection_type = ? AND tmdb_id = ?",
+        (item["collection_type"], item["tmdb_id"]),
+    ).fetchone()
+    return int(row["id"]) if row else cursor.lastrowid
+
+
+def remove_collection_item(
+    connection: sqlite3.Connection,
+    *,
+    collection_type: str,
+    tmdb_id: str,
+) -> bool:
+    """Remove an item from a collection. Returns True if a row was deleted."""
+    cursor = connection.execute(
+        "DELETE FROM user_collections WHERE collection_type = ? AND tmdb_id = ?",
+        (collection_type, tmdb_id),
+    )
+    return cursor.rowcount > 0
+
+
+def is_in_collection(
+    connection: sqlite3.Connection,
+    *,
+    collection_type: str,
+    tmdb_id: str,
+) -> bool:
+    """Return True if the item exists in the given collection."""
+    row = connection.execute(
+        "SELECT 1 FROM user_collections WHERE collection_type = ? AND tmdb_id = ?",
+        (collection_type, tmdb_id),
+    ).fetchone()
+    return row is not None
+
+
+def list_collection_items(
+    connection: sqlite3.Connection,
+    *,
+    collection_type: str,
+    media_type: Optional[str] = None,
+    sort: str = "added_at",
+    order: str = "desc",
+    genre: Optional[str] = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> Sequence[sqlite3.Row]:
+    """Return paginated items from a collection with optional filters."""
+    _safe_sort = sort if sort in ("added_at", "title", "rating", "vote_count") else "added_at"
+    _safe_order = "DESC" if order.lower() == "desc" else "ASC"
+
+    where_clauses = ["collection_type = ?"]
+    params: List[Any] = [collection_type]
+
+    if media_type:
+        where_clauses.append("type = ?")
+        params.append(media_type)
+
+    if genre:
+        where_clauses.append("genres_json LIKE ?")
+        params.append(f"%{genre}%")
+
+    where_sql = " AND ".join(where_clauses)
+    query = (
+        f"SELECT * FROM user_collections WHERE {where_sql} "
+        f"ORDER BY {_safe_sort} {_safe_order} "
+        "LIMIT ? OFFSET ?"
+    )
+    params.extend([limit, offset])
+    return connection.execute(query, params).fetchall()
+
+
 __all__ = [
     "connect",
     "connection",
@@ -1192,4 +1336,8 @@ __all__ = [
     "clear_expired_torrent_cache",
     "upsert_debrid_magnet_map",
     "get_debrid_torrent_id",
+    "upsert_collection_item",
+    "remove_collection_item",
+    "is_in_collection",
+    "list_collection_items",
 ]

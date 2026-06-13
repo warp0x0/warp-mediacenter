@@ -3,16 +3,24 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 import json
 from typing import Any, AsyncGenerator, Dict, Optional
 
-from fastapi import APIRouter, HTTPException
+import aiohttp
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from warp_mediacenter.backend.common.logging import get_logger
 from warp_mediacenter.backend.api.middleware import get_container
+from warp_mediacenter.backend.information_handlers.models import MediaType
+from warp_mediacenter.backend.information_handlers.trakt_manager import TraktScrobbleConflict
 from warp_mediacenter.backend.player.controller import PlayerController, PlayRequest
 from warp_mediacenter.backend.player.adapter import PlaybackState
+from warp_mediacenter.backend.player.preload_session_manager import (
+    PreloadSessionCapacityError,
+    PreloadSessionManager,
+)
 
 log = get_logger(__name__)
 
@@ -59,6 +67,306 @@ def _state_to_dict(state: Optional[PlaybackState]) -> Dict[str, Any]:
     }
 
 
+def _get_preload_manager() -> PreloadSessionManager:
+    container = get_container()
+    manager = container.preload_session_manager
+    if manager is None:
+        raise HTTPException(status_code=503, detail="Preload session manager not initialized")
+    return manager
+
+
+def _get_trakt_manager() -> Any:
+    container = get_container()
+    manager = container.trakt_manager
+    if manager is None:
+        raise HTTPException(status_code=503, detail="Trakt manager not initialized")
+    return manager
+
+
+def _normalize_scrobble_media_type(value: Any) -> MediaType:
+    raw = str(value or "").strip().lower()
+    if raw == "tv":
+        raw = "episode"
+    try:
+        media_type = MediaType(raw)
+    except Exception:
+        raise HTTPException(status_code=400, detail="media_type must be 'movie' or 'episode'")
+
+    if media_type not in {MediaType.MOVIE, MediaType.EPISODE}:
+        raise HTTPException(status_code=400, detail="media_type must be 'movie' or 'episode'")
+    return media_type
+
+
+def _normalize_scrobble_progress(value: Any) -> float:
+    try:
+        progress = float(value)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="progress must be a number between 0 and 100")
+    if progress < 0.0 or progress > 100.0:
+        raise HTTPException(status_code=400, detail="progress must be a number between 0 and 100")
+    return progress
+
+
+def _run_scrobble(action: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    media_payload = payload.get("media")
+    if not isinstance(media_payload, dict):
+        raise HTTPException(status_code=400, detail="media payload is required")
+
+    show_payload = payload.get("show")
+    if show_payload is not None and not isinstance(show_payload, dict):
+        raise HTTPException(status_code=400, detail="show must be an object when provided")
+
+    media_type = _normalize_scrobble_media_type(payload.get("media_type"))
+    progress = _normalize_scrobble_progress(payload.get("progress"))
+    session_id = str(payload.get("session_id") or "").strip() or None
+
+    manager = _get_trakt_manager()
+    try:
+        result = manager.scrobble(
+            media_type=media_type,
+            media=media_payload,
+            progress=progress,
+            action=action,
+            show=show_payload,
+        )
+    except TraktScrobbleConflict as exc:
+        return {
+            "ok": False,
+            "conflict": True,
+            "session_id": session_id,
+            "action": action,
+            "media_type": media_type.value,
+            "progress": progress,
+            "watched_at": exc.watched_at.isoformat() if exc.watched_at else None,
+            "expires_at": exc.expires_at.isoformat() if exc.expires_at else None,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Scrobble {action} failed: {exc}")
+
+    return {
+        "ok": True,
+        "conflict": False,
+        "session_id": session_id,
+        "action": action,
+        "media_type": media_type.value,
+        "progress": progress,
+        "response": result.model_dump(mode="json") if hasattr(result, "model_dump") else {},
+    }
+
+
+def _session_response(request: Request, session_id: str, playback_url: str) -> Dict[str, Any]:
+    return {
+        "session_id": session_id,
+        "playback_url": playback_url,
+        "status_url": str(
+            request.url_for(
+                "player_preload_session_status",
+                session_id=session_id,
+            )
+        ),
+        "cleanup_url": str(
+            request.url_for(
+                "player_preload_session_delete",
+                session_id=session_id,
+            )
+        ),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@router.post("/preload/session")
+async def create_preload_session(payload: Dict[str, Any], request: Request) -> Dict[str, Any]:
+    """Create a buffered preload session for a remote stream URL."""
+    stream_url = str(payload.get("stream_url", "")).strip()
+    if not stream_url:
+        raise HTTPException(status_code=400, detail="stream_url required")
+
+    start_percent_raw = payload.get("start_percent")
+    start_percent = float(start_percent_raw) if start_percent_raw is not None else 0.0
+
+    manager = _get_preload_manager()
+    try:
+        session = manager.create_session(
+            stream_url,
+            title=payload.get("title"),
+            media_kind=payload.get("media_kind"),
+            start_percent=start_percent,
+        )
+    except PreloadSessionCapacityError as exc:
+        raise HTTPException(status_code=429, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to create preload session: {exc}")
+
+    proxy_url = str(
+        request.url_for(
+            "player_preload_session_stream",
+            session_id=session.session_id,
+        )
+    )
+    response = _session_response(request, session.session_id, proxy_url)
+    response["created_at"] = session.created_at.isoformat()
+    # Expose the StreamProxy's loopback URL so native players (mpv via Tauri)
+    # can connect directly.  The local URL contains the real filename (with
+    # extension) which mpv uses as a demuxer hint, and it skips the extra
+    # FastAPI proxy hop that can interfere with byte-range seeks on MP4 files.
+    response["local_url"] = session.proxy.local_url
+    return response
+
+
+@router.get("/preload/session/{session_id}/status", name="player_preload_session_status")
+async def preload_session_status(session_id: str, request: Request) -> Dict[str, Any]:
+    """Return preload progress and state for a session."""
+    manager = _get_preload_manager()
+    try:
+        payload = manager.get_status(session_id)
+        payload["playback_url"] = str(
+            request.url_for(
+                "player_preload_session_stream",
+                session_id=session_id,
+            )
+        )
+        return payload
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Unknown preload session '{session_id}'")
+
+
+@router.delete("/preload/session/{session_id}", name="player_preload_session_delete")
+async def delete_preload_session(session_id: str) -> Dict[str, Any]:
+    """Stop and remove a preload session."""
+    manager = _get_preload_manager()
+    removed = manager.stop_session(session_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail=f"Unknown preload session '{session_id}'")
+    return {"session_id": session_id, "removed": True}
+
+
+@router.get("/preload/session/{session_id}/stream", name="player_preload_session_stream")
+async def preload_session_stream(session_id: str, request: Request) -> StreamingResponse:
+    """Proxy bytes from a preload session's local stream URL."""
+    manager = _get_preload_manager()
+    try:
+        session = manager.acquire_stream(session_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Unknown preload session '{session_id}'")
+
+    range_header = request.headers.get("range")
+    forward_headers: Dict[str, str] = {}
+    if range_header:
+        forward_headers["Range"] = range_header
+
+    client = aiohttp.ClientSession()
+    try:
+        upstream = await client.get(
+            session.proxy.local_url,
+            headers=forward_headers,
+            timeout=aiohttp.ClientTimeout(total=3600),
+        )
+    except Exception:
+        manager.release_stream(session_id)
+        await client.close()
+        raise
+
+    if upstream.status >= 400:
+        manager.release_stream(session_id)
+        await upstream.release()
+        await client.close()
+        raise HTTPException(status_code=upstream.status, detail="Upstream preload stream unavailable")
+
+    content_length = upstream.headers.get("Content-Length")
+    content_range = upstream.headers.get("Content-Range")
+    content_type = upstream.headers.get("Content-Type", "application/octet-stream")
+
+    # Forward the original filename as a Content-Disposition hint so that mpv
+    # (and other players) can use the file extension for demuxer selection even
+    # when the endpoint URL has no extension.
+    filename = getattr(session.proxy, "_filename", None) or "stream"
+    response_headers: Dict[str, str] = {
+        "Accept-Ranges": "bytes",
+        "Content-Type": content_type,
+        "Content-Disposition": f'inline; filename="{filename}"',
+    }
+    if content_range:
+        response_headers["Content-Range"] = content_range
+        response_headers["Content-Length"] = upstream.headers.get("Content-Length", "0")
+    elif content_length:
+        response_headers["Content-Length"] = content_length
+
+    async def chunk_iterator() -> AsyncGenerator[bytes, None]:
+        try:
+            async for chunk in upstream.content.iter_chunked(1024 * 1024):
+                yield chunk
+        finally:
+            # Each cleanup step is wrapped independently: if one raises (e.g.
+            # the response was already released because the client disconnected
+            # mid-stream), the others still execute and no session is leaked.
+            try:
+                await upstream.release()
+            except Exception:
+                pass
+            try:
+                await client.close()
+            except Exception:
+                pass
+            manager.release_stream(session_id)
+
+    return StreamingResponse(
+        chunk_iterator(),
+        status_code=upstream.status,
+        headers=response_headers,
+    )
+
+
+@router.post("/scrobble/start")
+async def scrobble_start(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Send Trakt scrobble start for a playback session."""
+    return _run_scrobble("start", payload)
+
+
+@router.post("/scrobble/stop")
+async def scrobble_stop(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Send Trakt scrobble stop for a playback session."""
+    return _run_scrobble("stop", payload)
+
+
+@router.post("/preload")
+async def preload_stream(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Compatibility preload endpoint for legacy clients.
+
+    NOTE:
+    - This endpoint is preserved for backwards compatibility during the
+      Phase 0-4 transition.
+    - New thin-client/Tauri flow should migrate to
+      ``POST /api/v1/player/preload/session`` once introduced.
+
+    Begin downloading a remote stream URL into the local proxy buffer.
+
+    The frontend calls this immediately after obtaining the CDN URL and then
+    polls ``GET /preload/status`` until enough has buffered, at which point it
+    calls ``POST /play``.  ``POST /play`` detects the running preload and
+    reuses it so VLC opens with a large lead already built.
+    """
+    player = _get_player()
+    url = payload.get("url", "").strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="url required")
+    player.preload_stream(url)
+    return {"status": "preloading", "url": url}
+
+
+@router.get("/preload/status")
+async def preload_status() -> Dict[str, Any]:
+    """Compatibility preload status endpoint for legacy clients.
+
+    NOTE:
+    - This endpoint is preserved for backwards compatibility during the
+      Phase 0-4 transition.
+    - New thin-client/Tauri flow should migrate to
+      ``GET /api/v1/player/preload/session/{session_id}/status`` once introduced.
+    """
+    player = _get_player()
+    return player.preload_status()
+
+
 @router.post("/play")
 async def play_media(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Start playback of a media source."""
@@ -84,7 +392,11 @@ async def play_media(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     try:
         player.play(request)
-        return {"status": "playing", "title": request.title}
+        return {
+            "status": "playing",
+            "title": request.title,
+            "player_mode": player.player_mode,
+        }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Playback failed: {exc}")
 

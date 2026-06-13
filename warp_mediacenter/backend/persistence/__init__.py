@@ -45,6 +45,10 @@ from .sqlite import (
     upsert_source,
     upsert_title,
     update_title_artwork_paths,
+    upsert_collection_item,
+    remove_collection_item,
+    is_in_collection,
+    list_collection_items,
 )
 
 __all__ = [
@@ -92,4 +96,8 @@ __all__ = [
     "upsert_source",
     "upsert_title",
     "update_title_artwork_paths",
+    "upsert_collection_item",
+    "remove_collection_item",
+    "is_in_collection",
+    "list_collection_items",
 ]

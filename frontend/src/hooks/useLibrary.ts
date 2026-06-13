@@ -47,3 +47,22 @@ export async function createLibrarySection(data: {
 }): Promise<LibrarySection> {
   return apiPost<LibrarySection>('/api/v1/library/sections', data)
 }
+
+export function useLibraryList(
+  type: 'movies' | 'shows',
+  params?: { sort?: string; order?: string; limit?: number; localOnly?: boolean },
+) {
+  const query: Record<string, string> = {}
+  if (params?.sort) query.sort = params.sort
+  if (params?.order) query.order = params.order
+  if (params?.limit !== undefined) query.limit = String(params.limit)
+  if (params?.localOnly) query.local_only = 'true'
+  return useApi<import('@/lib/types').LibraryListResponse>(`/api/v1/library/${type}`, query)
+}
+
+export function useLibraryRecent(limit = 20) {
+  return useApi<import('@/lib/types').LibraryListResponse>(
+    '/api/v1/library/recent',
+    { limit: String(limit) },
+  )
+}

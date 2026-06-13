@@ -1,11 +1,11 @@
 import { NavLink } from 'react-router-dom'
-import { Search, Film, Tv, HardDrive, Settings, Power } from 'lucide-react'
+import { Search, Film, Tv, Library, Settings, Power } from 'lucide-react'
 
 const tabs = [
   { to: '/search', icon: Search, label: 'Search' },
   { to: '/', icon: Film, label: 'Movies', end: true },
   { to: '/shows', icon: Tv, label: 'Shows' },
-  { to: '/local', icon: HardDrive, label: 'Local Drive' },
+  { to: '/local', icon: Library, label: 'Library' },
   { to: '/settings', icon: Settings, label: 'Settings' },
   { to: '/power', icon: Power, label: 'Power' },
 ]

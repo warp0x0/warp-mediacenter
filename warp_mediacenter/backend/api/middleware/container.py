@@ -25,6 +25,7 @@ class ServiceContainer:
     # Playback
     player_controller: Any = None
     playback_service: Any = None
+    preload_session_manager: Any = None
 
     # Information providers
     trakt_manager: Any = None
@@ -81,6 +82,7 @@ def init_container(
     debrid_client: Any = None,
     player_controller: Any = None,
     playback_service: Any = None,
+    preload_session_manager: Any = None,
     trakt_manager: Any = None,
     information_providers: Any = None,
     torrent_search_service: Any = None,
@@ -93,6 +95,7 @@ def init_container(
         debrid_client=debrid_client,
         player_controller=player_controller,
         playback_service=playback_service,
+        preload_session_manager=preload_session_manager,
         trakt_manager=trakt_manager,
         information_providers=information_providers,
         torrent_search_service=torrent_search_service,

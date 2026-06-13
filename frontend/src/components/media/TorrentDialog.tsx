@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { AlertCircle, CheckCircle2, Loader2, Search, X, Magnet, Zap } from 'lucide-react'
 import { apiGet, ApiError } from '@/lib/api'
 import { getDebridStreamUrl, resolveTorrent, searchTorrents, useTorrentStatus } from '@/hooks/useTorrent'
+import { createPreloadSession, stopPreloadSession, usePreloadSessionStatus } from '@/hooks/usePlayer'
 import { refreshDebridToken } from '@/hooks/useAuth'
 import type { DebridTorrentInfo, MediaItem, TorrentResult, TorrentStatus } from '@/lib/types'
 
@@ -15,8 +16,17 @@ interface TorrentDialogProps {
   season?: number | null
   episode?: number | null
   year?: number | null
+  /** When set (0–100), the preload session begins downloading from this
+   *  percentage of the file and the value is forwarded to onStreamReady
+   *  so the caller can seek mpv to the resume position. */
+  resumePercent?: number | null
   onStreamReady: (payload: {
     source: string
+    /** StreamProxy loopback URL with real filename (e.g. http://127.0.0.1:9200/Movie.mkv).
+     *  Native players on the same machine (mpv via Tauri) should prefer this over
+     *  `source` because it carries a filename extension that the demuxer can use as a
+     *  format hint and avoids the extra FastAPI proxy hop. */
+    local_source?: string
     title: string
     isStream: boolean
     media_kind: 'movie' | 'tv'
@@ -24,6 +34,9 @@ interface TorrentDialogProps {
     year?: number | null
     season?: number | null
     episode?: number | null
+    session_id?: string | null
+    /** Forwarded from resumePercent prop — callers use this to compute seek position. */
+    resumePercent?: number | null
   }) => void
 }
 
@@ -34,6 +47,8 @@ interface BannerState {
   kind: BannerKind
   text: string
   subtext?: string
+  /** When set (0–100) a filled progress bar is shown below the text. */
+  progressPct?: number
 }
 
 export default function TorrentDialog({
@@ -45,6 +60,7 @@ export default function TorrentDialog({
   season,
   episode,
   year,
+  resumePercent,
   onStreamReady,
 }: TorrentDialogProps) {
   const [query, setQuery]         = useState(title)
@@ -56,9 +72,25 @@ export default function TorrentDialog({
   const [torrentId, setTorrentId] = useState<string | null>(null)
   const [_torrentInfo, setTorrentInfo] = useState<TorrentStatus | null>(null)
   const [hasSearched, setHasSearched] = useState(false)
+  const [preloading, setPreloading] = useState(false)
+  const [preloadSessionId, setPreloadSessionId] = useState<string | null>(null)
+  const pendingStream = useRef<{
+    source: string
+    local_source?: string
+    title: string
+    isStream: boolean
+    media_kind: 'movie' | 'tv'
+    tmdb_id?: string | null
+    year?: number | null
+    season?: number | null
+    episode?: number | null
+    session_id?: string | null
+    resumePercent?: number | null
+  } | null>(null)
   const lastActionAt = useRef(0)
 
   const statusQuery = useTorrentStatus(torrentId)
+  const preloadStatusQuery = usePreloadSessionStatus(preloadSessionId)
 
   useEffect(() => {
     if (open) {
@@ -70,8 +102,17 @@ export default function TorrentDialog({
       setResolving(false)
       setTorrentId(null)
       setTorrentInfo(null)
+      setPreloading(false)
+      setPreloadSessionId(null)
+      pendingStream.current = null
     }
   }, [open, title])
+
+  useEffect(() => {
+    if (open) return
+    if (!preloadSessionId) return
+    stopPreloadSession(preloadSessionId).catch(() => {})
+  }, [open, preloadSessionId])
 
   // Reflect live torrent status into the banner while resolving
   useEffect(() => {
@@ -91,6 +132,43 @@ export default function TorrentDialog({
       setBanner({ kind: 'progress', text: 'Caching on Real-Debrid…', subtext: parts.join('  ·  ') })
     }
   }, [statusQuery.data, torrentId])
+
+  // Drive the "Buffering…" banner from preload status and fire onStreamReady at 20%
+  useEffect(() => {
+    if (!preloading || !preloadStatusQuery.data) return
+    const s = preloadStatusQuery.data
+    if (s.state === 'error') {
+      setPreloading(false)
+      setPreloadSessionId(null)
+      setBanner({ kind: 'error', text: 'Buffering failed', subtext: s.error || 'Unknown preload error' })
+      return
+    }
+
+    const pct = s.percent
+
+    const mbDl  = (s.bytes_downloaded / 1024 / 1024).toFixed(0)
+    const denominator = (s.remaining_size ?? 0) > 0 ? s.remaining_size! : s.total_size
+    const mbTot = denominator > 0 ? ` / ${(denominator / 1024 / 1024).toFixed(0)} MB` : ''
+
+    setBanner({
+      kind: 'progress',
+      text: 'Downloading for smooth playback…',
+      subtext: `${pct.toFixed(0)}%  ·  ${mbDl}${mbTot} MB`,
+      progressPct: Math.min(pct, 100),
+    })
+
+    if (pct >= 20 || s.download_complete) {
+      setPreloading(false)
+      setPreloadSessionId(null)
+      const payload = pendingStream.current
+      pendingStream.current = null
+      if (payload) {
+        onStreamReady(payload)
+        setTorrentId(null)
+        onClose()
+      }
+    }
+  }, [preloadStatusQuery.data, preloading, onStreamReady, onClose])
 
   // Episode tag for header subtitle
   const episodeTag =
@@ -161,9 +239,20 @@ export default function TorrentDialog({
       // Banner updates come from the statusQuery effect above while we wait
       const stream = await waitForStream(resolved.torrent_id)
       if (!stream) throw new Error('Stream URL unavailable after download')
-      setBanner({ kind: 'success', text: 'Stream ready — launching playback…' })
-      onStreamReady({
-        source: stream,
+
+      // Store the payload for later, then start pre-buffering.
+      // The preload effect above will fire onStreamReady once 20% is downloaded.
+      const session = await createPreloadSession({
+        stream_url: stream,
+        title,
+        media_kind: mediaKind,
+        start_percent: resumePercent ?? undefined,
+      })
+
+      pendingStream.current = {
+        source: session.playback_url,
+        // StreamProxy URL with real filename — preferred by mpv (Tauri) for demux hint
+        local_source: session.local_url,
         title,
         isStream: true,
         media_kind: mediaKind,
@@ -171,8 +260,18 @@ export default function TorrentDialog({
         year,
         season,
         episode,
+        session_id: session.session_id,
+        resumePercent: resumePercent ?? null,
+      }
+      setTorrentId(null)   // stop the torrent status poll — we have the stream URL now
+      setBanner({
+        kind: 'progress',
+        text: 'Downloading for smooth playback…',
+        subtext: '0%',
+        progressPct: 0,
       })
-      onClose()
+      setPreloadSessionId(session.session_id)
+      setPreloading(true)  // activates preload session status polling
     } catch (err) {
       setTorrentId(null)
       setTorrentInfo(null)
@@ -254,7 +353,7 @@ export default function TorrentDialog({
 
     return (
       <div
-        className="shrink-0 flex items-start gap-2 border-b"
+        className="shrink-0 flex flex-col gap-0 border-b"
         style={{
           padding: 'clamp(9px,1vh,13px) clamp(18px,1.5vw,28px)',
           background: c.bg,
@@ -263,15 +362,32 @@ export default function TorrentDialog({
           fontSize: 'clamp(11px,0.65vw,13px)',
         }}
       >
-        <span style={{ marginTop: 1 }}><Icon /></span>
-        <span className="flex-1 min-w-0">
-          <span className="font-semibold">{banner.text}</span>
-          {banner.subtext && (
-            <span className="block opacity-70 truncate" style={{ fontSize: '0.92em', marginTop: 1 }}>
-              {banner.subtext}
-            </span>
-          )}
-        </span>
+        <div className="flex items-start gap-2">
+          <span style={{ marginTop: 1 }}><Icon /></span>
+          <span className="flex-1 min-w-0">
+            <span className="font-semibold">{banner.text}</span>
+            {banner.subtext && (
+              <span className="block opacity-70 truncate" style={{ fontSize: '0.92em', marginTop: 1 }}>
+                {banner.subtext}
+              </span>
+            )}
+          </span>
+        </div>
+        {banner.progressPct !== undefined && (
+          <div
+            className="rounded-full overflow-hidden"
+            style={{ height: 3, marginTop: 8, background: 'rgba(255,255,255,0.10)' }}
+          >
+            <div
+              className="h-full rounded-full"
+              style={{
+                width: `${banner.progressPct}%`,
+                background: 'var(--accent)',
+                transition: 'width 0.6s ease',
+              }}
+            />
+          </div>
+        )}
       </div>
     )
   }

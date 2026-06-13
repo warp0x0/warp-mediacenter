@@ -45,34 +45,75 @@ def _row_to_dict(row) -> Dict[str, Any]:
     return dict(row)
 
 
+_VALID_LIBRARY_SORTS = {"title", "added_at", "year"}
+
+
+_LOCAL_FILTER = (
+    " AND EXISTS ("
+    "SELECT 1 FROM sources"
+    " WHERE sources.title_id = titles.id"
+    " AND sources.source_type = 'local'"
+    " AND sources.status != 'missing'"
+    ")"
+)
+
+
 @router.get("/movies")
 async def list_movies(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    sort: str = Query(default="added_at"),
+    order: str = Query(default="desc"),
+    local_only: bool = Query(default=False),
 ) -> Dict[str, Any]:
-    """List movies with pagination."""
+    """List movies with pagination and sorting."""
+    sort_col = sort if sort in _VALID_LIBRARY_SORTS else "added_at"
+    order_dir = "ASC" if order.lower() == "asc" else "DESC"
+    extra = _LOCAL_FILTER if local_only else ""
+
     with db_connection() as conn:
-        rows = list_titles(conn, type="movie", limit=limit + 1, offset=offset)
-        total_row = conn.execute("SELECT COUNT(*) as cnt FROM titles WHERE type = 'movie'").fetchone()
+        total_row = conn.execute(
+            f"SELECT COUNT(*) as cnt FROM titles WHERE type = 'movie'{extra}"
+        ).fetchone()
         total = total_row["cnt"] if total_row else 0
+        rows = conn.execute(
+            f"SELECT * FROM titles WHERE type = 'movie'{extra}"
+            f" ORDER BY {sort_col} {order_dir} LIMIT ? OFFSET ?",
+            (limit + 1, offset),
+        ).fetchall()
 
     items = [_row_to_dict(r) for r in rows]
-    return _paginate(items, limit, offset, total)
+    has_next = len(items) > limit
+    return {"items": items[:limit], "total": total, "limit": limit, "offset": offset, "has_next": has_next}
 
 
 @router.get("/shows")
 async def list_shows(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    sort: str = Query(default="added_at"),
+    order: str = Query(default="desc"),
+    local_only: bool = Query(default=False),
 ) -> Dict[str, Any]:
-    """List shows with pagination."""
+    """List shows with pagination and sorting."""
+    sort_col = sort if sort in _VALID_LIBRARY_SORTS else "added_at"
+    order_dir = "ASC" if order.lower() == "asc" else "DESC"
+    extra = _LOCAL_FILTER if local_only else ""
+
     with db_connection() as conn:
-        rows = list_titles(conn, type="tv", limit=limit + 1, offset=offset)
-        total_row = conn.execute("SELECT COUNT(*) as cnt FROM titles WHERE type = 'tv'").fetchone()
+        total_row = conn.execute(
+            f"SELECT COUNT(*) as cnt FROM titles WHERE type = 'tv'{extra}"
+        ).fetchone()
         total = total_row["cnt"] if total_row else 0
+        rows = conn.execute(
+            f"SELECT * FROM titles WHERE type = 'tv'{extra}"
+            f" ORDER BY {sort_col} {order_dir} LIMIT ? OFFSET ?",
+            (limit + 1, offset),
+        ).fetchall()
 
     items = [_row_to_dict(r) for r in rows]
-    return _paginate(items, limit, offset, total)
+    has_next = len(items) > limit
+    return {"items": items[:limit], "total": total, "limit": limit, "offset": offset, "has_next": has_next}
 
 
 @router.get("/recent")

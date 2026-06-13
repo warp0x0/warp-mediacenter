@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-"""Helpers for loading the packaged VLC runtime."""
+"""Helpers for locating and loading the VLC runtime (bundled or system-installed)."""
 
 from pathlib import Path
 import os
+import shutil
 import sys
 from typing import Iterable, Optional
 
@@ -89,6 +90,57 @@ def _apply_environment(runtime: VLCRuntimePaths) -> None:
         if os.environ.get(key) != value:
             os.environ[key] = value
     _extend_library_path(runtime.lib_dir)
+
+
+## ---------------------------------------------------------------------------
+# System VLC binary detection
+# ---------------------------------------------------------------------------
+
+_MACOS_VLC_CANDIDATES: tuple[str, ...] = (
+    "/Applications/VLC.app/Contents/MacOS/VLC",
+    "/opt/homebrew/bin/vlc",
+    "/usr/local/bin/vlc",
+)
+
+_LINUX_VLC_CANDIDATES: tuple[str, ...] = (
+    "/usr/bin/vlc",
+    "/usr/local/bin/vlc",
+    "/snap/bin/vlc",
+)
+
+_WINDOWS_VLC_CANDIDATES: tuple[str, ...] = (
+    r"C:\Program Files\VideoLAN\VLC\vlc.exe",
+    r"C:\Program Files (x86)\VideoLAN\VLC\vlc.exe",
+)
+
+
+def find_system_vlc_binary() -> Optional[str]:
+    """Return the path to the system-installed VLC executable, or None.
+
+    Search order:
+    1. ``shutil.which("vlc")`` — respects PATH (Homebrew, system packages, etc.)
+    2. Platform-specific well-known installation paths.
+    """
+    # PATH-based lookup first (covers Homebrew, package-manager installs, etc.)
+    found = shutil.which("vlc")
+    if found:
+        log.debug("vlc_binary_found_via_which", path=found)
+        return found
+
+    if sys.platform == "darwin":
+        candidates: tuple[str, ...] = _MACOS_VLC_CANDIDATES
+    elif sys.platform.startswith("win"):
+        candidates = _WINDOWS_VLC_CANDIDATES
+    else:
+        candidates = _LINUX_VLC_CANDIDATES
+
+    for candidate in candidates:
+        if Path(candidate).exists():
+            log.debug("vlc_binary_found_via_path", path=candidate)
+            return candidate
+
+    log.warning("vlc_binary_not_found", searched=list(candidates))
+    return None
 
 
 def _extend_library_path(lib_dir: Path) -> None:
