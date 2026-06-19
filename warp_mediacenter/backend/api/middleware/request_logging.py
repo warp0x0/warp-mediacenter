@@ -14,13 +14,27 @@ from warp_mediacenter.backend.common.logging import get_logger
 log = get_logger(__name__)
 
 
+# Paths polled at high frequency by the frontend — log at debug only.
+_SILENT_PATHS: frozenset[str] = frozenset({
+    "/api/v1/settings/library/scan/status",
+    "/api/v1/catalog/trakt/continue_watching",
+})
+
+
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
-    """Log every request with method, path, status code, and duration."""
+    """Log every request with method, path, status code, and duration.
+
+    High-frequency polling paths are demoted to debug so they don't
+    flood the terminal during a scan.
+    """
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         start = time.monotonic()
         response = await call_next(request)
         duration_ms = (time.monotonic() - start) * 1000
+
+        if request.url.path in _SILENT_PATHS:
+            return response
 
         log.info(
             "http_request",

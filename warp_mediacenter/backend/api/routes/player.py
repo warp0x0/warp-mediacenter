@@ -176,40 +176,65 @@ def _session_response(request: Request, session_id: str, playback_url: str) -> D
 
 @router.post("/preload/session")
 async def create_preload_session(payload: Dict[str, Any], request: Request) -> Dict[str, Any]:
-    """Create a buffered preload session for a remote stream URL."""
-    stream_url = str(payload.get("stream_url", "")).strip()
-    if not stream_url:
-        raise HTTPException(status_code=400, detail="stream_url required")
+    """Create a buffered preload session for a remote stream URL or local torrent.
 
+    Accepts either:
+      - ``stream_url``: CDN/RD URL — downloaded via StreamProxy in a thread
+      - ``magnet``:     Magnet URI  — downloaded locally via libtorrent
+    """
+    stream_url    = str(payload.get("stream_url", "")).strip()
+    magnet        = str(payload.get("magnet",     "")).strip()
+    title         = payload.get("title")
+    media_kind    = payload.get("media_kind")
     start_percent_raw = payload.get("start_percent")
     start_percent = float(start_percent_raw) if start_percent_raw is not None else 0.0
 
+    if not stream_url and not magnet:
+        raise HTTPException(status_code=400, detail="stream_url or magnet is required")
+
     manager = _get_preload_manager()
     try:
-        session = manager.create_session(
-            stream_url,
-            title=payload.get("title"),
-            media_kind=payload.get("media_kind"),
-            start_percent=start_percent,
-        )
+        if magnet:
+            # Blocking call: waits for libtorrent metadata + StreamProxy start (~seconds).
+            # Wrapped in asyncio.to_thread so FastAPI's event loop stays responsive.
+            session = await asyncio.to_thread(
+                manager.create_libtorrent_session,
+                magnet,
+                title=title,
+                media_kind=media_kind,
+                start_percent=start_percent,
+            )
+        else:
+            # Blocking call: waits for CDN headers (~seconds).
+            session = await asyncio.to_thread(
+                manager.create_session,
+                stream_url,
+                title=title,
+                media_kind=media_kind,
+                start_percent=start_percent,
+            )
+    except TimeoutError as exc:
+        raise HTTPException(status_code=504, detail=str(exc))
     except PreloadSessionCapacityError as exc:
         raise HTTPException(status_code=429, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to create preload session: {exc}")
 
-    proxy_url = str(
-        request.url_for(
-            "player_preload_session_stream",
-            session_id=session.session_id,
+    snap      = session.snapshot()
+    local_url = snap.get("local_url") or getattr(session.proxy, "local_url", None)
+
+    if magnet:
+        # Libtorrent: StreamProxy loopback IS the playback URL (no FastAPI stream hop)
+        playback_url = local_url or ""
+    else:
+        # RD/CDN: FastAPI proxy serves byte-range requests; local_url is the loopback shortcut
+        playback_url = str(
+            request.url_for("player_preload_session_stream", session_id=session.session_id)
         )
-    )
-    response = _session_response(request, session.session_id, proxy_url)
+
+    response = _session_response(request, session.session_id, playback_url)
     response["created_at"] = session.created_at.isoformat()
-    # Expose the StreamProxy's loopback URL so native players (mpv via Tauri)
-    # can connect directly.  The local URL contains the real filename (with
-    # extension) which mpv uses as a demuxer hint, and it skips the extra
-    # FastAPI proxy hop that can interfere with byte-range seeks on MP4 files.
-    response["local_url"] = session.proxy.local_url
+    response["local_url"]  = local_url
     return response
 
 

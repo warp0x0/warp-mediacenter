@@ -21,8 +21,12 @@ log = get_logger(__name__)
 
 router = APIRouter()
 
-_scan_status: Dict[str, Any] = {"running": False, "progress": 0, "message": "idle", "logs": []}
+_scan_status: Dict[str, Any] = {
+    "running": False, "progress": 0, "message": "idle", "logs": [],
+    "files_done": 0, "files_total": 0,
+}
 _scan_lock = threading.Lock()
+_cancel_event = threading.Event()
 
 # ---------------------------------------------------------------------------
 # Default widget configurations (6 slots each)
@@ -279,10 +283,13 @@ async def trigger_library_scan(payload: Dict[str, Any]) -> Dict[str, Any]:
         if _scan_status["running"]:
             raise HTTPException(status_code=409, detail="Scan already in progress")
 
+        _cancel_event.clear()
         _scan_status["running"] = True
         _scan_status["progress"] = 0
         _scan_status["message"] = "starting"
         _scan_status["logs"] = []
+        _scan_status["files_done"] = 0
+        _scan_status["files_total"] = 0
         _scan_status.pop("result", None)
 
     def _append_log(msg: str) -> None:
@@ -290,10 +297,28 @@ async def trigger_library_scan(payload: Dict[str, Any]) -> Dict[str, Any]:
             _scan_status["logs"].append(msg)
 
     def _run_scan():
+        import warp_mediacenter.backend.library.scanner as _scanner_mod
+        _scanner_mod._ui_log_fn = _append_log
+
+        def _progress_callback(done: int, total: int) -> None:
+            with _scan_lock:
+                _scan_status["files_done"] = done
+                _scan_status["files_total"] = total
+                if total > 0:
+                    _scan_status["progress"] = int(done / total * 100)
+
+        _scanner_mod._progress_fn = _progress_callback
         try:
             path_objs = [Path(p) for p in paths]
             _append_log(f"Starting scan of {len(path_objs)} path(s): {', '.join(paths)}")
-            result = scan_once(path_objs, incremental=incremental)
+            result = scan_once(path_objs, incremental=incremental, cancel_event=_cancel_event)
+
+            if _cancel_event.is_set():
+                _append_log("Scan cancelled.")
+                with _scan_lock:
+                    _scan_status["running"] = False
+                    _scan_status["message"] = "cancelled"
+                return
 
             summary = (
                 f"Scan complete in {result.duration_sec:.1f}s — "
@@ -319,6 +344,9 @@ async def trigger_library_scan(payload: Dict[str, Any]) -> Dict[str, Any]:
             with _scan_lock:
                 _scan_status["running"] = False
                 _scan_status["message"] = f"error: {exc}"
+        finally:
+            _scanner_mod._ui_log_fn = None
+            _scanner_mod._progress_fn = None
 
     thread = threading.Thread(target=_run_scan, daemon=True)
     thread.start()
@@ -335,6 +363,22 @@ async def library_scan_status() -> Dict[str, Any]:
     """Get current library scan status."""
     with _scan_lock:
         return dict(_scan_status)
+
+
+@router.post("/library/scan/cancel")
+async def cancel_library_scan() -> Dict[str, Any]:
+    """Request graceful cancellation of the running scan.
+
+    Returns immediately — the scan threads exit at their next checkpoint
+    (before starting each new file's network phase). Status transitions to
+    'cancelled' once the last in-flight file finishes.
+    """
+    with _scan_lock:
+        if not _scan_status["running"]:
+            return {"status": "not_running"}
+        _scan_status["message"] = "cancelling"
+    _cancel_event.set()
+    return {"status": "cancelling"}
 
 
 # ------------------------------------------------------------------

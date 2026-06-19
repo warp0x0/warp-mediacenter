@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef } from 'react'
+import { mutate as swrGlobalMutate } from 'swr'
 import { useNavigate } from 'react-router-dom'
 import { FolderSearch, ScanLine, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useLibraryList } from '@/hooks/useLibrary'
@@ -14,19 +15,19 @@ function toMediaItem(item: LibrarySearchItem): MediaItem {
   return {
     id: String(item.id),
     title: item.title,
-    type: item.type === 'tv' ? 'show' : 'movie',
+    type: (item.type === 'tv' || item.type === 'show') ? 'show' : 'movie',
     source_tag: 'local',
     year: item.year,
     overview: item.overview,
-    poster: null,
+    poster: item.poster_url ? { url: item.poster_url } : null,
     license: null,
     rating: null,
     genres: [],
     origin_country: null,
     external_url: null,
     extra: {},
-    poster_path: item.poster_path,
-    backdrop_path: item.backdrop_path,
+    poster_path: null,
+    backdrop_path: null,
     tmdb_id: item.tmdb_id,
     trakt_id: null,
     media: {
@@ -35,8 +36,8 @@ function toMediaItem(item: LibrarySearchItem): MediaItem {
       name: item.title,
       year: item.year,
       overview: item.overview,
-      poster_path: item.poster_path,
-      backdrop_path: item.backdrop_path,
+      poster_path: null,
+      backdrop_path: null,
       rating: null,
       genres: [],
     },
@@ -52,9 +53,11 @@ interface LocalRibbonProps {
   items: MediaItem[]
   isLoading: boolean
   onNavigate: (item: MediaItem) => void
+  seeMorePath?: string
 }
 
-function LocalRibbon({ title, items, isLoading, onNavigate }: LocalRibbonProps) {
+function LocalRibbon({ title, items, isLoading, onNavigate, seeMorePath }: LocalRibbonProps) {
+  const navigate = useNavigate()
   const scrollRef = useRef<HTMLDivElement>(null)
 
   const scroll = (dir: 'left' | 'right') => {
@@ -65,17 +68,26 @@ function LocalRibbon({ title, items, isLoading, onNavigate }: LocalRibbonProps) 
 
   return (
     <div style={{ marginBottom: 'clamp(20px,2vh,32px)' }}>
-      <h3
-        className="font-bold text-white"
-        style={{
-          fontSize: 'clamp(14px,0.95vw,17px)',
-          letterSpacing: '0.02em',
-          marginBottom: 'clamp(6px,0.5vh,10px)',
-          padding: '0 clamp(20px,2vw,36px)',
-        }}
+      <div
+        className="flex items-center justify-between"
+        style={{ padding: '0 clamp(20px,2vw,36px)', marginBottom: 'clamp(6px,0.5vh,10px)' }}
       >
-        {title}
-      </h3>
+        <h3
+          className="font-bold text-white"
+          style={{ fontSize: 'clamp(14px,0.95vw,17px)', letterSpacing: '0.02em' }}
+        >
+          {title}
+        </h3>
+        {seeMorePath && !isLoading && items.length > 0 && (
+          <button
+            onClick={() => navigate(seeMorePath)}
+            className="flex items-center gap-1 font-medium transition-colors cursor-pointer hover:text-white"
+            style={{ fontSize: 'clamp(11px,0.75vw,13px)', color: 'var(--accent)' }}
+          >
+            See More <ChevronRight size={13} />
+          </button>
+        )}
+      </div>
 
       {/* Skeleton */}
       {isLoading && (
@@ -128,20 +140,18 @@ function LocalRibbon({ title, items, isLoading, onNavigate }: LocalRibbonProps) 
 // LocalSubTab
 // ---------------------------------------------------------------------------
 
-export default function LocalSubTab() {
-  const navigate = useNavigate()
-  const [mediaType, setMediaType] = useState<'movie' | 'show'>('movie')
-  const [scanOpen, setScanOpen] = useState(false)
-  const [refreshKey, setRefreshKey] = useState(0)
+interface Props {
+  mediaType: 'movie' | 'show'
+  setMediaType: (t: 'movie' | 'show') => void
+}
 
+export default function LocalSubTab({ mediaType, setMediaType }: Props) {
+  const navigate = useNavigate()
+  const [scanOpen, setScanOpen] = useState(false)
   const listType = mediaType === 'movie' ? 'movies' : 'shows'
 
   const recentQuery  = useLibraryList(listType, { sort: 'added_at', order: 'desc', limit: 30, localOnly: true })
   const azQuery      = useLibraryList(listType, { sort: 'title',    order: 'asc',  limit: 30, localOnly: true })
-
-  // refreshKey changes after "Add to Library" to re-trigger SWR
-  // (SWR auto-refetches on key change since path includes refreshKey as a dummy param — simpler: just mutate)
-  void refreshKey
 
   const handleNavigate = useCallback(
     (item: MediaItem) => {
@@ -152,11 +162,12 @@ export default function LocalSubTab() {
 
   const handleAddToLibrary = useCallback(() => {
     setScanOpen(false)
-    setRefreshKey((k) => k + 1)
-    // force SWR to re-validate on next render
-    recentQuery.mutate?.()
-    azQuery.mutate?.()
-  }, [recentQuery, azQuery])
+    // Invalidate all library-related SWR cache entries so the ribbons re-fetch immediately
+    swrGlobalMutate(
+      (key: unknown) =>
+        Array.isArray(key) && typeof key[0] === 'string' && key[0].startsWith('/api/v1/library'),
+    )
+  }, [])
 
   const recentItems = (recentQuery.data?.items ?? []).map(toMediaItem)
   const azItems     = (azQuery.data?.items ?? []).map(toMediaItem)
@@ -232,12 +243,14 @@ export default function LocalSubTab() {
             items={recentItems}
             isLoading={recentQuery.isLoading}
             onNavigate={handleNavigate}
+            seeMorePath={`/local/browse?type=${mediaType}&sort=added_at&order=desc&title=Recently+Added`}
           />
           <LocalRibbon
             title="Names A–Z"
             items={azItems}
             isLoading={azQuery.isLoading}
             onNavigate={handleNavigate}
+            seeMorePath={`/local/browse?type=${mediaType}&sort=title&order=asc&title=Names+A%E2%80%93Z`}
           />
 
           {/* Empty state */}

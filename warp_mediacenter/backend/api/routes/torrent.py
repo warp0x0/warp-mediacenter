@@ -50,18 +50,19 @@ def _get_debrid_client() -> RealDebridClient:
 def _torrent_result_to_dict(result: TorrentResult) -> Dict[str, Any]:
     """Convert TorrentResult to a dict."""
     return {
-        "name": result.name,
-        "hash": result.hash,
-        "seeders": result.seeders,
-        "leechers": result.leechers,
-        "size": result.size,
-        "size_bytes": result.size_bytes,
+        "name":        result.name,
+        "hash":        result.hash,
+        "magnet":      result.magnet,
+        "seeders":     result.seeders,
+        "leechers":    result.leechers,
+        "size":        result.size,
+        "size_bytes":  result.size_bytes,
         "source_site": result.source_site,
-        "quality": result.quality,
-        "is_cached": result.is_cached,
+        "quality":     result.quality,
+        "is_cached":   result.is_cached,
         "match_score": result.match_score,
-        "uploader": result.uploader,
-        "date": result.date,
+        "uploader":    result.uploader,
+        "date":        result.date,
     }
 
 
@@ -109,11 +110,10 @@ async def search_torrents(payload: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Torrent search failed: {exc}")
 
     return {
-        "cached": [_torrent_result_to_dict(t) for t in response.cached],
-        "uncached": [_torrent_result_to_dict(t) for t in response.uncached],
-        "query": response.query,
+        "filtered":   [_torrent_result_to_dict(t) for t in response.filtered],
+        "unfiltered": [_torrent_result_to_dict(t) for t in response.unfiltered],
+        "query":      response.query,
         "media_type": response.media_type,
-        "total_results": response.total_results,
     }
 
 
@@ -267,3 +267,6 @@ async def clear_completed_torrents() -> Dict[str, int]:
     orchestrator = _get_orchestrator()
     removed = orchestrator.clear_completed()
     return {"removed": removed}
+
+
+

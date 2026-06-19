@@ -27,5 +27,8 @@ aiohttp==3.11.12
 fastapi==0.115.6
 uvicorn==0.34.0
 
+# Local torrent download (for RD-blocked sources)
+libtorrent>=2.0.0
+
 # Desktop UI
 PySide6>=6.6.0

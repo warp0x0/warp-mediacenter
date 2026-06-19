@@ -6,6 +6,7 @@ temp file via :class:`StreamProxy` and expose a per-session local playback URL.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from threading import Lock
@@ -16,6 +17,88 @@ from warp_mediacenter.backend.common.logging import get_logger
 from warp_mediacenter.backend.player.stream_proxy import StreamProxy
 
 log = get_logger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Libtorrent-backed session shim
+# ---------------------------------------------------------------------------
+
+class _LibtorrentProxyShim:
+    """Makes a libtorrent download duck-type compatible with StreamProxy
+    so a libtorrent session can live in PreloadSessionManager._sessions."""
+
+    def __init__(self, lt_manager: Any, lt_session_id: str) -> None:
+        self._lt = lt_manager
+        self._lt_sid = lt_session_id
+
+    def snapshot(self) -> Dict[str, Any]:
+        raw = self._lt.status(self._lt_sid)
+        pct     = raw.get("progress_pct", 0.0)
+        total   = raw.get("total_bytes", 0)
+        seeding = raw.get("state") in ("seeding", "finished")
+        return {
+            "url":               raw.get("local_url") or "",
+            "bytes_downloaded":  raw.get("bytes_downloaded", 0),
+            "total_size":        total,
+            "remaining_size":    total,   # no partial-range offset for libtorrent
+            "percent":           pct,
+            "active":            raw.get("state") in ("downloading", "waiting_metadata"),
+            "download_complete": seeding,
+            "error":             raw.get("error"),
+            "local_url":         raw.get("local_url"),
+        }
+
+    @property
+    def local_url(self) -> Optional[str]:
+        return self._lt.status(self._lt_sid).get("local_url")
+
+    def close(self) -> None:
+        self._lt.stop(self._lt_sid)
+
+
+@dataclass
+class _LibtorrentSession:
+    """A PreloadSession-compatible wrapper around a libtorrent download."""
+    session_id:     str
+    proxy:          _LibtorrentProxyShim
+    created_at:     datetime
+    updated_at:     datetime
+    title:          Optional[str] = None
+    media_kind:     Optional[str] = None
+    active_streams: int = 0
+
+    def touch(self) -> None:
+        self.updated_at = datetime.now(timezone.utc)
+
+    def snapshot(self) -> Dict[str, Any]:
+        snap  = self.proxy.snapshot()
+        error = snap.get("error")
+        state = (
+            "error"      if error                    else
+            "ready"      if snap["download_complete"] else
+            "preloading" if snap["active"]            else
+            "stopped"
+        )
+        return {
+            "session_id":        self.session_id,
+            "state":             state,
+            "url":               snap.get("url", ""),
+            "title":             self.title,
+            "media_kind":        self.media_kind,
+            "bytes_downloaded":  snap["bytes_downloaded"],
+            "total_size":        snap["total_size"],
+            "remaining_size":    snap["remaining_size"],
+            "percent":           snap["percent"],
+            "download_complete": snap["download_complete"],
+            "error":             error,
+            "active":            snap["active"],
+            "local_url":         snap.get("local_url"),
+            "playback_url":      snap.get("local_url") or "",
+            "buffer_ahead_bytes": 0,
+            "active_streams":    self.active_streams,
+            "created_at":        self.created_at.isoformat(),
+            "updated_at":        self.updated_at.isoformat(),
+        }
 
 
 class PreloadSessionCapacityError(RuntimeError):
@@ -76,7 +159,7 @@ class PreloadSessionManager:
         self._ttl_seconds = max(60, ttl_seconds)
         self._hard_ttl_seconds = max(self._ttl_seconds, hard_ttl_seconds)
         self._max_sessions = max(1, max_sessions)
-        self._sessions: Dict[str, PreloadSession] = {}
+        self._sessions: Dict[str, Any] = {}  # PreloadSession | _LibtorrentSession
         self._lock = Lock()
 
     def create_session(
@@ -124,7 +207,66 @@ class PreloadSessionManager:
         )
         return session
 
-    def get_session(self, session_id: str) -> Optional[PreloadSession]:
+    def create_libtorrent_session(
+        self,
+        magnet: str,
+        *,
+        title: Optional[str] = None,
+        media_kind: Optional[str] = None,
+        start_percent: float = 0.0,
+        metadata_timeout: float = 60.0,
+    ) -> _LibtorrentSession:
+        """Start a libtorrent download and expose it as a preload session.
+
+        Blocks until the StreamProxy loopback URL is available (torrent metadata
+        downloaded and piece selection applied) — mirrors how create_session()
+        blocks until CDN response headers arrive.
+        """
+        from warp_mediacenter.backend.player.libtorrent_manager import get_manager as _lt_get  # noqa: PLC0415
+
+        self.cleanup_stale_sessions()
+        self._ensure_capacity()
+
+        lt_manager    = _lt_get()
+        lt_session_id = lt_manager.start(magnet=magnet, start_percent=start_percent)
+
+        # Poll until the StreamProxy loopback URL is ready (metadata downloaded)
+        deadline = time.monotonic() + metadata_timeout
+        while time.monotonic() < deadline:
+            raw = lt_manager.status(lt_session_id)
+            if raw.get("local_url"):
+                break
+            if raw.get("state") == "error":
+                lt_manager.stop(lt_session_id)
+                raise RuntimeError(raw.get("error") or "libtorrent metadata error")
+            time.sleep(0.25)
+        else:
+            lt_manager.stop(lt_session_id)
+            raise TimeoutError("Timed out waiting for torrent metadata")
+
+        now        = datetime.now(timezone.utc)
+        session_id = uuid4().hex
+        session    = _LibtorrentSession(
+            session_id=session_id,
+            proxy=_LibtorrentProxyShim(lt_manager, lt_session_id),
+            created_at=now,
+            updated_at=now,
+            title=title,
+            media_kind=media_kind,
+        )
+        with self._lock:
+            self._sessions[session_id] = session
+
+        log.info(
+            "libtorrent_preload_session_created",
+            session_id=session_id,
+            lt_session_id=lt_session_id,
+            title=title,
+            start_percent=start_percent if start_percent > 0 else None,
+        )
+        return session
+
+    def get_session(self, session_id: str) -> Optional[Any]:
         self.cleanup_stale_sessions()
         with self._lock:
             session = self._sessions.get(session_id)
@@ -132,13 +274,13 @@ class PreloadSessionManager:
                 session.touch()
             return session
 
-    def require_session(self, session_id: str) -> PreloadSession:
+    def require_session(self, session_id: str) -> Any:
         session = self.get_session(session_id)
         if session is None:
             raise KeyError(session_id)
         return session
 
-    def acquire_stream(self, session_id: str) -> PreloadSession:
+    def acquire_stream(self, session_id: str) -> Any:
         self.cleanup_stale_sessions()
         with self._lock:
             session = self._sessions.get(session_id)

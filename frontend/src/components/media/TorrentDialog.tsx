@@ -1,8 +1,13 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { AlertCircle, CheckCircle2, Loader2, Search, X, Magnet, Zap } from 'lucide-react'
+import { AlertCircle, AlertTriangle, CheckCircle2, Loader2, Search, X, Magnet } from 'lucide-react'
 import { apiGet, ApiError } from '@/lib/api'
-import { getDebridStreamUrl, resolveTorrent, searchTorrents, useTorrentStatus } from '@/hooks/useTorrent'
+import {
+  getDebridStreamUrl,
+  resolveTorrent,
+  searchTorrents,
+  useTorrentStatus,
+} from '@/hooks/useTorrent'
 import { createPreloadSession, stopPreloadSession, usePreloadSessionStatus } from '@/hooks/usePlayer'
 import { refreshDebridToken } from '@/hooks/useAuth'
 import type { DebridTorrentInfo, MediaItem, TorrentResult, TorrentStatus } from '@/lib/types'
@@ -63,17 +68,22 @@ export default function TorrentDialog({
   resumePercent,
   onStreamReady,
 }: TorrentDialogProps) {
-  const [query, setQuery]         = useState(title)
-  const [results, setResults]     = useState<TorrentResult[]>([])
-  const [cachedCount, setCachedCount] = useState(0)
-  const [loading, setLoading]     = useState(false)
-  const [resolving, setResolving] = useState(false)
-  const [banner, setBanner]       = useState<BannerState | null>(null)
-  const [torrentId, setTorrentId] = useState<string | null>(null)
-  const [_torrentInfo, setTorrentInfo] = useState<TorrentStatus | null>(null)
-  const [hasSearched, setHasSearched] = useState(false)
-  const [preloading, setPreloading] = useState(false)
+  const [query, setQuery]                         = useState(title)
+  const [results, setResults]                     = useState<TorrentResult[]>([])
+  // hashes of results that pass the RD filter — used to decide badge + click path
+  const [rdSafeHashes, setRdSafeHashes]           = useState<Set<string>>(new Set())
+  const [loading, setLoading]                     = useState(false)
+  const [resolving, setResolving]           = useState(false)
+  const [banner, setBanner]                 = useState<BannerState | null>(null)
+  const [torrentId, setTorrentId]           = useState<string | null>(null)
+  const [_torrentInfo, setTorrentInfo]      = useState<TorrentStatus | null>(null)
+  const [hasSearched, setHasSearched]       = useState(false)
+  const [preloading, setPreloading]         = useState(false)
   const [preloadSessionId, setPreloadSessionId] = useState<string | null>(null)
+
+  // libtorrent local download: confirmation dialog only (no separate session state)
+  const [showLocalConfirm, setShowLocalConfirm] = useState<TorrentResult | null>(null)
+
   const pendingStream = useRef<{
     source: string
     local_source?: string
@@ -89,14 +99,15 @@ export default function TorrentDialog({
   } | null>(null)
   const lastActionAt = useRef(0)
 
-  const statusQuery = useTorrentStatus(torrentId)
+  const statusQuery        = useTorrentStatus(torrentId)
   const preloadStatusQuery = usePreloadSessionStatus(preloadSessionId)
 
+  // Reset all state when dialog opens
   useEffect(() => {
     if (open) {
       setQuery(title)
       setResults([])
-      setCachedCount(0)
+      setRdSafeHashes(new Set())
       setBanner(null)
       setHasSearched(false)
       setResolving(false)
@@ -104,17 +115,19 @@ export default function TorrentDialog({
       setTorrentInfo(null)
       setPreloading(false)
       setPreloadSessionId(null)
+      setShowLocalConfirm(null)
       pendingStream.current = null
     }
   }, [open, title])
 
+  // Stop the preload session when dialog closes — covers both RD and libtorrent paths
+  // since both are now registered in PreloadSessionManager under preloadSessionId.
   useEffect(() => {
     if (open) return
-    if (!preloadSessionId) return
-    stopPreloadSession(preloadSessionId).catch(() => {})
+    if (preloadSessionId) stopPreloadSession(preloadSessionId).catch(() => {})
   }, [open, preloadSessionId])
 
-  // Reflect live torrent status into the banner while resolving
+  // Reflect live RD torrent status into the banner while resolving
   useEffect(() => {
     if (!statusQuery.data || !torrentId) return
     const s = statusQuery.data
@@ -145,7 +158,6 @@ export default function TorrentDialog({
     }
 
     const pct = s.percent
-
     const mbDl  = (s.bytes_downloaded / 1024 / 1024).toFixed(0)
     const denominator = (s.remaining_size ?? 0) > 0 ? s.remaining_size! : s.total_size
     const mbTot = denominator > 0 ? ` / ${(denominator / 1024 / 1024).toFixed(0)} MB` : ''
@@ -183,7 +195,7 @@ export default function TorrentDialog({
     setHasSearched(true)
     setBanner(null)
     setResults([])
-    setCachedCount(0)
+    setRdSafeHashes(new Set())
     try {
       const data = await searchTorrents({
         query: query.trim(),
@@ -194,18 +206,17 @@ export default function TorrentDialog({
         year: year ?? undefined,
         limit: 24,
       })
-      const cached = data.cached ?? []
-      const uncached = data.uncached ?? []
-      const merged = [...cached, ...uncached]
-      setResults(merged)
-      setCachedCount(cached.length)
+      const filtered   = data.filtered   ?? []
+      const unfiltered = data.unfiltered ?? []
+      setResults(unfiltered)
+      setRdSafeHashes(new Set(filtered.map((r) => r.hash)))
 
-      if (merged.length === 0) {
+      const blockedCount = unfiltered.length - filtered.length
+      if (unfiltered.length === 0) {
         setBanner({ kind: 'info', text: 'No results found — try a different query.' })
       } else {
-        const parts = [`${merged.length} source${merged.length !== 1 ? 's' : ''} found`]
-        if (cached.length > 0)   parts.push(`${cached.length} cached`)
-        if (uncached.length > 0) parts.push(`${uncached.length} uncached`)
+        const parts = [`${unfiltered.length} source${unfiltered.length !== 1 ? 's' : ''} found`]
+        if (blockedCount > 0) parts.push(`${blockedCount} RD-blocked`)
         setBanner({ kind: 'info', text: parts[0], subtext: parts.slice(1).join('  ·  ') || undefined })
       }
     } catch (err) {
@@ -216,7 +227,7 @@ export default function TorrentDialog({
     }
   }
 
-  // ── Pick & resolve torrent ────────────────────────────────────────────────
+  // ── Pick & resolve torrent via Real-Debrid ────────────────────────────────
   async function pickTorrent(result: TorrentResult) {
     const now = Date.now()
     if (now - lastActionAt.current < 250) return
@@ -236,12 +247,9 @@ export default function TorrentDialog({
         year: year ?? undefined,
       })
       setTorrentId(resolved.torrent_id)
-      // Banner updates come from the statusQuery effect above while we wait
       const stream = await waitForStream(resolved.torrent_id)
       if (!stream) throw new Error('Stream URL unavailable after download')
 
-      // Store the payload for later, then start pre-buffering.
-      // The preload effect above will fire onStreamReady once 20% is downloaded.
       const session = await createPreloadSession({
         stream_url: stream,
         title,
@@ -251,7 +259,6 @@ export default function TorrentDialog({
 
       pendingStream.current = {
         source: session.playback_url,
-        // StreamProxy URL with real filename — preferred by mpv (Tauri) for demux hint
         local_source: session.local_url,
         title,
         isStream: true,
@@ -263,7 +270,7 @@ export default function TorrentDialog({
         session_id: session.session_id,
         resumePercent: resumePercent ?? null,
       }
-      setTorrentId(null)   // stop the torrent status poll — we have the stream URL now
+      setTorrentId(null)
       setBanner({
         kind: 'progress',
         text: 'Downloading for smooth playback…',
@@ -271,7 +278,7 @@ export default function TorrentDialog({
         progressPct: 0,
       })
       setPreloadSessionId(session.session_id)
-      setPreloading(true)  // activates preload session status polling
+      setPreloading(true)
     } catch (err) {
       setTorrentId(null)
       setTorrentInfo(null)
@@ -290,7 +297,6 @@ export default function TorrentDialog({
           detail = err.message
         }
       } else if (err instanceof Error) {
-        // Surface the exact backend/status message verbatim
         const msg = err.message
         if (msg.toLowerCase().includes('infringing') || msg.toLowerCase().includes('dmca')) {
           headline = 'Real-Debrid: Infringing file blocked'
@@ -331,6 +337,45 @@ export default function TorrentDialog({
     throw new Error('Timed out waiting for Real-Debrid — torrent may be slow or unavailable.')
   }
 
+  // ── Local libtorrent download (for RD-blocked/unfiltered results) ─────────
+  // Uses the same preload-session path as RD: createPreloadSession with a magnet
+  // URI registers the libtorrent download in PreloadSessionManager and returns
+  // a session_id.  From here the existing preload status effect drives the banner,
+  // fires onStreamReady at 20%, and the cleanup effect handles early-close.
+  async function pickLocalTorrent(result: TorrentResult) {
+    setShowLocalConfirm(null)
+    setResolving(true)
+    setBanner({ kind: 'progress', text: 'Fetching torrent metadata…', subtext: result.name })
+    try {
+      const session = await createPreloadSession({
+        magnet:        result.magnet,
+        title,
+        media_kind:    mediaKind,
+        start_percent: resumePercent ?? 0,
+      })
+      pendingStream.current = {
+        source:        session.local_url ?? session.playback_url,
+        local_source:  session.local_url ?? undefined,
+        title,
+        isStream:      true,
+        media_kind:    mediaKind,
+        tmdb_id:       item?.tmdb_id || null,
+        year:          year    ?? null,
+        season:        season  ?? null,
+        episode:       episode ?? null,
+        session_id:    session.session_id,
+        resumePercent: resumePercent ?? null,
+      }
+      setPreloadSessionId(session.session_id)
+      setPreloading(true)
+      setResolving(false)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to start local download'
+      setBanner({ kind: 'error', text: 'Local download failed', subtext: msg })
+      setResolving(false)
+    }
+  }
+
   // ── Banner rendering ──────────────────────────────────────────────────────
   function renderBanner() {
     if (!banner) return null
@@ -347,7 +392,6 @@ export default function TorrentDialog({
       if (banner.kind === 'progress') return <Loader2 size={13} className="animate-spin shrink-0" />
       if (banner.kind === 'success')  return <CheckCircle2 size={13} className="shrink-0" />
       if (banner.kind === 'error')    return <AlertCircle size={13} className="shrink-0" />
-      if (cachedCount > 0 && results.length > 0) return <Zap size={13} className="shrink-0" />
       return <Search size={13} className="shrink-0 opacity-60" />
     }
 
@@ -391,6 +435,8 @@ export default function TorrentDialog({
       </div>
     )
   }
+
+  const isBusy = loading || resolving
 
   return (
     <AnimatePresence>
@@ -472,7 +518,7 @@ export default function TorrentDialog({
               />
               <button
                 onClick={doSearch}
-                disabled={loading || resolving}
+                disabled={isBusy}
                 className="btn-primary flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60 shrink-0"
                 style={{
                   padding: '0 clamp(16px,1.4vw,26px)',
@@ -484,6 +530,7 @@ export default function TorrentDialog({
                 {loading ? 'Searching…' : 'Search'}
               </button>
             </div>
+
 
             {/* ── STATUS BANNER (fixed — never scrolls) ───────────────── */}
             {renderBanner()}
@@ -518,13 +565,13 @@ export default function TorrentDialog({
               {/* Results list */}
               {results.length > 0 && (
                 <div className="flex flex-col" style={{ gap: 'clamp(6px,0.6vh,10px)' }}>
-                  {results.map((result, idx) => {
-                    const isCached = idx < cachedCount
+                  {results.map((result) => {
+                    const isRdBlocked = !rdSafeHashes.has(result.hash)
                     return (
                       <button
                         key={result.hash}
-                        onClick={() => pickTorrent(result)}
-                        disabled={loading || resolving}
+                        onClick={() => isRdBlocked ? setShowLocalConfirm(result) : pickTorrent(result)}
+                        disabled={isBusy}
                         className="w-full text-left rounded-card border border-white/[0.06] transition-all duration-150 cursor-pointer disabled:opacity-40 group"
                         style={{
                           padding: 'clamp(10px,1vh,14px) clamp(14px,1.2vw,20px)',
@@ -555,21 +602,22 @@ export default function TorrentDialog({
                           </div>
 
                           <div className="flex items-center gap-2 shrink-0">
-                            {isCached && (
+                            {isRdBlocked && (
                               <span
-                                className="rounded-pill font-semibold"
+                                className="flex items-center gap-1 rounded-pill font-semibold"
                                 style={{
                                   padding: '3px clamp(8px,0.7vw,12px)',
                                   fontSize: 'clamp(10px,0.6vw,12px)',
-                                  background: 'rgba(34,197,94,0.15)',
-                                  color: 'rgb(74,222,128)',
-                                  border: '1px solid rgba(34,197,94,0.25)',
+                                  background: 'rgba(245,158,11,0.12)',
+                                  color: 'rgb(251,191,36)',
+                                  border: '1px solid rgba(245,158,11,0.25)',
                                 }}
                               >
-                                ⚡ Cached
+                                <AlertTriangle size={10} />
+                                RD Blocked
                               </span>
                             )}
-                            {result.quality && (
+                            {result.quality && result.quality !== 'unknown' && (
                               <span
                                 className="rounded-pill bg-accent/15 text-accent font-medium"
                                 style={{
@@ -587,8 +635,74 @@ export default function TorrentDialog({
                   })}
                 </div>
               )}
-
             </div>
+
+            {/* ── LOCAL DOWNLOAD CONFIRMATION OVERLAY ─────────────────── */}
+            <AnimatePresence>
+              {showLocalConfirm && (
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="absolute inset-0 z-10 flex items-center justify-center"
+                  style={{ background: 'rgba(10,10,14,0.88)', backdropFilter: 'blur(4px)' }}
+                >
+                  <div
+                    className="flex flex-col gap-4 rounded-card border border-white/[0.10]"
+                    style={{
+                      width: 'clamp(340px,42vw,520px)',
+                      padding: 'clamp(24px,2.5vh,36px) clamp(24px,2vw,36px)',
+                      background: 'rgba(18,18,24,0.98)',
+                    }}
+                  >
+                    <div className="flex items-start gap-3">
+                      <div
+                        className="flex items-center justify-center rounded-lg shrink-0"
+                        style={{
+                          width: 38, height: 38,
+                          background: 'rgba(245,158,11,0.12)',
+                          color: 'rgb(251,191,36)',
+                        }}
+                      >
+                        <AlertTriangle size={18} />
+                      </div>
+                      <div>
+                        <p className="text-white font-semibold" style={{ fontSize: 'clamp(13px,0.85vw,15px)' }}>
+                          Blocked by Real-Debrid
+                        </p>
+                        <p className="text-white/50 mt-1" style={{ fontSize: 'clamp(11px,0.68vw,13px)', lineHeight: 1.5 }}>
+                          This source is filtered by Real-Debrid and will fail if sent through it.
+                          Download locally via libtorrent instead?
+                        </p>
+                        <p
+                          className="text-white/25 truncate mt-2"
+                          style={{ fontSize: 'clamp(10px,0.62vw,12px)' }}
+                        >
+                          {showLocalConfirm.name}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex gap-2 justify-end">
+                      <button
+                        onClick={() => setShowLocalConfirm(null)}
+                        className="rounded-card border border-white/[0.08] text-white/50 hover:text-white/80 hover:bg-white/[0.06] transition-all duration-150 cursor-pointer"
+                        style={{ padding: 'clamp(8px,0.9vh,12px) clamp(16px,1.4vw,24px)', fontSize: 'clamp(12px,0.72vw,14px)' }}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={() => pickLocalTorrent(showLocalConfirm)}
+                        className="btn-primary rounded-card cursor-pointer"
+                        style={{ padding: 'clamp(8px,0.9vh,12px) clamp(16px,1.4vw,24px)', fontSize: 'clamp(12px,0.72vw,14px)' }}
+                      >
+                        Download Locally
+                      </button>
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
           </motion.div>
         </>
       )}

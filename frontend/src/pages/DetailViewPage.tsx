@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Play, Star, Plus, Share2, Heart, Loader2, Tags, CheckCircle2 } from 'lucide-react'
+import { ArrowLeft, Play, Star, Plus, Share2, Heart, Loader2, Tags, CheckCircle2, HardDrive, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useBackdrop } from '@/contexts/BackdropContext'
 import { useTitleDetail, useTitleSources } from '@/hooks/useLibrary'
 import { useMovieDetail, useShowDetail, useShowSeasons, useImdbRating, useShowProgress } from '@/hooks/useDetail'
@@ -13,6 +13,7 @@ import { useIsLiked, useIsWishlisted } from '@/hooks/useCollections'
 import { playMedia } from '@/hooks/usePlayer'
 import { isTauriRuntime, openPlayerWindow } from '@/lib/tauri'
 import { IMAGE_BASE } from '@/lib/constants'
+import { BASE_URL } from '@/lib/api'
 import type { CastMember, CollectionItemPayload, EpisodeDetail, MediaItem, SourceRow, WatchProvidersResponse, SeasonDetail } from '@/lib/types'
 
 type DetailLocationState = { item?: MediaItem }
@@ -51,6 +52,7 @@ export default function DetailViewPage() {
   const seasonsQuery = useShowSeasons(isShow ? tmdbId : null)
   const showProgressQuery = useShowProgress(isShow ? tmdbId : null)
   const [selectedSeasonIdx, setSelectedSeasonIdx] = useState(0)
+  const seasonScrollRef = useRef<HTMLDivElement>(null)
 
   // ── Movie resume / progress — from navigation state (Continue Watching) ────
   const movieResumeProgress = !isShow && typeof media?.extra?.progress === 'number'
@@ -103,6 +105,11 @@ export default function DetailViewPage() {
 
   const sources = sourcesQuery.data?.sources ?? []
   const hasLibraryTitle = detail !== null
+
+  // First available local source — used to bypass TorrentDialog for movies
+  const localSource = sources.find(
+    (s) => s.source_type === 'local' && s.status !== 'missing',
+  ) ?? null
   const isDetailLoading = isShow ? showDetail.isLoading : movieDetail.isLoading
 
   const trailerUrl = richDetail?.trailers?.[0]?.url ?? null
@@ -119,13 +126,23 @@ export default function DetailViewPage() {
   }
 
   function handlePlayEpisode(ep: EpisodeDetail, seasonNumber: number, epScrobblePct: number | null) {
+    const epNum = ep.episode_number ?? null
     setTorrentSeason(seasonNumber)
-    setTorrentEpisode(ep.episode_number ?? null)
+    setTorrentEpisode(epNum)
+
     if (epScrobblePct != null && epScrobblePct > 0) {
       setResumePercent(epScrobblePct)
       setResumeModalOpen(true)
       return
     }
+
+    // Bypass TorrentDialog when a local file exists for this episode
+    const epLocalSrc = epNum != null ? findLocalEpisodeSource(seasonNumber, epNum) : null
+    if (epLocalSrc && epNum != null) {
+      handleLocalEpisodePlayback(epLocalSrc, seasonNumber, epNum, null).catch(console.error)
+      return
+    }
+
     setResumePercent(null)
     setTorrentOpen(true)
   }
@@ -155,38 +172,90 @@ export default function DetailViewPage() {
 
   function handleBack() { navigate(-1) }
 
+  function localStreamUrl(source: SourceRow): string {
+    // Include the real filename in the URL path so mpv picks the right demuxer
+    // from the file extension (.mkv, .mp4, etc.). The backend ignores this suffix
+    // and resolves the file via source_id only.
+    const fname = source.file_path?.split('/').pop() ?? 'video'
+    return `${BASE_URL}/api/v1/library/sources/${source.id}/stream/${encodeURIComponent(fname)}`
+  }
+
+  // Play a local source via the stream endpoint (supports Range / seeking in mpv).
   async function handlePlaySource(source: SourceRow) {
-    const playableSource = source.file_path || source.url
-    if (!playableSource) return
-    const navState = {
-      source: playableSource,
+    if (!source.id) return
+    const streamUrl = localStreamUrl(source)
+    await handleTorrentStreamReady({
+      source: streamUrl,
+      local_source: streamUrl,
+      session_id: null,
       title,
-      isStream: source.source_type !== 'local',
+      isStream: true,
       media_kind: mediaKind,
-      year: year ?? undefined,
-      tmdb_id: media?.tmdb_id ?? detail?.tmdb_id ?? undefined,
-      item: media || undefined,
-      sourceType: source.source_type,
-    }
-    try {
-      const result = await playMedia({
-        source: playableSource,
-        title,
-        media_kind: mediaKind,
-        is_stream: source.source_type !== 'local',
-        year: year ?? undefined,
-        tmdb_id: media?.tmdb_id ?? detail?.tmdb_id ?? undefined,
-        media_payload: media || undefined,
-        source_type: source.source_type,
-      })
-      // Desktop (VLC) mode — VLC window is already open, no need to navigate away.
-      if (result.player_mode === 'desktop') return
-      // Thin-client (in-browser) mode — navigate to the playback page.
-      navigate('/playback', { state: { ...navState, alreadyStarted: true } })
-    } catch {
-      // On error fall through to playback page so user sees an error state.
-      navigate('/playback', { state: navState })
-    }
+      tmdb_id: tmdbId,
+      year,
+      season: null,
+      episode: null,
+      resumePercent: null,
+    })
+  }
+
+  // Launch local playback directly, bypassing TorrentDialog.
+  async function handleLocalPlayback(source: SourceRow, resumePct: number | null) {
+    const streamUrl = localStreamUrl(source)
+    await handleTorrentStreamReady({
+      source: streamUrl,
+      local_source: streamUrl,
+      session_id: null,
+      title,
+      isStream: true,
+      media_kind: mediaKind,
+      tmdb_id: tmdbId,
+      year,
+      season: null,
+      episode: null,
+      resumePercent: resumePct,
+    })
+  }
+
+  // Find the local source for a specific season+episode by matching the filename.
+  // Handles S01E01, S1E1, s01e01, 1x01 variants with proper boundary guards.
+  function findLocalEpisodeSource(season: number, episode: number): SourceRow | null {
+    const re = new RegExp(
+      `(?:[Ss]0*${season}[Ee]0*${episode}|\\b${season}[xX]0*${episode})(?!\\d)`,
+      'i',
+    )
+    return (
+      sources.find(
+        (s) =>
+          s.source_type === 'local' &&
+          s.status !== 'missing' &&
+          !!s.file_path &&
+          re.test(s.file_path.split('/').pop() ?? ''),
+      ) ?? null
+    )
+  }
+
+  // Launch local playback for a specific episode, bypassing TorrentDialog.
+  async function handleLocalEpisodePlayback(
+    source: SourceRow,
+    season: number,
+    episode: number,
+    resumePct: number | null,
+  ) {
+    const streamUrl = localStreamUrl(source)
+    await handleTorrentStreamReady({
+      source: streamUrl,
+      local_source: streamUrl,
+      session_id: null,
+      title,
+      isStream: true,
+      media_kind: mediaKind,
+      tmdb_id: tmdbId,
+      year,
+      season,
+      episode,
+      resumePercent: resumePct,
+    })
   }
 
   async function handleTorrentStreamReady(payload: {
@@ -253,11 +322,11 @@ export default function DetailViewPage() {
 
   const posterUrl =
     media?.poster_path ? `${IMAGE_BASE}/w500${media.poster_path}` :
-    detail?.poster_path ? `${IMAGE_BASE}/w500${detail.poster_path}` :
+    detail?.poster_url ??
     richDetail?.poster?.url ?? null
   const backdropUrl =
     media?.backdrop_path ? `${IMAGE_BASE}/w1280${media.backdrop_path}` :
-    detail?.backdrop_path ? `${IMAGE_BASE}/w1280${detail.backdrop_path}` :
+    detail?.backdrop_url ??
     richDetail?.backdrop?.url ?? null
 
   const collectionPayload: CollectionItemPayload | undefined = tmdbId ? {
@@ -332,17 +401,29 @@ export default function DetailViewPage() {
           <button
             onClick={() => {
               if (isShow && showResumeInfo) {
-                setTorrentSeason(showResumeInfo.season)
-                setTorrentEpisode(showResumeInfo.episode)
-                if (showResumeInfo.isScrobbled) {
-                  setResumePercent(showResumeInfo.progress)
+                const { season, episode: epNum, isScrobbled, progress } = showResumeInfo
+                setTorrentSeason(season)
+                setTorrentEpisode(epNum)
+                if (isScrobbled) {
+                  setResumePercent(progress)
                   setResumeModalOpen(true)
-                  return  // modal decides whether to open TorrentDialog
+                  return  // modal decides next step
+                }
+                // No scrobble — play immediately via local source if available
+                const epSrc = epNum != null ? findLocalEpisodeSource(season, epNum) : null
+                if (epSrc && epNum != null) {
+                  handleLocalEpisodePlayback(epSrc, season, epNum, null).catch(console.error)
+                  return
                 }
               } else if (!isShow && isMovieResumeAvailable && movieResumeProgress != null) {
                 setResumePercent(movieResumeProgress)
                 setResumeModalOpen(true)
                 return  // modal decides whether to open TorrentDialog
+              }
+              // Movies with a local source skip the TorrentDialog entirely
+              if (!isShow && localSource) {
+                handleLocalPlayback(localSource, null).catch(console.error)
+                return
               }
               setResumePercent(null)
               setTorrentOpen(true)
@@ -592,32 +673,51 @@ export default function DetailViewPage() {
             )}
           </div>
 
-          {/* Season selector — accent pill tabs */}
-          <div
-            className="flex gap-2 overflow-x-auto pb-1"
-            style={{ scrollbarWidth: 'none', msOverflowStyle: 'none', marginBottom: '28px' }}
-          >
-            {seasonsQuery.data.seasons.map((season: SeasonDetail, idx: number) => (
-              <button
-                key={season.season_number}
-                onClick={() => setSelectedSeasonIdx(idx)}
-                className="flex-shrink-0 flex items-center gap-1.5 rounded-full font-semibold text-sm transition-all duration-200 cursor-pointer"
-                style={{
-                  padding: '7px 18px',
-                  background: idx === selectedSeasonIdx ? 'var(--accent)' : 'rgba(255,255,255,0.06)',
-                  border: idx === selectedSeasonIdx ? 'none' : '1px solid rgba(255,255,255,0.10)',
-                  color: idx === selectedSeasonIdx ? '#000' : 'rgba(255,255,255,0.55)',
-                  boxShadow: idx === selectedSeasonIdx ? '0 0 14px rgba(1,180,228,0.35)' : undefined,
-                }}
-              >
-                <span>S{String(season.season_number).padStart(2, '0')}</span>
-                {season.episode_count != null && (
-                  <span className="opacity-70" style={{ fontSize: 11 }}>
-                    · {season.episode_count}ep
-                  </span>
-                )}
-              </button>
-            ))}
+          {/* Season selector — accent pill tabs with scroll chevrons */}
+          <div className="relative flex items-center gap-2" style={{ marginBottom: '28px' }}>
+            <button
+              onClick={() => seasonScrollRef.current?.scrollBy({ left: -300, behavior: 'smooth' })}
+              className="flex-shrink-0 flex items-center justify-center rounded-full transition-colors cursor-pointer hover:bg-white/10"
+              style={{ width: 32, height: 32, color: 'rgba(255,255,255,0.55)' }}
+            >
+              <ChevronLeft size={25} />
+            </button>
+
+            <div
+              ref={seasonScrollRef}
+              className="flex gap-2 overflow-x-auto pb-1"
+              style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+            >
+              {seasonsQuery.data.seasons.map((season: SeasonDetail, idx: number) => (
+                <button
+                  key={season.season_number}
+                  onClick={() => setSelectedSeasonIdx(idx)}
+                  className="flex-shrink-0 flex items-center gap-1.5 rounded-full font-semibold text-sm transition-all duration-200 cursor-pointer"
+                  style={{
+                    padding: '7px 18px',
+                    background: idx === selectedSeasonIdx ? 'var(--accent)' : 'rgba(255,255,255,0.06)',
+                    border: idx === selectedSeasonIdx ? 'none' : '1px solid rgba(255,255,255,0.10)',
+                    color: idx === selectedSeasonIdx ? '#000' : 'rgba(255,255,255,0.55)',
+                    boxShadow: idx === selectedSeasonIdx ? '0 0 14px rgba(1,180,228,0.35)' : undefined,
+                  }}
+                >
+                  <span>S{String(season.season_number).padStart(2, '0')}</span>
+                  {season.episode_count != null && (
+                    <span className="opacity-70" style={{ fontSize: 11 }}>
+                      · {season.episode_count}ep
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+
+            <button
+              onClick={() => seasonScrollRef.current?.scrollBy({ left: 300, behavior: 'smooth' })}
+              className="flex-shrink-0 flex items-center justify-center rounded-full transition-colors cursor-pointer hover:bg-white/10"
+              style={{ width: 32, height: 32, color: 'rgba(255,255,255,0.55)' }}
+            >
+              <ChevronRight size={25} />
+            </button>
           </div>
 
           {/* Episode cards */}
@@ -647,6 +747,11 @@ export default function DetailViewPage() {
                   (progressEp?.scrobble_progress != null &&
                    progressEp.scrobble_progress > 0)
                     ? progressEp.scrobble_progress
+                    : null
+                // Local source availability — drives play button style and HDD badge
+                const epLocalSrc =
+                  ep.episode_number != null
+                    ? findLocalEpisodeSource(seasonNum, ep.episode_number)
                     : null
 
                 return (
@@ -709,6 +814,16 @@ export default function DetailViewPage() {
                           <CheckCircle2 size={18} fill="rgba(0,0,0,0.5)" />
                         </div>
                       )}
+
+                      {/* Local file indicator */}
+                      {epLocalSrc && (
+                        <div
+                          className="absolute bottom-2 right-2 text-cyan-400"
+                          title="Local file available"
+                        >
+                          <HardDrive size={14} />
+                        </div>
+                      )}
                     </div>
 
                     {/* Metadata + Play */}
@@ -764,7 +879,9 @@ export default function DetailViewPage() {
                           marginRight: '20px',
                         }}
                       >
-                        <Play size={14} fill="currentColor" />
+                        {epLocalSrc
+                          ? <HardDrive size={14} />
+                          : <Play size={14} fill="currentColor" />}
                         {epScrobblePct != null ? 'Resume' : 'Play'}
                       </button>
                     </div>
@@ -997,6 +1114,16 @@ export default function DetailViewPage() {
               <button
                 onClick={() => {
                   setResumeModalOpen(false)
+                  if (isShow && torrentSeason != null && torrentEpisode != null) {
+                    const epSrc = findLocalEpisodeSource(torrentSeason, torrentEpisode)
+                    if (epSrc) {
+                      handleLocalEpisodePlayback(epSrc, torrentSeason, torrentEpisode, resumePercent).catch(console.error)
+                      return
+                    }
+                  } else if (!isShow && localSource) {
+                    handleLocalPlayback(localSource, resumePercent).catch(console.error)
+                    return
+                  }
                   setTorrentOpen(true)
                 }}
                 className="w-full py-3 rounded-xl text-white font-semibold text-base transition-all hover:brightness-110"
@@ -1008,6 +1135,16 @@ export default function DetailViewPage() {
                 onClick={() => {
                   setResumePercent(null)
                   setResumeModalOpen(false)
+                  if (isShow && torrentSeason != null && torrentEpisode != null) {
+                    const epSrc = findLocalEpisodeSource(torrentSeason, torrentEpisode)
+                    if (epSrc) {
+                      handleLocalEpisodePlayback(epSrc, torrentSeason, torrentEpisode, null).catch(console.error)
+                      return
+                    }
+                  } else if (!isShow && localSource) {
+                    handleLocalPlayback(localSource, null).catch(console.error)
+                    return
+                  }
                   setTorrentOpen(true)
                 }}
                 className="w-full py-3 rounded-xl font-semibold text-base border transition-all hover:border-white/20 hover:text-white"

@@ -27,40 +27,40 @@ class TorrentResult:
 
 @dataclass(slots=True)
 class TorrentSearchResponse:
-    """Aggregated torrent search response split by cache status."""
+    """Aggregated torrent search response.
 
-    cached: List[TorrentResult] = field(default_factory=list)
-    uncached: List[TorrentResult] = field(default_factory=list)
-    query: str = ""
+    filtered   — results that passed the RD-exclusion filter (safe to send to RD).
+    unfiltered — results before the RD-exclusion step (broader, but some may fail RD).
+    Both lists are already sorted: quality bracket first (4K→1080p→720p→Unknown),
+    then file size descending within each bracket.
+    """
+
+    filtered:   List[TorrentResult] = field(default_factory=list)
+    unfiltered: List[TorrentResult] = field(default_factory=list)
+    query:      str = ""
     media_type: str = ""
-    total_results: int = 0
-
-    @property
-    def all_results(self) -> List[TorrentResult]:
-        return self.cached + self.uncached
 
     def to_dict(self) -> dict:
         def _serialize(t: TorrentResult) -> dict:
             return {
-                "name": t.name,
-                "magnet": t.magnet,
-                "hash": t.hash,
-                "seeders": t.seeders,
-                "leechers": t.leechers,
-                "size": t.size,
-                "size_bytes": t.size_bytes,
+                "name":        t.name,
+                "magnet":      t.magnet,
+                "hash":        t.hash,
+                "seeders":     t.seeders,
+                "leechers":    t.leechers,
+                "size":        t.size,
+                "size_bytes":  t.size_bytes,
                 "source_site": t.source_site,
-                "quality": t.quality,
-                "is_cached": t.is_cached,
-                "uploader": t.uploader,
-                "date": t.date,
+                "quality":     t.quality,
+                "is_cached":   t.is_cached,
+                "uploader":    t.uploader,
+                "date":        t.date,
                 "match_score": round(t.match_score, 3),
             }
 
         return {
-            "cached": [_serialize(t) for t in self.cached],
-            "uncached": [_serialize(t) for t in self.uncached],
-            "query": self.query,
+            "filtered":   [_serialize(t) for t in self.filtered],
+            "unfiltered": [_serialize(t) for t in self.unfiltered],
+            "query":      self.query,
             "media_type": self.media_type,
-            "total_results": self.total_results,
         }

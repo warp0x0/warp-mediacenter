@@ -13,8 +13,6 @@ function buildScrobbleContext(pb: PendingPlayback): PlayerScrobbleRequest | null
   }
 
   if (mediaType === 'episode') {
-    // Trakt episode scrobble: identify the episode by season+number,
-    // and the show by its title/year/ids (tmdb/trakt are show-level IDs).
     return {
       session_id: pb.session_id ?? null,
       media_type: 'episode',
@@ -27,7 +25,6 @@ function buildScrobbleContext(pb: PendingPlayback): PlayerScrobbleRequest | null
     }
   }
 
-  // Movie: identify by title/year/ids
   return {
     session_id: pb.session_id ?? null,
     media_type: 'movie',
@@ -53,22 +50,17 @@ export function usePlaybackScrobble() {
 
       // Detect new session: session_id changed while we had an active one
       if (sessionId && sessionId !== activeSessionIdRef.current) {
-        // Fire stop for the previous session if it was in progress
         if (scrobbleStartedRef.current && !scrobbleStopSentRef.current && playbackRef.current) {
           scrobbleStopSentRef.current = true
           const ctx = buildScrobbleContext(playbackRef.current)
           if (ctx) void scrobbleStop({ ...ctx, progress: 0 })
         }
-        // Reset for new session
         playbackRef.current = null
         scrobbleStartedRef.current = false
         scrobbleStopSentRef.current = false
         activeSessionIdRef.current = sessionId
       }
 
-      // Error state: file failed to load (bad format, network error, etc.).
-      // Reset refs so the next successful file starts with a clean slate.
-      // Do NOT fire scrobbleStop — no playback ever started.
       if (status.state === 'error') {
         playbackRef.current = null
         scrobbleStartedRef.current = false
@@ -77,7 +69,6 @@ export function usePlaybackScrobble() {
       }
 
       if (status.state === 'playing') {
-        // Fetch playback metadata the first time we see a playing state
         if (!playbackRef.current) {
           try {
             const pb = await getPendingPlayback()
@@ -97,6 +88,9 @@ export function usePlaybackScrobble() {
         }
       }
 
+      // ended / stopped = mpv window closed or playback explicitly stopped.
+      // stopPreloadSession covers both RD and libtorrent paths — libtorrent sessions
+      // are now registered in PreloadSessionManager under pb.session_id.
       if (status.state === 'ended' || status.state === 'stopped') {
         if (scrobbleStartedRef.current && !scrobbleStopSentRef.current) {
           scrobbleStopSentRef.current = true
@@ -109,15 +103,12 @@ export function usePlaybackScrobble() {
             if (pb.session_id) void stopPreloadSession(pb.session_id).catch(() => {})
           }
         }
-        // Reset ALL refs so the next session starts clean.
         playbackRef.current = null
         activeSessionIdRef.current = null
         scrobbleStartedRef.current = false
         scrobbleStopSentRef.current = false
       }
 
-      // Idle state: fire scrobbleStop if scrobble was started but stop not yet sent,
-      // then reset for the next session.
       if (status.state === 'idle') {
         if (scrobbleStartedRef.current && !scrobbleStopSentRef.current) {
           scrobbleStopSentRef.current = true

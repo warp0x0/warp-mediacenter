@@ -1,4 +1,3 @@
-import { useRef, useEffect } from 'react'
 import { Heart, Plus, CheckCircle2 } from 'lucide-react'
 import { useIsLiked, useIsWishlisted } from '@/hooks/useCollections'
 import type { MediaItem, CollectionItemPayload } from '@/lib/types'
@@ -25,19 +24,6 @@ export default function CollectionButtons({ item, iconSize = 14 }: CollectionBut
   const tmdbId = item.tmdb_id ? String(item.tmdb_id) : null
   const { isLiked, toggle: toggleLike } = useIsLiked(tmdbId)
   const { isWishlisted, toggle: toggleWishlist } = useIsWishlisted(tmdbId)
-  const containerRef = useRef<HTMLDivElement>(null)
-
-  // Attach a native pointerdown listener so it fires at DOM level — before
-  // framer-motion's own native pointerdown listener on the parent motion.div.
-  // React synthetic event stopPropagation cannot reach native listeners added
-  // via addEventListener, which is how framer-motion tracks taps.
-  useEffect(() => {
-    const el = containerRef.current
-    if (!el) return
-    const stopNative = (e: PointerEvent) => e.stopPropagation()
-    el.addEventListener('pointerdown', stopNative)
-    return () => el.removeEventListener('pointerdown', stopNative)
-  }, [])
 
   if (!tmdbId) return null
 
@@ -50,13 +36,20 @@ export default function CollectionButtons({ item, iconSize = 14 }: CollectionBut
 
   return (
     <div
-      ref={containerRef}
       data-collection-btn
       className="absolute top-[clamp(4px,0.31vw,8px)] left-[clamp(4px,0.31vw,8px)] flex flex-col gap-[clamp(3px,0.2vw,5px)] z-10"
+      onClick={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
+      onPointerDown={(e) => e.stopPropagation()}
+      onDoubleClick={(e) => e.stopPropagation()}
     >
       {/* Liked */}
       <button
-        onClick={() => toggleLike(payload)}
+        type="button"
+        onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleLike(payload) }}
+        onMouseDown={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
+        onDoubleClick={(e) => e.stopPropagation()}
         className={`flex items-center justify-center rounded-full backdrop-blur-sm transition-all duration-150 cursor-pointer ${
           isLiked
             ? 'opacity-100 bg-red-500/25 border border-red-500/60'
@@ -74,7 +67,11 @@ export default function CollectionButtons({ item, iconSize = 14 }: CollectionBut
 
       {/* Wishlist */}
       <button
-        onClick={() => toggleWishlist(payload)}
+        type="button"
+        onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleWishlist(payload) }}
+        onMouseDown={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
+        onDoubleClick={(e) => e.stopPropagation()}
         className={`flex items-center justify-center rounded-full backdrop-blur-sm transition-all duration-150 cursor-pointer ${
           isWishlisted
             ? 'opacity-100 bg-emerald-500/25 border border-emerald-500/60'

@@ -6,6 +6,7 @@ import DiscoverSubTab from '@/pages/library/DiscoverSubTab'
 import LocalSubTab from '@/pages/library/LocalSubTab'
 
 type Tab = 'liked' | 'wishlist' | 'discover' | 'local'
+type MediaType = 'movie' | 'show'
 
 const SUB_TABS: { id: Tab; label: string; Icon: React.ElementType }[] = [
   { id: 'liked',    label: 'Liked',     Icon: Heart     },
@@ -17,8 +18,12 @@ const SUB_TABS: { id: Tab; label: string; Icon: React.ElementType }[] = [
 export default function LibraryPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const activeTab = (searchParams.get('tab') ?? 'liked') as Tab
+  const mediaType = (searchParams.get('type') ?? 'movie') as MediaType
 
-  const setTab = (tab: Tab) => setSearchParams({ tab }, { replace: true })
+  const setTab = (tab: Tab) =>
+    setSearchParams({ tab, type: mediaType }, { replace: true })
+  const setMediaType = (type: MediaType) =>
+    setSearchParams({ tab: activeTab, type }, { replace: true })
 
   return (
     <div
@@ -73,10 +78,10 @@ export default function LibraryPage() {
 
       {/* Active sub-tab content */}
       <div className="flex-1 min-h-0 overflow-hidden">
-        {activeTab === 'liked'    && <LikedSubTab />}
-        {activeTab === 'wishlist' && <WishlistSubTab />}
-        {activeTab === 'discover' && <DiscoverSubTab />}
-        {activeTab === 'local'    && <LocalSubTab />}
+        {activeTab === 'liked'    && <LikedSubTab    mediaType={mediaType} setMediaType={setMediaType} />}
+        {activeTab === 'wishlist' && <WishlistSubTab mediaType={mediaType} setMediaType={setMediaType} />}
+        {activeTab === 'discover' && <DiscoverSubTab mediaType={mediaType} setMediaType={setMediaType} />}
+        {activeTab === 'local'    && <LocalSubTab    mediaType={mediaType} setMediaType={setMediaType} />}
       </div>
     </div>
   )

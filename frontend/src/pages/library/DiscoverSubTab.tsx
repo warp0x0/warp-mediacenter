@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react'
+import { useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useCatalog } from '@/hooks/useCatalog'
@@ -136,9 +136,13 @@ function DiscoverRow({ title, items, isLoading, isError, seeMorePath, onNavigate
 // DiscoverSubTab
 // ---------------------------------------------------------------------------
 
-export default function DiscoverSubTab() {
+interface Props {
+  mediaType: 'movie' | 'show'
+  setMediaType: (t: 'movie' | 'show') => void
+}
+
+export default function DiscoverSubTab({ mediaType, setMediaType }: Props) {
   const navigate = useNavigate()
-  const [mediaType, setMediaType] = useState<'movie' | 'show'>('movie')
 
   // 7 standard Trakt catalog sections
   const trending    = useCatalog('trakt', 'trending',    mediaType, undefined, 20)

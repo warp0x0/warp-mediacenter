@@ -8,13 +8,15 @@ import type { ScanStatusResponse } from '@/lib/types'
 // Types
 // ---------------------------------------------------------------------------
 
-type PanelStatus = 'idle' | 'scanning' | 'complete' | 'error'
+type PanelStatus = 'idle' | 'scanning' | 'cancelling' | 'complete' | 'error'
 
 interface PanelState {
   folder: string | null
   status: PanelStatus
   logs: string[]
   error: string | null
+  filesDone: number
+  filesTotal: number
 }
 
 const defaultPanel = (): PanelState => ({
@@ -22,6 +24,8 @@ const defaultPanel = (): PanelState => ({
   status: 'idle',
   logs: [],
   error: null,
+  filesDone: 0,
+  filesTotal: 0,
 })
 
 interface Props {
@@ -77,6 +81,8 @@ function ScanPanel({ label, Icon, state, isOtherScanning, onSelectFolder, onScan
           padding: '8px 12px',
           borderColor: state.folder ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.08)',
           background: state.folder ? 'rgba(255,255,255,0.04)' : 'transparent',
+          // width: '2000px',
+          // height: '140px'
         }}
       >
         <Folder size={14} className="text-amber-400/70 flex-shrink-0" />
@@ -109,6 +115,43 @@ function ScanPanel({ label, Icon, state, isOtherScanning, onSelectFolder, onScan
           </>
         )}
       </button>
+
+      {/* Progress bar */}
+      {(state.status === 'scanning' || state.status === 'cancelling' || state.status === 'complete') && (
+        <div>
+          <div className="flex items-center justify-between mb-1" style={{ fontSize: 10 }}>
+            <span className="text-white/40">
+              {state.status === 'complete'
+                ? `Done — ${state.filesTotal} file${state.filesTotal !== 1 ? 's' : ''}`
+                : state.filesTotal > 0
+                  ? `${state.filesDone} / ${state.filesTotal} files`
+                  : 'Scanning…'}
+            </span>
+            {state.filesTotal > 0 && (
+              <span className="text-white/40">
+                {Math.round((state.filesDone / state.filesTotal) * 100)}%
+              </span>
+            )}
+          </div>
+          <div className="h-1 rounded-full bg-white/8 overflow-hidden">
+            {state.filesTotal > 0 ? (
+              <div
+                className="h-full rounded-full transition-all duration-500"
+                style={{
+                  width: `${Math.round((state.filesDone / state.filesTotal) * 100)}%`,
+                  background: state.status === 'complete' ? '#4ade80' : 'var(--accent)',
+                }}
+              />
+            ) : (
+              /* indeterminate shimmer while file count not yet known */
+              <div
+                className="h-full w-1/3 rounded-full animate-pulse"
+                style={{ background: 'var(--accent)', opacity: 0.6 }}
+              />
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Log output */}
       <div
@@ -146,11 +189,11 @@ export default function ScanDialog({ open, onClose, onAddToLibrary }: Props) {
   const [browserOpen, setBrowserOpen] = useState(false)
   const [browserTarget, setBrowserTarget] = useState<'movie' | 'show'>('movie')
 
-  const activePanel = moviePanel.status === 'scanning' ? 'movie'
-    : showPanel.status === 'scanning' ? 'show'
+  const activePanel = (moviePanel.status === 'scanning' || moviePanel.status === 'cancelling') ? 'movie'
+    : (showPanel.status === 'scanning' || showPanel.status === 'cancelling') ? 'show'
     : null
 
-  // Poll scan status while a panel is scanning
+  // Poll scan status while a panel is scanning or cancelling
   useEffect(() => {
     if (!activePanel) return
 
@@ -161,27 +204,42 @@ export default function ScanDialog({ open, onClose, onAddToLibrary }: Props) {
       try {
         const status = await apiGet<ScanStatusResponse>('/api/v1/settings/library/scan/status')
 
-        // Append any new log lines
         const newLogs = (status.logs ?? []).slice(lastLogCount)
         lastLogCount = status.logs?.length ?? 0
+        const filesDone = status.files_done ?? 0
+        const filesTotal = status.files_total ?? 0
 
         if (status.message === 'complete') {
           setPanel((prev) => ({
             ...prev,
             status: 'complete',
             logs: [...prev.logs, ...newLogs],
+            filesDone: filesTotal,
+            filesTotal,
           }))
           clearInterval(interval)
+        } else if (status.message === 'cancelled') {
+          clearInterval(interval)
+          setMoviePanel(defaultPanel())
+          setShowPanel(defaultPanel())
+          onClose()
         } else if (status.message.startsWith('error')) {
           setPanel((prev) => ({
             ...prev,
             status: 'error',
             error: status.message.replace(/^error:\s*/i, ''),
             logs: [...prev.logs, ...newLogs],
+            filesDone,
+            filesTotal,
           }))
           clearInterval(interval)
-        } else if (newLogs.length > 0) {
-          setPanel((prev) => ({ ...prev, logs: [...prev.logs, ...newLogs] }))
+        } else {
+          setPanel((prev) => ({
+            ...prev,
+            logs: newLogs.length > 0 ? [...prev.logs, ...newLogs] : prev.logs,
+            filesDone,
+            filesTotal,
+          }))
         }
       } catch {
         // silently ignore poll errors
@@ -189,7 +247,7 @@ export default function ScanDialog({ open, onClose, onAddToLibrary }: Props) {
     }, 1000)
 
     return () => clearInterval(interval)
-  }, [activePanel])
+  }, [activePanel, onClose])
 
   const handleScanNow = useCallback(
     async (kind: 'movie' | 'show') => {
@@ -229,10 +287,29 @@ export default function ScanDialog({ open, onClose, onAddToLibrary }: Props) {
     setShowPanel(defaultPanel())
   }
 
-  const handleClose = () => {
-    handleReset()
-    onClose()
-  }
+  const handleClose = useCallback(async () => {
+    const scanningPanel =
+      moviePanel.status === 'scanning' ? 'movie'
+      : showPanel.status === 'scanning' ? 'show'
+      : null
+
+    if (scanningPanel) {
+      // Mark panel as cancelling — keeps poll loop alive to detect 'cancelled'
+      const setPanel = scanningPanel === 'movie' ? setMoviePanel : setShowPanel
+      setPanel((prev) => ({ ...prev, status: 'cancelling' }))
+      try {
+        await apiPost('/api/v1/settings/library/scan/cancel', {})
+      } catch {
+        // If the cancel call fails, close immediately to avoid being stuck
+        handleReset()
+        onClose()
+      }
+      // Don't close here — poll loop closes when backend reports 'cancelled'
+    } else {
+      handleReset()
+      onClose()
+    }
+  }, [moviePanel.status, showPanel.status, onClose])
 
   const handleAdd = () => {
     handleReset()
@@ -246,7 +323,7 @@ export default function ScanDialog({ open, onClose, onAddToLibrary }: Props) {
       <div
         className="fixed inset-0 z-[60] flex items-center justify-center"
         style={{ background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(8px)' }}
-        onClick={handleClose}
+        onClick={moviePanel.status === 'cancelling' || showPanel.status === 'cancelling' ? undefined : handleClose}
       >
         <div
           className="flex flex-col border border-white/10 rounded-2xl shadow-2xl overflow-hidden"
@@ -298,12 +375,27 @@ export default function ScanDialog({ open, onClose, onAddToLibrary }: Props) {
             className="flex-shrink-0 flex items-center justify-end gap-3 border-t border-white/8"
             style={{ padding: '14px 24px' }}
           >
-            <button
-              onClick={handleClose}
-              className="px-5 py-2 rounded-lg text-sm font-medium text-white/60 hover:text-white/90 border border-white/10 hover:border-white/20 transition-colors cursor-pointer"
-            >
-              Cancel
-            </button>
+            {(() => {
+              const isCancelling = moviePanel.status === 'cancelling' || showPanel.status === 'cancelling'
+              return (
+                <button
+                  onClick={isCancelling ? undefined : handleClose}
+                  disabled={isCancelling}
+                  className="px-5 py-2 rounded-lg text-sm font-medium border transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-60"
+                  style={{
+                    color: isCancelling ? 'rgba(255,255,255,0.4)' : undefined,
+                    borderColor: isCancelling ? 'rgba(255,255,255,0.08)' : undefined,
+                    width: '100px',
+                    height: '40px'
+                  }}
+                  {...(!isCancelling && {
+                    className: 'px-5 py-2 rounded-lg text-sm font-medium text-white/60 hover:text-white/90 border border-white/10 hover:border-white/20 transition-colors cursor-pointer',
+                  })}
+                >
+                  {isCancelling ? 'Stopping…' : 'Cancel'}
+                </button>
+              )
+            })()}
             <button
               onClick={handleAdd}
               disabled={!canAddToLibrary}
@@ -312,6 +404,8 @@ export default function ScanDialog({ open, onClose, onAddToLibrary }: Props) {
                 background: canAddToLibrary ? 'var(--accent)' : 'rgba(255,255,255,0.08)',
                 color: canAddToLibrary ? '#000' : 'rgba(255,255,255,0.4)',
                 border: canAddToLibrary ? 'none' : '1px solid rgba(255,255,255,0.10)',
+                width: '150px',
+                height: '40px'
               }}
             >
               Add to Library

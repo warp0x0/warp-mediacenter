@@ -78,12 +78,13 @@ interface Props {
   EmptyIcon: ElementType
   emptyTitle: string
   emptyHint: string
+  mediaType: MediaTypeFilter
+  setMediaType: (t: MediaTypeFilter) => void
 }
 
-export default function CollectionSubTab({ collectionType, EmptyIcon, emptyTitle, emptyHint }: Props) {
+export default function CollectionSubTab({ collectionType, EmptyIcon, emptyTitle, emptyHint, mediaType, setMediaType }: Props) {
   const navigate = useNavigate()
 
-  const [mediaType, setMediaType] = useState<MediaTypeFilter>('movie')
   const [sortValue, setSortValue] = useState<SortValue>('added_at-desc')
 
   const [items, setItems] = useState<UserCollection[]>([])

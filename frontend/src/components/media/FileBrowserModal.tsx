@@ -150,21 +150,22 @@ export default function FileBrowserModal({ open, title = 'Select Folder', onSele
             <Folder size={14} className="text-amber-400/60 flex-shrink-0" />
             <span className="text-white/50 text-xs truncate">{currentPath || '~'}</span>
           </div>
-          <div className="flex gap-2 flex-shrink-0">
+          <div className="flex gap-3 flex-shrink-0">
             <button
               onClick={onClose}
-              className="px-4 py-2 rounded-lg text-sm font-medium text-white/60 hover:text-white/90 border border-white/10 hover:border-white/20 transition-colors cursor-pointer"
+              className="rounded-xl text-sm font-semibold text-white/60 hover:text-white hover:bg-white/8 border border-white/12 hover:border-white/25 transition-all duration-150 cursor-pointer"
+              style={{ minWidth: 110, height: 42, padding: '0 22px' }}
             >
               Cancel
             </button>
             <button
               onClick={() => { onSelect(currentPath); onClose() }}
               disabled={!currentPath}
-              className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-              style={{ background: 'var(--accent)', color: '#000' }}
+              className="flex items-center justify-center gap-2 rounded-xl text-sm font-semibold transition-all duration-150 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed hover:brightness-110"
+              style={{ minWidth: 110, height: 42, padding: '0 22px', background: 'var(--accent)', color: '#000' }}
             >
-              <Check size={14} />
-              Select
+              <Check size={15} />
+              Select Folder
             </button>
           </div>
         </div>

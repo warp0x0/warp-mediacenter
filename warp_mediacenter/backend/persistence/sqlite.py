@@ -34,6 +34,7 @@ def connect(path: Optional[Path] = None, *, apply_migrations: bool = True) -> sq
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 30000")  # 30 s — tolerate parallel scanner writes
     if apply_migrations:
         migrate(conn)
     return conn
@@ -775,18 +776,37 @@ def update_source_metadata(
 def mark_sources_missing(
     connection: sqlite3.Connection,
     known_paths: Sequence[str],
+    scan_roots: Optional[Sequence[str]] = None,
 ) -> int:
     """Mark local sources whose files no longer exist as 'missing'.
+
+    When *scan_roots* is provided only sources whose file_path falls under one
+    of those directories are considered.  This prevents a partial scan (e.g.
+    scanning only the Hindi folder) from marking sources in other folders
+    (English, Bengali …) as missing.
 
     Returns the count of sources marked missing.
     """
     if not known_paths:
         return 0
     placeholders = ",".join("?" for _ in known_paths)
-    cursor = connection.execute(
-        f"UPDATE sources SET status = 'missing', last_checked = ? WHERE source_type = 'local' AND file_path NOT IN ({placeholders})",
-        [_utcnow(), *known_paths],
-    )
+    if scan_roots:
+        # Restrict to files whose path lives under one of the scanned roots.
+        root_clause = " OR ".join("file_path LIKE ?" for _ in scan_roots)
+        root_params = [str(r).rstrip("/") + "/%" for r in scan_roots]
+        cursor = connection.execute(
+            f"UPDATE sources SET status = 'missing', last_checked = ? "
+            f"WHERE source_type = 'local' "
+            f"AND file_path NOT IN ({placeholders}) "
+            f"AND ({root_clause})",
+            [_utcnow(), *known_paths, *root_params],
+        )
+    else:
+        cursor = connection.execute(
+            f"UPDATE sources SET status = 'missing', last_checked = ? "
+            f"WHERE source_type = 'local' AND file_path NOT IN ({placeholders})",
+            [_utcnow(), *known_paths],
+        )
     return cursor.rowcount
 
 

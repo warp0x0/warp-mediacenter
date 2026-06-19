@@ -1,4 +1,3 @@
-import { motion } from 'framer-motion'
 import { Star } from 'lucide-react'
 import { useTmdbEnrichment } from '@/hooks/useTmdbEnrichment'
 import CollectionButtons from './CollectionButtons'
@@ -16,15 +15,13 @@ export default function PosterCard({ item, onSelect, onNavigate }: PosterCardPro
   const year = item.year
 
   return (
-    <motion.div
-      whileHover={{ scale: 1.05 }}
-      whileTap={{ scale: 0.98 }}
-      transition={{ duration: 0.15, ease: 'easeOut' }}
+    <div
+      role="button"
+      tabIndex={0}
       onClick={() => onSelect(item)}
       onDoubleClick={() => onNavigate(item)}
-      tabIndex={0}
-      onFocus={(e) => { if (e.target === e.currentTarget) onSelect(item) }}
-      className="flex-shrink-0 flex flex-col gap-[clamp(4px,0.31vw,8px)] cursor-pointer rounded-[var(--card-radius)] focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary focus-visible:outline-none group"
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onSelect(item) }}
+      className="flex-shrink-0 flex flex-col gap-[clamp(4px,0.31vw,8px)] cursor-pointer rounded-[var(--card-radius)] focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary focus-visible:outline-none group transition-transform duration-150 ease-out hover:scale-105 active:scale-[0.98]"
       style={{ width: 'var(--poster-width)' }}
     >
       <div
@@ -73,6 +70,6 @@ export default function PosterCard({ item, onSelect, onNavigate }: PosterCardPro
           </p>
         )}
       </div>
-    </motion.div>
+    </div>
   )
 }

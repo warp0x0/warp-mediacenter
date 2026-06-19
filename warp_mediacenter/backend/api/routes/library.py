@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import json
+import mimetypes
+import re
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import FileResponse, Response, StreamingResponse
 
 from warp_mediacenter.backend.common.logging import get_logger
 from warp_mediacenter.backend.persistence import (
@@ -43,6 +47,21 @@ def _paginate(items: List[Dict[str, Any]], limit: int, offset: int, total: Optio
 def _row_to_dict(row) -> Dict[str, Any]:
     """Convert a sqlite3.Row to a dict."""
     return dict(row)
+
+
+def _resolve_title(conn, title_id: str):
+    """Look up a title by DB id or TMDb id.
+
+    Numeric strings are tried as a DB auto-increment id first; if that returns
+    nothing (e.g. the caller passed a large TMDb id like '97630') we fall back
+    to a TMDb id lookup so both id formats work transparently.
+    """
+    row = None
+    if title_id.isdigit():
+        row = get_title_by_id(conn, int(title_id))
+    if row is None:
+        row = get_title_by_tmdb(conn, title_id)
+    return row
 
 
 _VALID_LIBRARY_SORTS = {"title", "added_at", "year"}
@@ -102,11 +121,11 @@ async def list_shows(
 
     with db_connection() as conn:
         total_row = conn.execute(
-            f"SELECT COUNT(*) as cnt FROM titles WHERE type = 'tv'{extra}"
+            f"SELECT COUNT(*) as cnt FROM titles WHERE type IN ('tv', 'show'){extra}"
         ).fetchone()
         total = total_row["cnt"] if total_row else 0
         rows = conn.execute(
-            f"SELECT * FROM titles WHERE type = 'tv'{extra}"
+            f"SELECT * FROM titles WHERE type IN ('tv', 'show'){extra}"
             f" ORDER BY {sort_col} {order_dir} LIMIT ? OFFSET ?",
             (limit + 1, offset),
         ).fetchall()
@@ -132,10 +151,7 @@ async def list_recent(
 async def get_title(title_id: str) -> Dict[str, Any]:
     """Get title details by ID (numeric) or TMDb ID."""
     with db_connection() as conn:
-        if title_id.isdigit():
-            row = get_title_by_id(conn, int(title_id))
-        else:
-            row = get_title_by_tmdb(conn, title_id)
+        row = _resolve_title(conn, title_id)
 
         if row is None:
             raise HTTPException(status_code=404, detail="Title not found")
@@ -157,10 +173,7 @@ async def get_title_episodes(
 ) -> Dict[str, Any]:
     """Get episodes for a show, optionally filtered by season."""
     with db_connection() as conn:
-        if title_id.isdigit():
-            row = get_title_by_id(conn, int(title_id))
-        else:
-            row = get_title_by_tmdb(conn, title_id)
+        row = _resolve_title(conn, title_id)
 
         if row is None:
             raise HTTPException(status_code=404, detail="Title not found")
@@ -181,6 +194,87 @@ async def get_title_episodes(
     }
 
 
+@router.get("/sources/{source_id}/stream/{filename:path}")
+async def stream_local_source(source_id: int, filename: str, request: Request) -> Response:
+    """Stream a local file with full HTTP Range support for mpv seeking and resume.
+
+    The {filename} path suffix is ignored by the backend — it exists solely so
+    mpv sees the real file extension in the URL and picks the right demuxer.
+    The backend resolves the actual file from the source_id in the database.
+    """
+    with db_connection() as conn:
+        row = conn.execute(
+            "SELECT s.file_path "
+            "FROM sources s "
+            "WHERE s.id = ? AND s.source_type = 'local' AND s.status != 'missing'",
+            (source_id,),
+        ).fetchone()
+
+    if row is None or not row["file_path"]:
+        raise HTTPException(status_code=404, detail="Local source not found")
+
+    file_path = Path(row["file_path"])
+    if not file_path.is_file():
+        raise HTTPException(status_code=404, detail="File not found on disk")
+
+    file_size = file_path.stat().st_size
+    mime_type, _ = mimetypes.guess_type(file_path.name)
+    content_type = mime_type or "application/octet-stream"
+    disposition = f'inline; filename="{file_path.name}"'
+
+    range_header = request.headers.get("Range")
+    if range_header:
+        m = re.match(r"bytes=(\d+)-(\d*)", range_header)
+        if m:
+            start = int(m.group(1))
+            end = int(m.group(2)) if m.group(2) else file_size - 1
+            end = min(end, file_size - 1)
+            length = end - start + 1
+
+            async def _range_iter():
+                with open(file_path, "rb") as f:
+                    f.seek(start)
+                    remaining = length
+                    while remaining > 0:
+                        chunk = f.read(min(65536, remaining))
+                        if not chunk:
+                            break
+                        remaining -= len(chunk)
+                        yield chunk
+
+            return StreamingResponse(
+                _range_iter(),
+                status_code=206,
+                media_type=content_type,
+                headers={
+                    "Accept-Ranges": "bytes",
+                    "Content-Range": f"bytes {start}-{end}/{file_size}",
+                    "Content-Length": str(length),
+                    "Content-Disposition": disposition,
+                },
+            )
+
+    # Full-file response — still streams in chunks but reports full Content-Length
+    # so mpv can calculate seek positions for --start=X%.
+    async def _full_iter():
+        with open(file_path, "rb") as f:
+            while True:
+                chunk = f.read(65536)
+                if not chunk:
+                    break
+                yield chunk
+
+    return StreamingResponse(
+        _full_iter(),
+        media_type=content_type,
+        headers={
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(file_size),
+            "Content-Disposition": disposition,
+        },
+    )
+
+
 @router.get("/title/{title_id}/sources")
 async def get_title_sources(
     title_id: str,
@@ -188,10 +282,7 @@ async def get_title_sources(
 ) -> Dict[str, Any]:
     """Get sources for a title, optionally filtered by source_type."""
     with db_connection() as conn:
-        if title_id.isdigit():
-            row = get_title_by_id(conn, int(title_id))
-        else:
-            row = get_title_by_tmdb(conn, title_id)
+        row = _resolve_title(conn, title_id)
 
         if row is None:
             raise HTTPException(status_code=404, detail="Title not found")

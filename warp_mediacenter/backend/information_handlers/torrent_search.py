@@ -21,8 +21,10 @@ from warp_mediacenter.config.settings.torrent import (
 
 log = get_logger(__name__)
 
-_SIZE_RE = re.compile(r"([\d.]+)\s*(GB|MB|TB|KB)", re.IGNORECASE)
-_QUALITY_RE = re.compile(r"(2160p|4K|UHD|1080p|720p|480p|HDR|SDR|WEBRip|BluRay|BRRip|WEB-DL|HDTV|CAM|TS|TC|SCR)", re.IGNORECASE)
+_SIZE_RE = re.compile(r"([\d.]+)\s*(GiB|MiB|TiB|KiB|GB|MB|TB|KB)", re.IGNORECASE)
+# Only match resolution tokens — deliberately excludes format tags (BluRay, WEBRip, HDTV…)
+# that appear earlier in torrent names and would otherwise shadow the resolution.
+_RESOLUTION_RE = re.compile(r"\b(2160p|4K|UHD|1080p|720p|480p)\b", re.IGNORECASE)
 
 # TV-show patterns — used to exclude TV content when searching for movies
 _TV_PATTERN_RE = re.compile(
@@ -120,24 +122,30 @@ def _parse_size_bytes(size_str: str) -> int:
         return 0
     value = float(match.group(1))
     unit = match.group(2).upper()
-    multipliers = {"KB": 1024, "MB": 1024 ** 2, "GB": 1024 ** 3, "TB": 1024 ** 4}
+    multipliers = {
+        "KB": 1024, "KIB": 1024,
+        "MB": 1024 ** 2, "MIB": 1024 ** 2,
+        "GB": 1024 ** 3, "GIB": 1024 ** 3,
+        "TB": 1024 ** 4, "TIB": 1024 ** 4,
+    }
     return int(value * multipliers.get(unit, 1))
 
 
 def _extract_quality(name: str) -> str:
-    """Extract quality tag from torrent name.
+    """Extract resolution tag from torrent name.
 
-    Normalises '4K' and 'UHD' to '2160p' so the resolution-rank lookup
-    always uses a canonical key.
+    Uses a resolution-only regex so format tokens that precede the resolution
+    in a name (e.g. "Movie.BluRay.1080p") do not shadow the actual quality.
+    Returns a lowercase canonical string so _RESOLUTION_RANK lookups work
+    without any further normalisation.
     """
-    match = _QUALITY_RE.search(name)
+    match = _RESOLUTION_RE.search(name)
     if not match:
         return "unknown"
-    tag = match.group(1)
-    # Normalise aliases so _RESOLUTION_RANK has a single key to check
-    if tag.upper() in ("4K", "UHD"):
+    tag = match.group(1).upper()
+    if tag in ("4K", "UHD"):
         return "2160p"
-    return tag
+    return tag.lower()  # "1080p", "720p", "480p"
 
 
 def _fuzzy_score(torrent_name: str, query: str) -> float:
@@ -198,48 +206,30 @@ class TorrentSearchService:
             return TorrentSearchResponse(query=search_query, media_type=media_type)
 
         # ── filtering pipeline ──────────────────────────────────────────────
-        parsed   = self._parse_results(raw_results, search_query)
-        filtered = self._filter_non_video(parsed)            # drop games/apps/exes first
-        filtered = self._filter_by_min_seeders(filtered)
-        filtered = self._filter_by_fuzzy_match(filtered, query, year)
-        filtered = self._filter_by_media_type(filtered, media_type)
-        filtered = self._filter_rd_exclusions(filtered)
+        parsed = self._parse_results(raw_results, search_query)
+        base   = self._filter_non_video(parsed)
+        base   = self._filter_by_min_seeders(base)
+        base   = self._filter_by_fuzzy_match(base, query, year)
+        base   = self._filter_by_media_type(base, media_type)
 
-        # ── sort: resolution first, then file size ─────────────────────────
-        sorted_results = self._sort_results(filtered)
-
-        # ── RD cache check (best-effort, non-blocking) ─────────────────────
-        hashes = [r.hash for r in sorted_results if r.hash]
-        cached_hashes, cache_check_ok = (
-            self._check_cache_availability(hashes) if hashes else (set(), False)
-        )
-
-        rd_cached: List[TorrentResult] = []
-        rd_uncached: List[TorrentResult] = []
-        for r in sorted_results:
-            r.is_cached = r.hash in cached_hashes
-            if r.is_cached:
-                rd_cached.append(r)
-            else:
-                rd_uncached.append(r)
+        # unfiltered = pre-RD-exclusion (broader); filtered = after RD exclusions
+        unfiltered_results = self._sort_results(base)
+        filtered_results   = self._sort_results(self._filter_rd_exclusions(base))
 
         response = TorrentSearchResponse(
-            cached=rd_cached,
-            uncached=rd_uncached,
+            filtered=filtered_results,
+            unfiltered=unfiltered_results,
             query=search_query,
             media_type=media_type,
-            total_results=len(rd_cached) + len(rd_uncached),
         )
 
-        if cache_check_ok:
-            self._cache_results(search_query, media_type, response)
+        self._cache_results(search_query, media_type, response)
 
         log.info(
             "torrent_search_complete",
             query=search_query,
-            total=len(sorted_results),
-            rd_cached=len(rd_cached),
-            rd_uncached=len(rd_uncached),
+            filtered=len(filtered_results),
+            unfiltered=len(unfiltered_results),
         )
         return response
 
@@ -288,14 +278,13 @@ class TorrentSearchService:
     def _rebuild_response(self, cached_json: str, media_type: str) -> TorrentSearchResponse:
         """Rebuild TorrentSearchResponse from cached JSON."""
         data = json.loads(cached_json)
-        cached = [self._dict_to_result(t) for t in data.get("cached", [])]
-        uncached = [self._dict_to_result(t) for t in data.get("uncached", [])]
+        filtered   = [self._dict_to_result(t) for t in data.get("filtered", [])]
+        unfiltered = [self._dict_to_result(t) for t in data.get("unfiltered", [])]
         return TorrentSearchResponse(
-            cached=cached,
-            uncached=uncached,
+            filtered=filtered,
+            unfiltered=unfiltered,
             query=data.get("query", ""),
             media_type=media_type,
-            total_results=data.get("total_results", 0),
         )
 
     @staticmethod
@@ -489,9 +478,10 @@ class TorrentSearchService:
         Within each resolution bucket, prefer larger files (better encode quality).
         """
         def _sort_key(r: TorrentResult):
-            # Normalise the quality tag to get a rank (unknown → worst)
-            quality_norm = r.quality.upper().strip() if r.quality else ""
-            rank = _RESOLUTION_RANK.get(quality_norm, len(_RESOLUTION_RANK))
+            # _extract_quality already returns lowercase canonical tags ("2160p", "1080p", …)
+            # _RESOLUTION_RANK keys are lowercase — must NOT call .upper() here.
+            q = (r.quality or "").lower()
+            rank = _RESOLUTION_RANK.get(q, len(_RESOLUTION_RANK))
             # Negate size_bytes so that sort ascending == size descending
             return (rank, -r.size_bytes)
 

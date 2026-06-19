@@ -153,6 +153,9 @@ class StreamProxy:
         self._data_event = threading.Event()
         # Set once the download thread has received CDN response headers
         self._headers_ready = threading.Event()
+        # Optional callback for non-sequential piece availability (libtorrent path).
+        # Called with a byte offset; returns True if that byte is in a downloaded piece.
+        self._is_byte_available: Optional[callable] = None
 
         self._server: Optional[_ThreadedHTTPServer] = None
         self._server_thread: Optional[threading.Thread] = None
@@ -307,6 +310,7 @@ class StreamProxy:
 
     def stop(self) -> None:
         """Abort current download and delete the temp file."""
+        self._is_byte_available = None  # release any reference held by libtorrent callback
         with self._lock:
             self._stop_flag = True
             tmpfile = self._tmpfile
@@ -330,6 +334,68 @@ class StreamProxy:
             self._download_start = 0
         log.info("stream_proxy_stopped", deleted_file=tmpfile or "(none)")
 
+    def start_local(
+        self,
+        file_path: str,
+        total_size: int,
+        get_written: "Callable[[], int]",
+        is_done: "Callable[[], bool]",
+        is_byte_available: "Optional[Callable[[int], bool]]" = None,
+    ) -> str:
+        """Serve a local file that is being written by an external process (e.g. libtorrent).
+
+        Mirrors start() but skips the CDN download — a background thread polls
+        get_written() to advance _written so the same _stream_from stalling
+        logic works without any changes to the HTTP server code.
+
+        ``is_byte_available(byte_offset) -> bool`` is an optional callback for
+        non-sequential downloaders (libtorrent).  When provided it is consulted
+        in _wait_for() and _stream_from() so that pieces downloaded out of
+        order (tail moov atom, file header) can be served immediately without
+        waiting for the sequential watermark to reach their byte positions.
+        """
+        self.stop()
+
+        filename = os.path.basename(file_path)
+        ext = os.path.splitext(filename)[1].lower()
+
+        self._is_byte_available = is_byte_available
+
+        with self._lock:
+            self._cdn_url = ""          # no CDN — bypass the backward-seek CDN path
+            self._tmpfile = file_path
+            self._filename = filename
+            self._content_type = _EXT_TO_WKWEBVIEW_MIME.get(ext, "application/octet-stream")
+            self._total_size = total_size
+            self._download_start = 0
+            self._written = get_written()
+            self._max_served = 0
+            self._download_done = False
+            self._download_error = None
+            self._stop_flag = False
+        self._data_event.clear()
+        self._headers_ready.clear()
+
+        self._download_thread = threading.Thread(
+            target=self._local_poll_loop,
+            args=(get_written, is_done),
+            daemon=True,
+            name="local-file-poll",
+        )
+        self._download_thread.start()
+
+        # Total size is already known — unblock any caller waiting on headers.
+        self._headers_ready.set()
+
+        local = self.local_url
+        log.info(
+            "stream_proxy_local_started",
+            file=file_path,
+            local_url=local,
+            total_mb=total_size // (1024 * 1024),
+        )
+        return local
+
     def close(self) -> None:
         """Permanently shut down proxy (call once, when adapter is destroyed)."""
         self.stop()
@@ -340,6 +406,25 @@ class StreamProxy:
     # ------------------------------------------------------------------
     # Download loop (background thread)
     # ------------------------------------------------------------------
+
+    def _local_poll_loop(
+        self,
+        get_written: "Callable[[], int]",
+        is_done: "Callable[[], bool]",
+    ) -> None:
+        """Poll the external writer (libtorrent) and advance _written."""
+        while not self._stop_flag:
+            written = get_written()
+            done = is_done()
+            with self._lock:
+                self._written = written
+                if done:
+                    self._download_done = True
+            self._data_event.set()
+            if done:
+                log.info("stream_proxy_local_download_complete", written_mb=written // (1024 * 1024))
+                break
+            time.sleep(0.25)
 
     def _download_loop(self) -> None:
         url = self._cdn_url
@@ -486,9 +571,15 @@ class StreamProxy:
 
             def _wait_for(self, min_bytes: int, timeout: float = 60.0) -> bool:
                 deadline = time.time() + timeout
+                iba = proxy._is_byte_available
                 while time.time() < deadline:
                     _, _, _, written, done, stopped = self._snap()
                     if written >= min_bytes or done or stopped:
+                        return True
+                    # Non-sequential fallback: libtorrent may have the piece
+                    # at min_bytes even though the sequential watermark hasn't
+                    # reached it yet (tail moov atom, head file-header pieces).
+                    if iba and iba(min_bytes):
                         return True
                     time.sleep(0.05)
                 return False
@@ -688,6 +779,21 @@ class StreamProxy:
                     else:
                         read_sz = CHUNK
 
+                    # Pre-read gate: if we're at or beyond the sequential
+                    # watermark, only read when the piece is confirmed on disk.
+                    # Without this, libtorrent's pre-allocated (zero-filled)
+                    # file regions are read and served as valid data, causing
+                    # "Corrupt file" / HEVC decode errors in mpv.
+                    # For the CDN path (no is_byte_available), _written tracks
+                    # actual sequential bytes so cur >= written is a true stall.
+                    _, _, _, written, done, stopped = self._snap()
+                    cur = f.tell()
+                    if not done and not stopped and cur >= written:
+                        iba = proxy._is_byte_available
+                        if not (iba and iba(cur)):
+                            time.sleep(0.05)
+                            continue
+
                     data = f.read(read_sz)
                     if data:
                         self.wfile.write(data)
@@ -699,17 +805,19 @@ class StreamProxy:
                                 proxy._max_served = pos
                         continue
 
-                    # No data — check why
+                    # No data from read — OS hasn't flushed yet (CDN race) or
+                    # file is truly empty at this position.
                     _, _, _, written, done, stopped = self._snap()
                     cur = f.tell()
 
                     if done or stopped:
                         break
                     if cur >= written:
-                        # Ahead of download head — sleep briefly so this
-                        # thread doesn't busy-spin while waiting for the next
-                        # chunk.  50 ms is imperceptible to VLC's buffer layer.
-                        time.sleep(0.05)
+                        iba = proxy._is_byte_available
+                        if iba and iba(cur):
+                            pass  # piece is on disk; retry read immediately
+                        else:
+                            time.sleep(0.05)
                     # else: written > cur but read() returned empty; retry immediately
 
             # ── Silence HTTP access log ───────────────────────────────

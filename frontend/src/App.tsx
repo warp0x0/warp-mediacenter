@@ -9,6 +9,7 @@ import PowerPage from '@/pages/PowerPage'
 import SearchPage from '@/pages/SearchPage'
 import DetailViewPage from '@/pages/DetailViewPage'
 import CatalogBrowsePage from '@/pages/CatalogBrowsePage'
+import LocalBrowsePage from '@/pages/LocalBrowsePage'
 import PlaybackPage from '@/pages/PlaybackPage'
 import { usePlaybackScrobble } from '@/hooks/usePlaybackScrobble'
 
@@ -26,6 +27,7 @@ export default function App() {
         <Route path="settings" element={<SettingsPage />} />
         <Route path="power" element={<PowerPage />} />
         <Route path="catalog/:provider/:category" element={<CatalogBrowsePage />} />
+        <Route path="local/browse" element={<LocalBrowsePage />} />
       </Route>
       <Route path="detail/:mediaId" element={<DetailViewPage />} />
       <Route path="playback" element={<PlaybackPage />} />
