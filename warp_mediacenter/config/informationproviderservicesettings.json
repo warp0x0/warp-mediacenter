@@ -85,7 +85,8 @@
         },
         "sync": {
           "playback_by_type": "/sync/playback/{type}",
-          "history": "/sync/history/{media_type}"
+          "playback_item": "/sync/playback/{id}",
+          "history": "/sync/history"
         },
         "movies": {
           "trending": "/movies/trending",

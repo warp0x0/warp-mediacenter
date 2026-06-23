@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import mimetypes
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -12,6 +13,8 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
 
 from warp_mediacenter.backend.common.logging import get_logger
+from warp_mediacenter.backend.api.middleware import get_container
+from warp_mediacenter.backend.information_handlers.models import MediaType
 from warp_mediacenter.backend.persistence import (
     connection as db_connection,
     list_titles,
@@ -24,6 +27,8 @@ from warp_mediacenter.backend.persistence import (
     get_title_by_tmdb_with_sources,
     list_library_sections,
     get_library_section,
+    record_playback,
+    upsert_title,
 )
 
 log = get_logger(__name__)
@@ -62,6 +67,22 @@ def _resolve_title(conn, title_id: str):
     if row is None:
         row = get_title_by_tmdb(conn, title_id)
     return row
+
+
+def _int_or_none(value: Any) -> Optional[int]:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _str_or_none(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 _VALID_LIBRARY_SORTS = {"title", "added_at", "year"}
@@ -346,4 +367,138 @@ async def search_library(
         "query": q,
         "items": items,
         "count": len(items),
+    }
+
+
+@router.post("/mark-watched")
+async def mark_watched(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Mark a title (movie) or episode as watched.
+
+    Updates local play_history and syncs to Trakt if authenticated.
+
+    Body:
+        tmdb_id: TMDb ID of the title
+        media_type: "movie" | "show" | "episode"
+        season: (optional) season number for episodes
+        episode: (optional) episode number for episodes
+        playback_id: (optional) Trakt playback progress id to remove
+        title_id: (optional) local DB title_id (resolved from tmdb_id if not provided)
+    """
+    tmdb_id = str(payload.get("tmdb_id") or "").strip()
+    media_type_raw = str(payload.get("media_type") or "movie").strip().lower()
+    season = _int_or_none(payload.get("season"))
+    episode = _int_or_none(payload.get("episode"))
+    title_id = _int_or_none(payload.get("title_id"))
+    playback_id = _int_or_none(payload.get("playback_id"))
+
+    if not tmdb_id:
+        raise HTTPException(status_code=400, detail="tmdb_id is required")
+
+    if media_type_raw not in {"movie", "show", "episode"}:
+        raise HTTPException(status_code=400, detail="media_type must be 'movie', 'show', or 'episode'")
+
+    if media_type_raw == "episode" and (season is None or episode is None):
+        raise HTTPException(status_code=400, detail="season and episode are required for episode mark-watched")
+
+    title_type = "show" if media_type_raw in {"show", "episode"} else "movie"
+    local_recorded = False
+
+    # Record a full-progress play_history entry locally
+    with db_connection() as conn:
+        row = get_title_by_id(conn, title_id) if title_id is not None else None
+        if row is None:
+            row = get_title_by_tmdb(conn, tmdb_id)
+        if row is None:
+            title = _str_or_none(payload.get("title")) or _str_or_none(payload.get("name")) or "Unknown"
+            title_id = upsert_title(
+                conn,
+                tmdb_id=tmdb_id,
+                type=title_type,
+                title=title,
+                year=_int_or_none(payload.get("year")),
+                overview=_str_or_none(payload.get("overview")),
+                poster_url=_str_or_none(payload.get("poster_path")) or _str_or_none(payload.get("poster_url")),
+                backdrop_url=_str_or_none(payload.get("backdrop_path")) or _str_or_none(payload.get("backdrop_url")),
+            )
+        else:
+            title_id = int(row["id"])
+        record_playback(conn, title_id=title_id, position=3600000, duration=3600000)
+        local_recorded = True
+
+    # Sync to Trakt if available
+    container = get_container()
+    providers = container.information_providers if container else None
+    trakt_ok = False
+    trakt_playback_removed = False
+    trakt_error = None
+    errors: List[str] = []
+
+    if providers and providers.trakt_available() and providers.trakt_has_valid_token():
+        try:
+            watched_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+            if media_type_raw == "movie":
+                items = [{"watched_at": watched_at, "ids": {"tmdb": int(tmdb_id)}}]
+                trakt_type = MediaType.MOVIE
+                providers.trakt_add_to_history(media_type=trakt_type, items=items)
+            elif media_type_raw == "show":
+                items = [{"watched_at": watched_at, "ids": {"tmdb": int(tmdb_id)}}]
+                trakt_type = MediaType.SHOW
+                providers.trakt_add_to_history(media_type=trakt_type, items=items)
+            else:
+                show_item: Dict[str, Any] = {
+                    "watched_at": watched_at,
+                    "ids": {"tmdb": int(tmdb_id)},
+                    "seasons": [
+                        {
+                            "number": season,
+                            "episodes": [
+                                {
+                                    "number": episode,
+                                    "watched_at": watched_at,
+                                }
+                            ],
+                        }
+                    ],
+                }
+                trakt_type = MediaType.SHOW
+                providers.trakt_add_to_history(media_type=trakt_type, items=[show_item])
+
+            trakt_ok = True
+        except Exception as exc:
+            trakt_error = str(exc)
+            errors.append(f"trakt_history: {trakt_error}")
+            log.warning("trakt_mark_watched_failed", error=trakt_error)
+
+        if trakt_ok and playback_id is not None:
+            try:
+                trakt_playback_removed = providers.trakt_delete_playback(playback_id)
+            except Exception as exc:
+                playback_error = str(exc)
+                errors.append(f"trakt_playback: {playback_error}")
+                log.warning("trakt_playback_delete_failed", playback_id=playback_id, error=playback_error)
+
+    cache_invalidated = False
+    try:
+        if providers:
+            providers.invalidate_continue_watching_cache()
+        from warp_mediacenter.backend.api.routes.discovery import invalidate_trakt_continue_watching_caches
+
+        invalidate_trakt_continue_watching_caches()
+        cache_invalidated = True
+    except Exception as exc:
+        errors.append(f"cache_invalidation: {exc}")
+        log.warning("mark_watched_cache_invalidation_failed", error=str(exc))
+
+    return {
+        "ok": True,
+        "title_id": title_id,
+        "media_type": media_type_raw,
+        "local_recorded": local_recorded,
+        "trakt_synced": trakt_ok,
+        "trakt_history_synced": trakt_ok,
+        "trakt_playback_removed": trakt_playback_removed,
+        "cache_invalidated": cache_invalidated,
+        "trakt_error": trakt_error,
+        "errors": errors,
     }

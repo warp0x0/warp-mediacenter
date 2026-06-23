@@ -43,9 +43,10 @@ export default function CollectionButtons({ item, iconSize = 14 }: CollectionBut
       onPointerDown={(e) => e.stopPropagation()}
       onDoubleClick={(e) => e.stopPropagation()}
     >
-      {/* Liked */}
+      {/* Liked — mouse-only, keyboard users use context menu */}
       <button
         type="button"
+        tabIndex={-1}
         onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleLike(payload) }}
         onMouseDown={(e) => e.stopPropagation()}
         onPointerDown={(e) => e.stopPropagation()}
@@ -65,9 +66,10 @@ export default function CollectionButtons({ item, iconSize = 14 }: CollectionBut
         />
       </button>
 
-      {/* Wishlist */}
+      {/* Wishlist — mouse-only, keyboard users use context menu */}
       <button
         type="button"
+        tabIndex={-1}
         onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleWishlist(payload) }}
         onMouseDown={(e) => e.stopPropagation()}
         onPointerDown={(e) => e.stopPropagation()}

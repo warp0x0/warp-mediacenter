@@ -58,6 +58,23 @@ def _tc_set(key: str, value: Any) -> None:
         _tcache[key] = (time.monotonic(), value)
 
 
+def invalidate_trakt_continue_watching_caches() -> None:
+    """Clear Trakt resume/progress caches after watched-state mutations."""
+    with _tcache_lock:
+        for key in list(_tcache):
+            if (
+                key.startswith("cw:")
+                or key.startswith("trakt:pb:")
+                or key.startswith("show_prog:")
+                or key == "trakt:watched_shows"
+            ):
+                _tcache.pop(key, None)
+    with _shuffle_lock:
+        for key in list(_shuffle_cache):
+            if key.startswith("trakt:based_on_watched:"):
+                _shuffle_cache.pop(key, None)
+
+
 # ---------------------------------------------------------------------------
 # Daily shuffle cache — one shuffled list per (catalog-key, calendar-day).
 # Keyed by "provider:category:media_type".  Automatically stale next day.
@@ -538,6 +555,7 @@ async def trakt_continue_watching_catalog(
             extra = dict(item.get("extra") or {})
             extra["progress"] = float(entry.progress)
             extra["resume_available"] = True
+            extra["playback_id"] = entry.id
             item["extra"] = extra
             stubs.append(item)
 
@@ -579,6 +597,7 @@ async def trakt_continue_watching_catalog(
                     "progress": float(pb_entry.progress),
                     "season": pb_ep.get("season") if isinstance(pb_ep, dict) else None,
                     "episode": pb_ep.get("number") if isinstance(pb_ep, dict) else None,
+                    "playback_id": pb_entry.id,
                 }
 
         # Step B: watched shows list (cached)
@@ -711,6 +730,7 @@ async def trakt_continue_watching_catalog(
                     "resume_available": True,
                     "resume_season": int(resume_season) if resume_season is not None else None,
                     "resume_episode": int(resume_episode) if resume_episode is not None else None,
+                    "resume_playback_id": int(scrobble["playback_id"]) if scrobble and scrobble.get("playback_id") is not None else None,
                     "is_scrobbled": is_scrobbled,
                 },
                 "media": {
@@ -862,7 +882,7 @@ async def trakt_show_progress(tmdb_id: str) -> Dict[str, Any]:
         raise HTTPException(status_code=404, detail="No watched progress found")
 
     # Step 3: fetch paused/scrobbled episodes — reuse playback cache from continue_watching
-    scrobble_ep_map: Dict[tuple, float] = {}
+    scrobble_ep_map: Dict[tuple, Dict[str, Any]] = {}
     try:
         ep_entries = _tc_get("trakt:pb:episodes", _TTL_PLAYBACK)
         if ep_entries is None:
@@ -884,7 +904,10 @@ async def trakt_show_progress(tmdb_id: str) -> Dict[str, Any]:
             s = pb_ep.get("season")
             e = pb_ep.get("number")
             if s is not None and e is not None:
-                scrobble_ep_map[(int(s), int(e))] = float(pb.progress)
+                scrobble_ep_map[(int(s), int(e))] = {
+                    "progress": float(pb.progress),
+                    "playback_id": pb.id,
+                }
     except Exception:
         pass  # scrobble data is best-effort
 
@@ -900,13 +923,18 @@ async def trakt_show_progress(tmdb_id: str) -> Dict[str, Any]:
                 continue
             enum = ep.get("number")
             scrobble_pct: Optional[float] = None
+            playback_id: Optional[int] = None
             if snum is not None and enum is not None:
-                scrobble_pct = scrobble_ep_map.get((int(snum), int(enum)))
+                scrobble_entry = scrobble_ep_map.get((int(snum), int(enum)))
+                if scrobble_entry:
+                    scrobble_pct = scrobble_entry.get("progress")
+                    playback_id = scrobble_entry.get("playback_id")
             episodes_out.append({
                 "number": enum,
                 "completed": bool(ep.get("completed", False)),
                 "last_watched_at": ep.get("last_watched_at"),
                 "scrobble_progress": scrobble_pct,
+                "playback_id": playback_id,
             })
         seasons_out.append({
             "number": snum,

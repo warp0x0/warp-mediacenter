@@ -96,6 +96,23 @@
   box-sizing: border-box;
 }
 
+/* ── Remote-control / TV focus ring ─────────────────────────────────────────
+   Bright accent glow that's readable from 2–3 m away on a TV screen.
+   Individual components may override with their own focus-visible:ring-*
+   classes; this acts as the universal fallback for anything that didn't.
+   ────────────────────────────────────────────────────────────────────────── */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  box-shadow: 0 0 0 4px rgba(13, 178, 226, 0.25), 0 0 16px rgba(13, 178, 226, 0.20);
+  border-radius: 4px;
+}
+/* Remove default outline when component supplies its own ring */
+.focus-visible\:outline-none:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
 body {
   background: var(--bg-primary);
   color: var(--fg-primary);
@@ -122,6 +139,18 @@ body {
 }
 
 *:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ── D-pad nav item focus ring (WKWebView-safe) ──────────────────────────────
+   :focus-visible doesn't match in WKWebView after a mouse interaction — the
+   webview stays in "mouse mode" and programmatic .focus() from the keyboard
+   handler doesn't trigger :focus-visible. This :focus rule ensures ALL D-pad
+   navigable items show a visible ring regardless of the browser's input-mode
+   heuristics. Elements with their own Tailwind focus:ring-* classes
+   (PosterCard, etc.) override this via higher-priority utility classes. */
+[data-nav-item]:focus {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }

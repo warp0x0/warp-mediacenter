@@ -1,5 +1,5 @@
 import useSWR from 'swr'
-import { apiGet, apiPost } from '@/lib/api'
+import { apiDelete, apiGet, apiPost } from '@/lib/api'
 import type {
   DebridStreamResponse,
   DebridTorrentInfo,
@@ -51,4 +51,8 @@ export function useDebridTorrentInfo(torrentId: string | null) {
 
 export async function getDebridStreamUrl(torrentId: string, fileId: number): Promise<DebridStreamResponse> {
   return apiGet<DebridStreamResponse>(`/api/v1/debrid/stream/${torrentId}/${fileId}`)
+}
+
+export async function deleteDebridTorrent(torrentId: string): Promise<void> {
+  await apiDelete<unknown>(`/api/v1/debrid/torrent/${torrentId}`)
 }

@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { AlertCircle, AlertTriangle, CheckCircle2, Loader2, Search, X, Magnet } from 'lucide-react'
 import { apiGet, ApiError } from '@/lib/api'
 import {
+  deleteDebridTorrent,
   getDebridStreamUrl,
   resolveTorrent,
   searchTorrents,
@@ -10,6 +11,7 @@ import {
 } from '@/hooks/useTorrent'
 import { createPreloadSession, stopPreloadSession, usePreloadSessionStatus } from '@/hooks/usePlayer'
 import { refreshDebridToken } from '@/hooks/useAuth'
+import { useFocusTrap } from '@/hooks/useFocusTrap'
 import type { DebridTorrentInfo, MediaItem, TorrentResult, TorrentStatus } from '@/lib/types'
 
 interface TorrentDialogProps {
@@ -81,8 +83,15 @@ export default function TorrentDialog({
   const [preloading, setPreloading]         = useState(false)
   const [preloadSessionId, setPreloadSessionId] = useState<string | null>(null)
 
-  // libtorrent local download: confirmation dialog only (no separate session state)
-  const [showLocalConfirm, setShowLocalConfirm] = useState<TorrentResult | null>(null)
+  // libtorrent local download: confirmation dialog.
+  // reason distinguishes pre-blocked (search-time filter) from runtime_blocked (RD rejected mid-resolve).
+  const [showLocalConfirm, setShowLocalConfirm] = useState<{
+    result: TorrentResult
+    reason: 'pre_blocked' | 'runtime_blocked'
+  } | null>(null)
+
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useFocusTrap(dialogRef, open, onClose)
 
   const pendingStream = useRef<{
     source: string
@@ -98,6 +107,8 @@ export default function TorrentDialog({
     resumePercent?: number | null
   } | null>(null)
   const lastActionAt = useRef(0)
+  // Set to true by handleCancel to abort in-flight waitForStream / createPreloadSession calls
+  const cancelledRef = useRef(false)
 
   const statusQuery        = useTorrentStatus(torrentId)
   const preloadStatusQuery = usePreloadSessionStatus(preloadSessionId)
@@ -117,6 +128,7 @@ export default function TorrentDialog({
       setPreloadSessionId(null)
       setShowLocalConfirm(null)
       pendingStream.current = null
+      cancelledRef.current = false
     }
   }, [open, title])
 
@@ -146,7 +158,14 @@ export default function TorrentDialog({
     }
   }, [statusQuery.data, torrentId])
 
-  // Drive the "Buffering…" banner from preload status and fire onStreamReady at 20%
+  // Drive the download banner and decide when to fire onStreamReady.
+  //
+  // RD/CDN sessions  (local_torrent undefined): streaming starts early —
+  //   banner shows live download %, onStreamReady fires at pct >= 20.
+  //
+  // Libtorrent sessions (local_torrent === true): full file must be on disk
+  //   before mpv can open — banner shows real download % (0→100),
+  //   onStreamReady fires only when download_complete = true.
   useEffect(() => {
     if (!preloading || !preloadStatusQuery.data) return
     const s = preloadStatusQuery.data
@@ -164,12 +183,18 @@ export default function TorrentDialog({
 
     setBanner({
       kind: 'progress',
-      text: 'Downloading for smooth playback…',
+      text: s.local_torrent
+        ? 'Downloading the entire Torrent file…'
+        : 'Downloading a few initial bytes (20%) of the file to ensure smooth playback…',
       subtext: `${pct.toFixed(0)}%  ·  ${mbDl}${mbTot} MB`,
       progressPct: Math.min(pct, 100),
     })
 
-    if (pct >= 20 || s.download_complete) {
+    const streamReady = s.local_torrent
+      ? s.download_complete                  // libtorrent: wait for 100% on disk
+      : pct >= 20 || s.download_complete     // CDN/RD: stream early at 20%
+
+    if (streamReady) {
       setPreloading(false)
       setPreloadSessionId(null)
       const payload = pendingStream.current
@@ -232,6 +257,7 @@ export default function TorrentDialog({
     const now = Date.now()
     if (now - lastActionAt.current < 250) return
     lastActionAt.current = now
+    cancelledRef.current = false
     setResolving(true)
     setBanner({ kind: 'progress', text: `Resolving torrent…`, subtext: result.name })
     try {
@@ -248,7 +274,10 @@ export default function TorrentDialog({
       })
       setTorrentId(resolved.torrent_id)
       const stream = await waitForStream(resolved.torrent_id)
-      if (!stream) throw new Error('Stream URL unavailable after download')
+      if (!stream) {
+        if (cancelledRef.current) { cancelledRef.current = false; return }
+        throw new Error('Stream URL unavailable after download')
+      }
 
       const session = await createPreloadSession({
         stream_url: stream,
@@ -256,6 +285,11 @@ export default function TorrentDialog({
         media_kind: mediaKind,
         start_percent: resumePercent ?? undefined,
       })
+      if (cancelledRef.current) {
+        cancelledRef.current = false
+        stopPreloadSession(session.session_id).catch(() => {})
+        return
+      }
 
       pendingStream.current = {
         source: session.playback_url,
@@ -273,7 +307,7 @@ export default function TorrentDialog({
       setTorrentId(null)
       setBanner({
         kind: 'progress',
-        text: 'Downloading for smooth playback…',
+        text: 'Downloading a few initial bytes (20%) of the file to ensure smooth playback…',
         subtext: '0%',
         progressPct: 0,
       })
@@ -292,6 +326,11 @@ export default function TorrentDialog({
         } else if (err.status === 403) {
           headline = 'Real-Debrid: Access denied'
           detail = err.message
+        } else if (err.status === 422) {
+          // RD blocked this torrent at runtime (copyright / legal) — offer local download
+          setShowLocalConfirm({ result, reason: 'runtime_blocked' })
+          setBanner(null)
+          return
         } else {
           headline = `Real-Debrid error (${err.status})`
           detail = err.message
@@ -299,8 +338,10 @@ export default function TorrentDialog({
       } else if (err instanceof Error) {
         const msg = err.message
         if (msg.toLowerCase().includes('infringing') || msg.toLowerCase().includes('dmca')) {
-          headline = 'Real-Debrid: Infringing file blocked'
-          detail = msg
+          // Treat as runtime-blocked and offer local download rather than dead-end error
+          setShowLocalConfirm({ result, reason: 'runtime_blocked' })
+          setBanner(null)
+          return
         } else if (msg.toLowerCase().includes('timed out')) {
           headline = 'Timed out waiting for Real-Debrid'
           detail = 'The torrent may be slow or stuck — try another source.'
@@ -320,14 +361,17 @@ export default function TorrentDialog({
 
   async function waitForStream(id: string): Promise<string | null> {
     for (let i = 0; i < 20; i += 1) {
+      if (cancelledRef.current) return null
       const status = await apiGet<TorrentStatus>(`/api/v1/torrent/status/${id}`)
+      if (cancelledRef.current) return null
       setTorrentInfo(status)
       if (status.status === 'downloaded' || status.status === 'finished') {
         const info = await apiGet<DebridTorrentInfo>(`/api/v1/debrid/torrent/${id}`)
+        if (cancelledRef.current) return null
         const file = info.files.find((f) => f.selected) || info.files[0]
         if (!file) return null
         const stream = await getDebridStreamUrl(id, file.id)
-        return stream.stream_url
+        return cancelledRef.current ? null : stream.stream_url
       }
       if (['error', 'dead', 'unknown'].includes(status.status)) {
         throw new Error(status.message || `Torrent status: ${status.status}`)
@@ -341,11 +385,14 @@ export default function TorrentDialog({
   // Uses the same preload-session path as RD: createPreloadSession with a magnet
   // URI registers the libtorrent download in PreloadSessionManager and returns
   // a session_id.  From here the existing preload status effect drives the banner,
-  // fires onStreamReady at 20%, and the cleanup effect handles early-close.
+  // fires onStreamReady when download_complete=true, and the cleanup effect handles
+  // early-close.  playback_url is the FastAPI stream endpoint — accessible over
+  // the network so it works even when backend and frontend are on separate machines.
   async function pickLocalTorrent(result: TorrentResult) {
     setShowLocalConfirm(null)
+    cancelledRef.current = false
     setResolving(true)
-    setBanner({ kind: 'progress', text: 'Fetching torrent metadata…', subtext: result.name })
+    setBanner({ kind: 'progress', text: 'Downloading the entire Torrent file…', subtext: 'Fetching torrent metadata…' })
     try {
       const session = await createPreloadSession({
         magnet:        result.magnet,
@@ -353,9 +400,14 @@ export default function TorrentDialog({
         media_kind:    mediaKind,
         start_percent: resumePercent ?? 0,
       })
+      if (cancelledRef.current) {
+        cancelledRef.current = false
+        stopPreloadSession(session.session_id).catch(() => {})
+        return
+      }
       pendingStream.current = {
-        source:        session.local_url ?? session.playback_url,
-        local_source:  session.local_url ?? undefined,
+        source:        session.playback_url,   // FastAPI HTTP stream endpoint
+        local_source:  undefined,              // no local shortcut — backend may be remote
         title,
         isStream:      true,
         media_kind:    mediaKind,
@@ -374,6 +426,25 @@ export default function TorrentDialog({
       setBanner({ kind: 'error', text: 'Local download failed', subtext: msg })
       setResolving(false)
     }
+  }
+
+  // ── Cancel active download ────────────────────────────────────────────────
+  async function handleCancel() {
+    cancelledRef.current = true
+    // Stop libtorrent or CDN preload session
+    if (preloadSessionId) {
+      stopPreloadSession(preloadSessionId).catch(() => {})
+      setPreloadSessionId(null)
+      setPreloading(false)
+    }
+    // Delete uncached RD torrent still downloading on Real-Debrid servers
+    if (torrentId) {
+      deleteDebridTorrent(torrentId).catch(() => {})
+      setTorrentId(null)
+    }
+    pendingStream.current = null
+    setResolving(false)
+    setBanner(null)
   }
 
   // ── Banner rendering ──────────────────────────────────────────────────────
@@ -416,6 +487,17 @@ export default function TorrentDialog({
               </span>
             )}
           </span>
+          {banner.kind === 'progress' && (
+            <button
+              onClick={handleCancel}
+              className="shrink-0 flex items-center gap-1 rounded px-2 py-0.5 transition-opacity opacity-50 hover:opacity-100"
+              style={{ fontSize: '0.82em', marginTop: 1, border: '1px solid currentColor' }}
+              title="Cancel download"
+            >
+              <X size={10} />
+              <span>Cancel</span>
+            </button>
+          )}
         </div>
         {banner.progressPct !== undefined && (
           <div
@@ -454,6 +536,7 @@ export default function TorrentDialog({
 
           {/* Dialog */}
           <motion.div
+            ref={dialogRef}
             initial={{ opacity: 0, y: 24, scale: 0.97 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 24, scale: 0.97 }}
@@ -570,7 +653,7 @@ export default function TorrentDialog({
                     return (
                       <button
                         key={result.hash}
-                        onClick={() => isRdBlocked ? setShowLocalConfirm(result) : pickTorrent(result)}
+                        onClick={() => isRdBlocked ? setShowLocalConfirm({ result, reason: 'pre_blocked' }) : pickTorrent(result)}
                         disabled={isBusy}
                         className="w-full text-left rounded-card border border-white/[0.06] transition-all duration-150 cursor-pointer disabled:opacity-40 group"
                         style={{
@@ -668,17 +751,20 @@ export default function TorrentDialog({
                       </div>
                       <div>
                         <p className="text-white font-semibold" style={{ fontSize: 'clamp(13px,0.85vw,15px)' }}>
-                          Blocked by Real-Debrid
+                          {showLocalConfirm.reason === 'runtime_blocked'
+                            ? 'Rejected by Real-Debrid'
+                            : 'Blocked by Real-Debrid'}
                         </p>
                         <p className="text-white/50 mt-1" style={{ fontSize: 'clamp(11px,0.68vw,13px)', lineHeight: 1.5 }}>
-                          This source is filtered by Real-Debrid and will fail if sent through it.
-                          Download locally via libtorrent instead?
+                          {showLocalConfirm.reason === 'runtime_blocked'
+                            ? 'Real-Debrid rejected this torrent due to copyright or legal restrictions. Download locally via libtorrent instead?'
+                            : 'This source is filtered by Real-Debrid and will fail if sent through it. Download locally via libtorrent instead?'}
                         </p>
                         <p
                           className="text-white/25 truncate mt-2"
                           style={{ fontSize: 'clamp(10px,0.62vw,12px)' }}
                         >
-                          {showLocalConfirm.name}
+                          {showLocalConfirm.result.name}
                         </p>
                       </div>
                     </div>
@@ -691,7 +777,7 @@ export default function TorrentDialog({
                         Cancel
                       </button>
                       <button
-                        onClick={() => pickLocalTorrent(showLocalConfirm)}
+                        onClick={() => pickLocalTorrent(showLocalConfirm.result)}
                         className="btn-primary rounded-card cursor-pointer"
                         style={{ padding: 'clamp(8px,0.9vh,12px) clamp(16px,1.4vw,24px)', fontSize: 'clamp(12px,0.72vw,14px)' }}
                       >

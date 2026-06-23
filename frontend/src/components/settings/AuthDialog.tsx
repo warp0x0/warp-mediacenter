@@ -1,7 +1,8 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { X, ExternalLink, CheckCircle2, AlertCircle, Loader2, KeyRound, Copy, Check } from 'lucide-react'
 import { useAuthTrakt, useAuthDebrid, startTraktAuth, startDebridAuth, refreshDebridToken } from '@/hooks/useAuth'
+import { useFocusTrap } from '@/hooks/useFocusTrap'
 import type { AuthStatus } from '@/lib/types'
 
 type AuthType = 'trakt' | 'debrid'
@@ -22,6 +23,8 @@ export default function AuthDialog({ open, type, onClose }: AuthDialogProps) {
   const [polling, setPolling]             = useState(false)
   const [copied, setCopied]               = useState(false)
 
+  const dialogRef = useRef<HTMLDivElement>(null)
+
   const traktStatus  = useAuthTrakt(polling && type === 'trakt' ? {} : undefined)
   const debridStatus = useAuthDebrid(polling && type === 'debrid' ? {} : undefined)
 
@@ -40,6 +43,8 @@ export default function AuthDialog({ open, type, onClose }: AuthDialogProps) {
     setCopied(false)
     onClose()
   }, [onClose])
+
+  useFocusTrap(dialogRef, open, handleClose)
 
   useEffect(() => {
     if (!open) {
@@ -135,6 +140,7 @@ export default function AuthDialog({ open, type, onClose }: AuthDialogProps) {
 
           {/* Dialog */}
           <motion.div
+            ref={dialogRef}
             initial={{ opacity: 0, y: 20, scale: 0.97 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 20, scale: 0.97 }}

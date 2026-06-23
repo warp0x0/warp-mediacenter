@@ -195,10 +195,13 @@ async def resolve_torrent(payload: Dict[str, Any]) -> Dict[str, Any]:
         )
     except RealDebridAPIError as exc:
         log.error("resolve_rd_error", status=exc.status_code, error=exc.error, code=exc.error_code)
-        if exc.status_code == 451:
+        # HTTP 451 = Unavailable for Legal Reasons (RD blocks the whole torrent).
+        # Error code 22 = "Infringing file", 23 = "Copyright DMCAed file" (per RD API docs).
+        # All three mean the same thing to the client: try a different source.
+        if exc.status_code == 451 or exc.error_code in (22, 23):
             raise HTTPException(
                 status_code=422,
-                detail=f"RealDebrid blocked this torrent (copyright). Try a different torrent from the search results.",
+                detail="RealDebrid blocked this torrent (copyright/legal). Try a different torrent from the search results.",
             )
         raise HTTPException(status_code=500, detail=f"RealDebrid error: {exc}")
     except Exception as exc:

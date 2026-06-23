@@ -4,6 +4,7 @@ import { ChevronLeft, ChevronRight, Loader2, Clock } from 'lucide-react'
 import PosterCard from '@/components/cards/PosterCard'
 import { apiGet } from '@/lib/api'
 import { useSearchHistory } from '@/hooks/useSearchHistory'
+import { useNavigation } from '@/navigation/NavigationProvider'
 import type { MediaItem, SearchResultItem } from '@/lib/types'
 
 // ── Backend response shapes ───────────────────────────────────────────────────
@@ -124,10 +125,12 @@ interface ResultRowProps {
   count: number
   items: MediaItem[]
   onNavigate: (item: MediaItem) => void
+  isFirstRow?: boolean
 }
 
-function ResultRow({ label, count, items, onNavigate }: ResultRowProps) {
+function ResultRow({ label, count, items, onNavigate, isFirstRow }: ResultRowProps) {
   const ribbonRef = useRef<HTMLDivElement>(null)
+  const navGroup = `search:${label.replace(/[^a-zA-Z0-9:_-]+/g, '-')}`
 
   const scroll = (dir: 'left' | 'right') => {
     const el = ribbonRef.current
@@ -166,6 +169,8 @@ function ResultRow({ label, count, items, onNavigate }: ResultRowProps) {
 
         <div
           ref={ribbonRef}
+          data-nav-ribbon
+          {...(isFirstRow ? { 'data-nav-up-target': 'search:input' } : {})}
           className="flex gap-[var(--card-gap)] overflow-hidden scrollbar-hidden"
           style={{
             paddingLeft: '10%',
@@ -174,12 +179,14 @@ function ResultRow({ label, count, items, onNavigate }: ResultRowProps) {
             paddingBottom: '8px',
           }}
         >
-          {items.map((item) => (
+          {items.map((item, idx) => (
             <PosterCard
               key={item.id}
               item={item}
               onSelect={onNavigate}
               onNavigate={onNavigate}
+              itemIndex={idx}
+              navGroup={navGroup}
             />
           ))}
         </div>
@@ -202,8 +209,10 @@ export default function SearchPage() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const { history, addQuery } = useSearchHistory()
+  const { registerItem, focusNavItem } = useNavigation()
 
   const [inputValue, setInputValue] = useState('')
+  const [searchEditing, setSearchEditing] = useState(false)
   const [activeQuery, setActiveQuery] = useState('')
   const [tmdbMovies, setTmdbMovies] = useState<MediaItem[]>([])
   const [tmdbShows, setTmdbShows] = useState<MediaItem[]>([])
@@ -211,6 +220,19 @@ export default function SearchPage() {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    const element = inputRef.current
+    if (!element) return
+    return registerItem({
+      id: 'search:input',
+      element,
+      onEnter: () => {
+        setSearchEditing(true)
+        requestAnimationFrame(() => inputRef.current?.focus())
+      },
+    })
+  }, [registerItem])
 
   const doSearch = useCallback(
     async (q: string, addToHistory = true) => {
@@ -262,7 +284,19 @@ export default function SearchPage() {
   }, [])
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') doSearch(inputValue)
+    if (e.key === 'Enter') {
+      if (!searchEditing) {
+        setSearchEditing(true)
+        return
+      }
+      setSearchEditing(false)
+      doSearch(inputValue)
+    }
+    if (e.key === 'Escape') {
+      setSearchEditing(false)
+      inputRef.current?.blur()
+      focusNavItem('search:input', { scroll: false })
+    }
   }
 
   const handleNavigate = useCallback(
@@ -274,6 +308,15 @@ export default function SearchPage() {
 
   const hasResults = tmdbMovies.length > 0 || tmdbShows.length > 0 || traktItems.length > 0
   const showNoResults = activeQuery && !isLoading && !error && !hasResults
+
+  useEffect(() => {
+    if (!hasResults) return
+    requestAnimationFrame(() => {
+      const firstResult = document.querySelector<HTMLElement>('[data-nav-group^="search:"][data-nav-item]')
+      const id = firstResult?.getAttribute('data-nav-id')
+      if (id) focusNavItem(id)
+    })
+  }, [activeQuery, focusNavItem, hasResults])
 
   return (
     <div
@@ -288,10 +331,17 @@ export default function SearchPage() {
         <div className="flex items-center gap-3" style={{ width: '80%' }}>
           <input
             ref={inputRef}
+            data-nav-item
+            data-nav-id="search:input"
+            data-nav-kind="input-shell"
+            data-nav-initial
             type="text"
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
             onKeyDown={handleKeyDown}
+            onClick={() => setSearchEditing(true)}
+            onBlur={() => setSearchEditing(false)}
+            readOnly={!searchEditing}
             placeholder="Search movies & shows…"
             className="flex-1 input-field"
             style={{
@@ -300,9 +350,11 @@ export default function SearchPage() {
               paddingLeft: '10px',
               paddingRight: '10px',
             }}
-            autoFocus
           />
           <button
+            data-nav-item
+            data-nav-id="search:submit"
+            data-nav-kind="button"
             onClick={() => doSearch(inputValue)}
             disabled={isLoading || !inputValue.trim()}
             className="btn-primary flex items-center gap-2 flex-shrink-0"
@@ -358,18 +410,21 @@ export default function SearchPage() {
             count={tmdbMovies.length}
             items={tmdbMovies}
             onNavigate={handleNavigate}
+            isFirstRow={tmdbMovies.length > 0}
           />
           <ResultRow
             label="Shows (TMDb)"
             count={tmdbShows.length}
             items={tmdbShows}
             onNavigate={handleNavigate}
+            isFirstRow={tmdbMovies.length === 0 && tmdbShows.length > 0}
           />
           <ResultRow
             label="Trakt"
             count={traktItems.length}
             items={traktItems}
             onNavigate={handleNavigate}
+            isFirstRow={tmdbMovies.length === 0 && tmdbShows.length === 0 && traktItems.length > 0}
           />
         </div>
       )}
@@ -394,6 +449,11 @@ export default function SearchPage() {
               {history.map((q) => (
                 <button
                   key={q}
+                  data-nav-item
+                  data-nav-id={`search:history:${q}`}
+                  data-nav-kind="button"
+                  data-nav-axis="vertical"
+                  data-nav-group="search-history"
                   onClick={() => {
                     setInputValue(q)
                     doSearch(q)

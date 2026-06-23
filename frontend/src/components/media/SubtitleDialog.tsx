@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { X, Search, Download } from 'lucide-react'
 import { downloadSubtitle, loadSubtitle, searchSubtitles } from '@/hooks/useSubtitles'
+import { useFocusTrap } from '@/hooks/useFocusTrap'
 import type { SubtitleSearchResult } from '@/lib/types'
 
 interface SubtitleDialogProps {
@@ -31,6 +32,9 @@ export default function SubtitleDialog({
   const [actioning, setActioning] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const lastActionAt = useRef(0)
+  const dialogRef = useRef<HTMLDivElement>(null)
+
+  useFocusTrap(dialogRef, open, onClose)
 
   useEffect(() => {
     if (open) {
@@ -98,6 +102,7 @@ export default function SubtitleDialog({
             onClick={onClose}
           />
           <motion.div
+            ref={dialogRef}
             initial={{ opacity: 0, y: 20, scale: 0.97 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 20, scale: 0.97 }}

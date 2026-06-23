@@ -41,6 +41,7 @@ export default function PowerPage() {
 
   return (
     <div
+      data-nav-scroll-container
       className="w-full overflow-y-auto bg-bg-primary"
       style={{ height: '100vh', paddingTop: 'var(--tabbar-height)' }}
     >
@@ -238,6 +239,11 @@ function ActionBtn({ icon, label, onClick, variant = 'default' }: ActionBtnProps
   const isDanger = variant === 'danger'
   return (
     <button
+      data-nav-item
+      data-nav-id={`power:action:${label.replace(/[^a-zA-Z0-9:_-]+/g, '-')}`}
+      data-nav-kind="button"
+      data-nav-axis="horizontal"
+      data-nav-group="power-actions"
       onClick={onClick}
       className={`flex items-center rounded-btn font-medium cursor-pointer transition-all duration-200 ${
         isDanger

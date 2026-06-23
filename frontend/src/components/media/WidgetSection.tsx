@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react'
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Play, Loader2, ChevronLeft, ChevronRight } from 'lucide-react'
@@ -8,7 +8,13 @@ import { useTmdbEnrichment } from '@/hooks/useTmdbEnrichment'
 import TrailerDialog from './TrailerDialog'
 import RatingBadges from './RatingBadges'
 import CollectionButtons from '@/components/cards/CollectionButtons'
+import { useNavItem, useNavigation } from '@/navigation/NavigationProvider'
+import { useMediaContextMenuItems } from '@/navigation/useMediaContextMenuItems'
 import type { MediaItem } from '@/lib/types'
+
+function safeNavId(value: string): string {
+  return value.replace(/[^a-zA-Z0-9:_-]+/g, '-').replace(/^-+|-+$/g, '') || 'section'
+}
 
 // ── Ribbon item ───────────────────────────────────────────────────────────────
 
@@ -17,18 +23,66 @@ interface WidgetRibbonItemProps {
   isSelected: boolean
   onSelect: () => void
   onNavigate: () => void
+  /** Mark this item as the initial D-pad focus target when the page loads. */
+  initialFocus?: boolean
+  /** Index in the items array, used for long-press context menu targeting. */
+  itemIndex?: number
+  navId: string
+  navGroup: string
+  navSectionId: string
 }
 
-function WidgetRibbonItem({ item, isSelected, onSelect, onNavigate }: WidgetRibbonItemProps) {
+function WidgetRibbonItem({ item, isSelected, onSelect, onNavigate, initialFocus, itemIndex, navId, navGroup, navSectionId }: WidgetRibbonItemProps) {
   const { posterUrl } = useTmdbEnrichment(item, 'w300')
+  const menuItems = useMediaContextMenuItems(item)
+  const { rememberFocusForNavigation } = useNavigation()
+  const navConfig = useMemo(() => ({
+    onEnter: () => {
+      rememberFocusForNavigation(navId)
+      onNavigate()
+    },
+    getContextMenu: () => menuItems,
+  }), [menuItems, navId, onNavigate, rememberFocusForNavigation])
+  const navRef = useNavItem<HTMLDivElement>(navId, navConfig)
+
   return (
     <div
+      ref={navRef}
       role="button"
       tabIndex={0}
+      data-nav-item
+      data-nav-id={navId}
+      data-nav-kind="card"
+      data-nav-axis="horizontal"
+      data-nav-group={navGroup}
+      data-nav-section-id={navSectionId}
+      {...(initialFocus ? { 'data-nav-initial': '' } : {})}
+      {...(itemIndex != null ? { 'data-item-index': itemIndex } : {})}
       onClick={onSelect}
-      onDoubleClick={onNavigate}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onSelect() }}
-      className={`flex-shrink-0 relative rounded-[var(--card-radius)] group transition-all duration-200 cursor-pointer focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none ${
+      onDoubleClick={() => {
+        rememberFocusForNavigation(navId)
+        onNavigate()
+      }}
+      // onFocus: D-pad navigation updates the preview backdrop for this item.
+      // onClick: single Select/Enter navigates to the detail page (remote-control model).
+      // Long-press Enter is handled by NavigationProvider's global keydown handler
+      // which fires a context menu via openContextMenuForItem after 600ms.
+      onFocus={(e) => {
+        onSelect()
+        // Only center within the horizontal ribbon — do NOT vertical-scroll the
+        // page. Vertical scrolling is handled by NavigationProvider's snap-aware
+        // focusElement (scrolls to the section boundary on snap containers).
+        // A vertical scrollIntoView here would fight scroll-snap and race the
+        // instant snapshot restore on back-navigation.
+        const ribbon = e.currentTarget.closest('[data-nav-ribbon]')
+        if (ribbon instanceof HTMLElement) {
+          const rect = e.currentTarget.getBoundingClientRect()
+          const ribbonRect = ribbon.getBoundingClientRect()
+          const targetLeft = ribbon.scrollLeft + (rect.left - ribbonRect.left) - (ribbonRect.width / 2 - rect.width / 2)
+          ribbon.scrollTo({ left: Math.max(0, targetLeft), behavior: 'smooth' })
+        }
+      }}
+      className={`flex-shrink-0 relative rounded-[var(--card-radius)] group transition-all duration-200 cursor-pointer focus:ring-2 focus:ring-accent focus:outline-none ${
         isSelected
           ? 'ring-2 ring-accent scale-105 shadow-[0_0_20px_rgba(13,178,226,0.3)] z-10'
           : 'hover:scale-105 hover:shadow-[0_0_16px_rgba(0,0,0,0.4)]'
@@ -75,9 +129,11 @@ interface WidgetSectionProps {
   mediaType?: 'movie' | 'show'
   provider?: string
   category?: string
+  /** Mark the first ribbon item as the initial D-pad focus target. */
+  initialFocus?: boolean
 }
 
-export default function WidgetSection({ title, items, isLoading, mediaType = 'movie', provider, category }: WidgetSectionProps) {
+export default function WidgetSection({ title, items, isLoading, mediaType = 'movie', provider, category, initialFocus }: WidgetSectionProps) {
   const navigate = useNavigate()
   const [selectedIdx, setSelectedIdx] = useState(0)
   const [playing, setPlaying] = useState(false)
@@ -85,6 +141,8 @@ export default function WidgetSection({ title, items, isLoading, mediaType = 'mo
   const ribbonRef = useRef<HTMLDivElement>(null)
   const synopsisRef = useRef<HTMLParagraphElement>(null)
   const [synopsisClamped, setSynopsisClamped] = useState(true)
+  const sectionId = useMemo(() => safeNavId(`${provider ?? 'widget'}:${category ?? title}`), [category, provider, title])
+  const cardGroup = `widget:${sectionId}:cards`
 
 
   const selected = items[selectedIdx] ?? null
@@ -177,7 +235,12 @@ export default function WidgetSection({ title, items, isLoading, mediaType = 'mo
     : null
 
   return (
-    <section className="min-h-full w-full relative overflow-hidden flex flex-col snap-start" style={{ paddingTop: 'var(--tabbar-height)' }}>
+    <section
+      className="min-h-full w-full relative overflow-hidden flex flex-col snap-start"
+      data-nav-section
+      data-nav-section-id={sectionId}
+      style={{ paddingTop: 'var(--tabbar-height)' }}
+    >
       <AnimatePresence mode="wait">
         <motion.div
           key={backdropUrl || 'no-backdrop'}
@@ -283,8 +346,14 @@ export default function WidgetSection({ title, items, isLoading, mediaType = 'mo
               )}
             </div>
 
-            <div className="flex items-center gap-[clamp(12px,1vw,20px)]">
+            <div data-nav-zone="action" className="flex items-center gap-[clamp(12px,1vw,20px)]">
             <button
+              data-nav-item
+              data-nav-id={`widget:${sectionId}:play-trailer`}
+              data-nav-section-id={sectionId}
+              data-nav-role="play-trailer"
+              data-nav-axis="horizontal"
+              data-nav-group={`widget:${sectionId}:actions`}
               onClick={handlePlayTrailer}
               disabled={playing}
               className="flex items-center gap-[clamp(6px,0.42vw,10px)] btn-primary font-semibold cursor-pointer transition-all duration-200 hover:scale-105"
@@ -303,6 +372,12 @@ export default function WidgetSection({ title, items, isLoading, mediaType = 'mo
             </button>
 
             <button
+              data-nav-item
+              data-nav-id={`widget:${sectionId}:more-info`}
+              data-nav-section-id={sectionId}
+              data-nav-role="more-info"
+              data-nav-axis="horizontal"
+              data-nav-group={`widget:${sectionId}:actions`}
               onClick={() => selected && handleNavigate(selected)}
               className="flex items-center gap-[clamp(6px,0.42vw,10px)] font-semibold cursor-pointer transition-all duration-200 hover:scale-105"
               style={{
@@ -341,6 +416,10 @@ export default function WidgetSection({ title, items, isLoading, mediaType = 'mo
             </p>
             {!(category === 'continue_watching' && items.length <= 10) && (
               <button
+                data-nav-item
+                data-nav-id={`widget:${sectionId}:see-more`}
+                data-nav-section-id={sectionId}
+                data-nav-role="see-more"
                 onClick={() =>
                   provider && category
                     ? navigate(
@@ -348,7 +427,8 @@ export default function WidgetSection({ title, items, isLoading, mediaType = 'mo
                       )
                     : navigate(`/search?q=${encodeURIComponent(title)}`)
                 }
-                className="uppercase tracking-[0.15em] text-white font-bold cursor-pointer hover:text-accent transition-colors"
+                tabIndex={0}
+                className="uppercase tracking-[0.15em] text-white font-bold cursor-pointer hover:text-accent transition-colors focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-transparent focus:outline-none rounded-btn"
                 style={{ fontSize: 'clamp(12px, 0.8vw, 14px)' }}
               >
                 See More &rarr;
@@ -374,6 +454,8 @@ export default function WidgetSection({ title, items, isLoading, mediaType = 'mo
 
           <div
             ref={ribbonRef}
+            data-nav-ribbon
+            data-nav-scroll-container
             className="flex gap-[var(--card-gap)] overflow-hidden scrollbar-hidden"
             style={{ paddingTop: '8px', paddingBottom: '8px', paddingLeft: '4px' }}
           >
@@ -384,6 +466,11 @@ export default function WidgetSection({ title, items, isLoading, mediaType = 'mo
               isSelected={idx === selectedIdx}
               onSelect={() => handleSelect(idx)}
               onNavigate={() => handleNavigate(item)}
+              initialFocus={initialFocus && idx === 0}
+              itemIndex={idx}
+              navId={`widget:${sectionId}:card:${idx}:${item.tmdb_id || item.id}`}
+              navGroup={cardGroup}
+              navSectionId={sectionId}
             />
           ))}
           </div>

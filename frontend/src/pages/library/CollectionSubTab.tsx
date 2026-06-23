@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback, type ElementType } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo, type ElementType } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Loader2 } from 'lucide-react'
+import { Loader2, ChevronDown, CheckCircle2 } from 'lucide-react'
 import { apiGet } from '@/lib/api'
 import PosterCard from '@/components/cards/PosterCard'
+import { useNavItem, useNavigation } from '@/navigation/NavigationProvider'
 import type { CollectionResponse, MediaItem, UserCollection } from '@/lib/types'
 
 // ---------------------------------------------------------------------------
@@ -80,12 +81,13 @@ interface Props {
   emptyHint: string
   mediaType: MediaTypeFilter
   setMediaType: (t: MediaTypeFilter) => void
+  sortValue: string
+  setSortValue: (s: string) => void
 }
 
-export default function CollectionSubTab({ collectionType, EmptyIcon, emptyTitle, emptyHint, mediaType, setMediaType }: Props) {
+export default function CollectionSubTab({ collectionType, EmptyIcon, emptyTitle, emptyHint, mediaType, setMediaType, sortValue, setSortValue }: Props) {
   const navigate = useNavigate()
-
-  const [sortValue, setSortValue] = useState<SortValue>('added_at-desc')
+  const { openMenuForItem, focusNavItem } = useNavigation()
 
   const [items, setItems] = useState<UserCollection[]>([])
   const [total, setTotal] = useState(0)
@@ -94,6 +96,34 @@ export default function CollectionSubTab({ collectionType, EmptyIcon, emptyTitle
   const [isLoadingMore, setIsLoadingMore] = useState(false)
 
   const currentSort = SORT_OPTIONS.find((o) => o.value === sortValue) ?? SORT_OPTIONS[0]
+  const pendingFocusFirstCard = useRef(false)
+
+  const sortNavId = `${collectionType}:sort`
+  const sortNavConfig = useMemo(() => ({
+    onEnter: () => { openMenuForItem(sortNavId) },
+    getContextMenu: () => SORT_OPTIONS.map((o) => ({
+      key: o.value,
+      label: o.label,
+      icon: o.value === sortValue ? <CheckCircle2 size={16} className="text-accent" /> : undefined,
+      onSelect: async () => {
+        if (o.value === sortValue) return
+        setSortValue(o.value)
+        pendingFocusFirstCard.current = true
+      },
+    })),
+  }), [sortNavId, openMenuForItem, sortValue, setSortValue])
+  const sortNavRef = useNavItem<HTMLButtonElement>(sortNavId, sortNavConfig)
+
+  // After a sort change re-fetch completes, focus the first PosterCard
+  useEffect(() => {
+    if (!pendingFocusFirstCard.current || isLoading) return
+    pendingFocusFirstCard.current = false
+    requestAnimationFrame(() => {
+      const firstCard = document.querySelector<HTMLElement>('[data-nav-item][data-nav-kind="card"]')
+      const id = firstCard?.getAttribute('data-nav-id')
+      if (id) focusNavItem(id)
+    })
+  }, [isLoading, focusNavItem])
 
   // Re-fetch from page 1 whenever filters change
   useEffect(() => {
@@ -165,6 +195,11 @@ export default function CollectionSubTab({ collectionType, EmptyIcon, emptyTitle
           {(['movie', 'show'] as const).map((t) => (
             <button
               key={t}
+              data-nav-item
+              data-nav-id={`${collectionType}-type:${t}`}
+              data-nav-kind="tab"
+              data-nav-axis="horizontal"
+              data-nav-group={`${collectionType}-type-tabs`}
               onClick={() => setMediaType(t)}
               className="rounded-full font-medium transition-all duration-200 cursor-pointer"
               style={{
@@ -180,26 +215,28 @@ export default function CollectionSubTab({ collectionType, EmptyIcon, emptyTitle
           ))}
         </div>
 
-        {/* Right: Sort & Filter */}
+        {/* Right: Sort dropdown */}
         <div className="flex items-center gap-2">
           <span className="text-white/40" style={{ fontSize: 'clamp(12px,0.75vw,14px)' }}>
             Sort:
           </span>
-          <select
-            value={sortValue}
-            onChange={(e) => setSortValue(e.target.value as SortValue)}
-            className="cursor-pointer rounded-lg border border-white/10 bg-white/5 text-white/80 transition-colors hover:border-white/20 hover:bg-white/8"
+          <button
+            ref={sortNavRef}
+            data-nav-item
+            data-nav-id={sortNavId}
+            data-nav-kind="button"
+            data-nav-axis="horizontal"
+            data-nav-group={`${collectionType}-controls`}
+            onClick={() => openMenuForItem(sortNavId)}
+            className="flex items-center gap-2 cursor-pointer rounded-lg border border-white/10 bg-white/5 text-white/80 transition-colors hover:border-white/20 hover:bg-white/8"
             style={{
               fontSize: 'clamp(12px,0.8vw,14px)',
               padding: 'clamp(5px,0.4vw,8px) clamp(10px,0.8vw,14px)',
             }}
           >
-            {SORT_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
+            <span>{currentSort.label}</span>
+            <ChevronDown size={14} className="text-white/50" />
+          </button>
         </div>
       </div>
 
@@ -207,7 +244,7 @@ export default function CollectionSubTab({ collectionType, EmptyIcon, emptyTitle
       <div className="flex-shrink-0 h-px bg-white/8 mx-[clamp(24px,2vw,48px)]" />
 
       {/* Scrollable content */}
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      <div className="flex-1 min-h-0 overflow-y-auto" data-nav-scroll-container>
         {/* Loading */}
         {isLoading && (
           <div
@@ -229,7 +266,7 @@ export default function CollectionSubTab({ collectionType, EmptyIcon, emptyTitle
                 padding: 'clamp(16px,1.5vh,24px) clamp(24px,2vw,48px)',
               }}
             >
-              {items.map((item) => {
+              {items.map((item, idx) => {
                 const mediaItem = toMediaItem(item)
                 return (
                   <PosterCard
@@ -237,6 +274,8 @@ export default function CollectionSubTab({ collectionType, EmptyIcon, emptyTitle
                     item={mediaItem}
                     onSelect={handleNavigate}
                     onNavigate={handleNavigate}
+                    itemIndex={idx}
+                    navGroup={`${collectionType}:grid`}
                   />
                 )
               })}
@@ -249,6 +288,8 @@ export default function CollectionSubTab({ collectionType, EmptyIcon, emptyTitle
                 style={{ padding: 'clamp(20px,3vh,40px) 0' }}
               >
                 <button
+                  data-nav-item
+                  data-nav-id={`${collectionType}:load-more`}
                   onClick={handleLoadMore}
                   disabled={isLoadingMore}
                   className="btn-secondary flex items-center justify-center gap-3 cursor-pointer"

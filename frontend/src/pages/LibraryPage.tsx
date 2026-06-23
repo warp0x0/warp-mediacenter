@@ -19,11 +19,14 @@ export default function LibraryPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const activeTab = (searchParams.get('tab') ?? 'liked') as Tab
   const mediaType = (searchParams.get('type') ?? 'movie') as MediaType
+  const sortValue = (searchParams.get('sort') ?? 'added_at-desc') as string
 
   const setTab = (tab: Tab) =>
-    setSearchParams({ tab, type: mediaType }, { replace: true })
+    setSearchParams({ tab, type: mediaType, sort: sortValue }, { replace: true })
   const setMediaType = (type: MediaType) =>
-    setSearchParams({ tab: activeTab, type }, { replace: true })
+    setSearchParams({ tab: activeTab, type, sort: sortValue }, { replace: true })
+  const setSortValue = (sort: string) =>
+    setSearchParams({ tab: activeTab, type: mediaType, sort }, { replace: true })
 
   return (
     <div
@@ -54,7 +57,13 @@ export default function LibraryPage() {
             return (
               <button
                 key={id}
+                data-nav-item
+                data-nav-id={`library-tab:${id}`}
+                data-nav-kind="tab"
+                data-nav-axis="horizontal"
+                data-nav-group="library-tabs"
                 onClick={() => setTab(id)}
+                {...(id === 'liked' ? { 'data-nav-initial': '' } : {})}
                 className={`inline-flex items-center justify-center gap-[clamp(5px,0.35vw,8px)] rounded-full font-medium transition-all duration-200 cursor-pointer whitespace-nowrap ${
                   isActive
                     ? 'bg-white/15 backdrop-blur-md border border-white/20 text-white shadow-[0_2px_12px_rgba(255,255,255,0.08)]'
@@ -78,8 +87,8 @@ export default function LibraryPage() {
 
       {/* Active sub-tab content */}
       <div className="flex-1 min-h-0 overflow-hidden">
-        {activeTab === 'liked'    && <LikedSubTab    mediaType={mediaType} setMediaType={setMediaType} />}
-        {activeTab === 'wishlist' && <WishlistSubTab mediaType={mediaType} setMediaType={setMediaType} />}
+        {activeTab === 'liked'    && <LikedSubTab    mediaType={mediaType} setMediaType={setMediaType} sortValue={sortValue} setSortValue={setSortValue} />}
+        {activeTab === 'wishlist' && <WishlistSubTab mediaType={mediaType} setMediaType={setMediaType} sortValue={sortValue} setSortValue={setSortValue} />}
         {activeTab === 'discover' && <DiscoverSubTab mediaType={mediaType} setMediaType={setMediaType} />}
         {activeTab === 'local'    && <LocalSubTab    mediaType={mediaType} setMediaType={setMediaType} />}
       </div>

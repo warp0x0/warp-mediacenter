@@ -1,6 +1,7 @@
-import { useEffect, useCallback } from 'react'
+import { useRef } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { X } from 'lucide-react'
+import { useFocusTrap } from '@/hooks/useFocusTrap'
 
 interface TrailerDialogProps {
   url: string | null
@@ -42,19 +43,8 @@ export default function TrailerDialog({ url, onClose }: TrailerDialogProps) {
     ? `https://www.youtube.com/embed/${videoId}?autoplay=1&rel=0&modestbranding=1`
     : null
 
-  // Close on Escape key
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    },
-    [onClose],
-  )
-
-  useEffect(() => {
-    if (!url) return
-    document.addEventListener('keydown', handleKeyDown)
-    return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [url, handleKeyDown])
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useFocusTrap(dialogRef, !!url, onClose)
 
   return (
     <AnimatePresence>
@@ -77,6 +67,7 @@ export default function TrailerDialog({ url, onClose }: TrailerDialogProps) {
 
           {/* Dialog panel — stops click propagation so clicking the video doesn't close */}
           <motion.div
+            ref={dialogRef}
             initial={{ scale: 0.92, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
             exit={{ scale: 0.92, opacity: 0 }}

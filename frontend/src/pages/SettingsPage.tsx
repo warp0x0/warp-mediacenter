@@ -32,6 +32,7 @@ export default function SettingsPage() {
   const [activeSection, setActiveSection] = useState('auth')
   const { data: providers, isLoading: providersLoading } = useProviders()
   const active = sections.find(s => s.id === activeSection)!
+  const ActiveIcon = active.icon
 
   return (
     <div
@@ -80,7 +81,13 @@ export default function SettingsPage() {
             return (
               <button
                 key={id}
+                data-nav-item
+                data-nav-id={`settings-section:${id}`}
+                data-nav-kind="tab"
+                data-nav-axis="vertical"
+                data-nav-group="settings-sidebar"
                 onClick={() => setActiveSection(id)}
+                {...(id === 'auth' ? { 'data-nav-initial': '' } : {})}
                 className="group relative flex items-center gap-3 w-full text-left transition-all duration-200 cursor-pointer"
                 style={{ padding: 'clamp(9px,1vh,14px) clamp(14px,1.1vw,20px)' }}
               >
@@ -149,7 +156,7 @@ export default function SettingsPage() {
             className="flex items-center justify-center rounded-xl bg-accent/20 text-accent shrink-0"
             style={{ width: 'clamp(38px,2.5vw,48px)', height: 'clamp(38px,2.5vw,48px)' }}
           >
-            <active.icon size={18} />
+            <ActiveIcon size={18} />
           </div>
           <div>
             <h2 className="text-white font-bold" style={{ fontSize: 'clamp(15px,1.1vw,20px)' }}>
@@ -163,6 +170,7 @@ export default function SettingsPage() {
 
         {/* Scrollable content body */}
         <div
+          data-nav-scroll-container
           className="flex-1 overflow-y-auto"
           style={{ padding: 'clamp(16px,1.67vw,28px)' }}
         >

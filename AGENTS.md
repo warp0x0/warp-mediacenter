@@ -75,6 +75,16 @@ warp_mediacenter/                  # Python package root
 
 frontend/                          # React + TypeScript + Vite
   src/                             # React app (components, hooks, contexts, pages)
+    hooks/
+      useRemoteNav.ts              # Android TV D-pad remote navigation (explicit zone transitions)
+      useFocusTrap.ts              # Modal focus trapping (Tab cycling, Escape to close)
+    components/shared/
+      ContextMenu.tsx              # Long-press context menu overlay (AnimatePresence + focus trap)
+      HelpDialog.tsx               # Keyboard shortcuts overlay
+    components/media/
+      WidgetSection.tsx            # Ribbon + hero backdrop rows (remote nav + long-press wired)
+    components/cards/
+      CatalogRow.tsx               # Horizontal poster grid (remote nav + long-press wired)
   src-tauri/                       # Tauri Rust shell
     src/main.rs                    # mpv IPC bridge, native player commands
     tauri.conf.json                # Tauri config (sidecar, bundled resources)
@@ -105,6 +115,10 @@ scripts/
 - **Plugin entrypoints** must be `module:function` format. Plugins require a `plugin.json` manifest at their root.
 - **FastAPI routes** are registered in `backend/api/app.py` under `/api/v1/` prefix. Service dependencies injected via `ServiceContainer` middleware.
 - **Tauri IPC** — Rust side (`main.rs`) manages mpv via Unix socket IPC. React communicates with mpv through Tauri commands (`player_open_window`, `player_pause`, etc.). Events emitted as `native-player-status`.
+- **Remote D-pad navigation** — `useRemoteNav` (mounted at App root) intercepts Arrow/Enter/Backspace keys for Android TV remote control. Uses explicit zone transitions: Up from content → TabBar, Down from TabBar → first content element, Left/Right sequential in ribbons and tabbars. Components declare zones via `data-nav-ribbon`, `data-nav-tabbar`, `data-nav-initial-focus` attributes.
+- **Modal focus trapping** — `useFocusTrap` saves/restores focus, traps Tab cycling within the dialog container, Escape to close. Applied to all modal/dialog components (TorrentDialog, SubtitleDialog, HelpDialog, AuthDialog, FileBrowserModal, ScanDialog, TrailerDialog, ResumeModal).
+- **Long-press context menus** — `useRemoteNav` fires `remotelongpress` CustomEvent on `document.activeElement` after 600ms hold. Components listen via event delegation on containers. `ContextMenu` component provides positioned overlay with focus trap. Context menu items: "Mark as Watched" (updates local play_history + Trakt `/sync/history`).
+- **Mark as Watched API** — `POST /api/v1/library/mark-watched` records a full-progress play_history entry in SQLite and syncs to Trakt via `POST /sync/history/{movies|episodes}`. Resolves title_id from tmdb_id, looks up Trakt IDs via TMDb→Trakt mapping.
 
 ## Current State
 

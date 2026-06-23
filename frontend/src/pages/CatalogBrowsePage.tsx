@@ -90,6 +90,7 @@ export default function CatalogBrowsePage() {
 
   return (
     <div
+      data-nav-scroll-container
       className="h-full overflow-y-auto bg-bg-primary"
       style={{ paddingTop: 'var(--tabbar-height)' }}
     >
@@ -101,7 +102,12 @@ export default function CatalogBrowsePage() {
         }}
       >
         <button
+          data-nav-item
+          data-nav-id="catalog-browse:back"
+          data-nav-kind="button"
+          data-nav-role="back"
           onClick={() => navigate(-1)}
+          data-nav-initial
           className="absolute left-[clamp(24px,2vw,48px)] btn-secondary flex items-center justify-center gap-[clamp(4px,0.31vw,8px)] cursor-pointer"
           style={{ fontSize: 'clamp(13px,0.9vw,16px)', padding: 'clamp(6px,0.5vw,10px) clamp(12px,1vw,20px)', width: '100px', height: '40px' }}
         >
@@ -154,12 +160,13 @@ export default function CatalogBrowsePage() {
               padding: '0 clamp(24px,2vw,48px)',
             }}
           >
-            {items.map((item) => (
+            {items.map((item, idx) => (
               <PosterCard
                 key={item.id}
                 item={item}
                 onSelect={handleNavigate}
                 onNavigate={handleNavigate}
+                itemIndex={idx}
               />
             ))}
           </div>
@@ -171,6 +178,9 @@ export default function CatalogBrowsePage() {
               style={{ padding: 'clamp(24px,3vh,48px) 0' }}
             >
               <button
+                data-nav-item
+                data-nav-id="catalog-browse:load-more"
+                data-nav-kind="button"
                 onClick={handleLoadMore}
                 disabled={isLoadingMore}
                 className="btn-secondary flex items-center justify-center gap-3 cursor-pointer"

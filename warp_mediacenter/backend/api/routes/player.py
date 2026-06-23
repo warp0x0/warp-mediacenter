@@ -220,21 +220,16 @@ async def create_preload_session(payload: Dict[str, Any], request: Request) -> D
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to create preload session: {exc}")
 
-    snap      = session.snapshot()
-    local_url = snap.get("local_url") or getattr(session.proxy, "local_url", None)
-
-    if magnet:
-        # Libtorrent: StreamProxy loopback IS the playback URL (no FastAPI stream hop)
-        playback_url = local_url or ""
-    else:
-        # RD/CDN: FastAPI proxy serves byte-range requests; local_url is the loopback shortcut
-        playback_url = str(
-            request.url_for("player_preload_session_stream", session_id=session.session_id)
-        )
+    # Both CDN and libtorrent sessions use the FastAPI stream endpoint as the
+    # playback URL.  The StreamProxy loopback is an internal server-side detail
+    # proxied by that endpoint — clients (mpv) never need to know about it, and
+    # it won't be reachable when the backend is on a separate server.
+    playback_url = str(
+        request.url_for("player_preload_session_stream", session_id=session.session_id)
+    )
 
     response = _session_response(request, session.session_id, playback_url)
     response["created_at"] = session.created_at.isoformat()
-    response["local_url"]  = local_url
     return response
 
 

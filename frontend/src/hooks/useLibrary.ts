@@ -66,3 +66,34 @@ export function useLibraryRecent(limit = 20) {
     { limit: String(limit) },
   )
 }
+
+export interface MarkWatchedResponse {
+  ok: boolean
+  title_id: number
+  media_type: string
+  local_recorded?: boolean
+  trakt_synced: boolean
+  trakt_history_synced?: boolean
+  trakt_playback_removed?: boolean
+  cache_invalidated?: boolean
+  trakt_error: string | null
+  errors?: string[]
+}
+
+export async function markAsWatched(payload: {
+  tmdb_id: string
+  media_type: 'movie' | 'show' | 'episode'
+  season?: number
+  episode?: number
+  playback_id?: number
+  title_id?: number
+  title?: string
+  year?: number | null
+  overview?: string | null
+  poster_path?: string | null
+  backdrop_path?: string | null
+  poster_url?: string | null
+  backdrop_url?: string | null
+}): Promise<MarkWatchedResponse> {
+  return apiPost<MarkWatchedResponse>('/api/v1/library/mark-watched', payload)
+}

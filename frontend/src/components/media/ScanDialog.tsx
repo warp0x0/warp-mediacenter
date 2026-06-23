@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { Folder, Play, CheckCircle2, AlertCircle, Loader2, Film, Tv } from 'lucide-react'
 import { apiGet, apiPost } from '@/lib/api'
 import FileBrowserModal from './FileBrowserModal'
+import { useFocusTrap } from '@/hooks/useFocusTrap'
 import type { ScanStatusResponse } from '@/lib/types'
 
 // ---------------------------------------------------------------------------
@@ -188,6 +189,7 @@ export default function ScanDialog({ open, onClose, onAddToLibrary }: Props) {
   const [showPanel, setShowPanel] = useState<PanelState>(defaultPanel)
   const [browserOpen, setBrowserOpen] = useState(false)
   const [browserTarget, setBrowserTarget] = useState<'movie' | 'show'>('movie')
+  const dialogRef = useRef<HTMLDivElement>(null)
 
   const activePanel = (moviePanel.status === 'scanning' || moviePanel.status === 'cancelling') ? 'movie'
     : (showPanel.status === 'scanning' || showPanel.status === 'cancelling') ? 'show'
@@ -316,6 +318,8 @@ export default function ScanDialog({ open, onClose, onAddToLibrary }: Props) {
     onAddToLibrary()
   }
 
+  useFocusTrap(dialogRef, open, handleClose)
+
   if (!open) return null
 
   return (
@@ -326,6 +330,7 @@ export default function ScanDialog({ open, onClose, onAddToLibrary }: Props) {
         onClick={moviePanel.status === 'cancelling' || showPanel.status === 'cancelling' ? undefined : handleClose}
       >
         <div
+          ref={dialogRef}
           className="flex flex-col border border-white/10 rounded-2xl shadow-2xl overflow-hidden"
           style={{ width: 760, maxHeight: '85vh', background: 'rgba(14,14,20,0.98)' }}
           onClick={(e) => e.stopPropagation()}

@@ -24,7 +24,7 @@ export default function EpisodeCard({ episode, onSelect, onPlay }: EpisodeCardPr
       onClick={() => onSelect(episode)}
       onDoubleClick={() => onPlay(episode)}
       tabIndex={0}
-      className="flex gap-[clamp(8px,0.63vw,14px)] rounded-card border border-white/5 bg-white/[0.02] hover:bg-white/[0.04] transition-colors cursor-pointer focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none p-[clamp(8px,0.63vw,14px)]"
+      className="flex gap-[clamp(8px,0.63vw,14px)] rounded-card border border-white/5 bg-white/[0.02] hover:bg-white/[0.04] transition-colors cursor-pointer focus:ring-2 focus:ring-accent focus:outline-none p-[clamp(8px,0.63vw,14px)]"
       style={{ height: 'clamp(70px, 9.26vh, 100px)' }}
     >
       <div className="flex items-center justify-center rounded-btn bg-accent-muted text-accent font-bold shrink-0"

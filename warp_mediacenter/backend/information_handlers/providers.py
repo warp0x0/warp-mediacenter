@@ -673,6 +673,28 @@ class InformationProviders:
             return None
         return self._trakt.lookup_by_tmdb_id(tmdb_id, media_type)
 
+    def trakt_add_to_history(
+        self,
+        *,
+        media_type: MediaType,
+        items: Sequence[Mapping[str, Any]],
+    ) -> Dict[str, Any]:
+        """Add items to Trakt watched history."""
+        return self._require_trakt().add_to_history(
+            media_type=media_type,
+            items=items,
+        )
+
+    def trakt_delete_playback(self, playback_id: int | str) -> bool:
+        """Remove an in-progress playback item from Trakt."""
+        return self._require_trakt().delete_playback(playback_id)
+
+    def invalidate_continue_watching_cache(self) -> None:
+        """Clear the provider-level continue watching cache."""
+        self._continue_watching_cache = None
+        self._continue_watching_cache_params = None
+        self._continue_watching_cache_ts = None
+
     def trakt_get_show_watched_progress(
         self,
         trakt_show_id: str,

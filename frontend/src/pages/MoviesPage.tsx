@@ -1,11 +1,10 @@
-import { useMemo, useEffect, useRef } from 'react'
+import { useMemo } from 'react'
 import { useCatalog } from '@/hooks/useCatalog'
 import { useWidgets } from '@/hooks/useSettings'
 import { DEFAULT_MOVIE_WIDGETS } from '@/lib/constants'
 import WidgetSection from '@/components/media/WidgetSection'
 
 export default function MoviesPage() {
-  const containerRef = useRef<HTMLDivElement>(null)
   const { data: widgetsData } = useWidgets()
 
   // Merge saved config with defaults — always exactly 6 slots
@@ -34,20 +33,12 @@ export default function MoviesPage() {
     [catalogResults],
   )
 
-  useEffect(() => {
-    const el = containerRef.current
-    if (el) {
-      el.scrollTo({ top: 0, behavior: 'smooth' })
-    }
-  }, [isLoading])
-
   return (
     <div
-      ref={containerRef}
+      data-nav-scroll-container
       className="h-full w-full overflow-y-auto overflow-x-hidden scrollbar-hidden"
       style={{
         scrollSnapType: 'y mandatory',
-        scrollBehavior: 'smooth',
       }}
     >
       {catalogResults.map(({ title, data }, idx) => (
@@ -59,6 +50,7 @@ export default function MoviesPage() {
           mediaType="movie"
           provider={w[idx]?.provider}
           category={w[idx]?.category}
+          initialFocus={idx === 0}
         />
       ))}
     </div>

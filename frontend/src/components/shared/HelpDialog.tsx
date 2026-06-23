@@ -1,5 +1,7 @@
+import { useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { X } from 'lucide-react'
+import { useFocusTrap } from '@/hooks/useFocusTrap'
 
 interface HelpDialogProps {
   open: boolean
@@ -17,6 +19,9 @@ const shortcuts = [
 ]
 
 export default function HelpDialog({ open, onClose }: HelpDialogProps) {
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useFocusTrap(dialogRef, open, onClose)
+
   return (
     <AnimatePresence>
       {open && (
@@ -29,6 +34,7 @@ export default function HelpDialog({ open, onClose }: HelpDialogProps) {
             onClick={onClose}
           />
           <motion.div
+            ref={dialogRef}
             initial={{ opacity: 0, scale: 0.95, y: 20 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 20 }}

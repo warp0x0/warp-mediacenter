@@ -1281,6 +1281,45 @@ class TraktManager:
             return []
         return [item for item in payload if isinstance(item, Mapping)]
 
+    def add_to_history(
+        self,
+        *,
+        media_type: MediaType,
+        items: Sequence[Mapping[str, Any]],
+        show: Optional[Mapping[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Add items to Trakt watched history via POST /sync/history/{media_type}.
+
+        For movies, each item should have ``{"ids": {"trakt": <id>}}`` or
+        ``{"ids": {"tmdb": <id>}}``.
+        For episodes, each item should have ``{"ids": {...}, "show": {"ids": {...}}}``.
+        """
+        if media_type not in {MediaType.MOVIE, MediaType.SHOW, MediaType.EPISODE}:
+            raise ValueError("History add is only valid for movies, shows, or episodes")
+
+        if media_type == MediaType.MOVIE:
+            key = "movies"
+        elif media_type == MediaType.SHOW:
+            key = "shows"
+        else:
+            key = "episodes"
+        body: Dict[str, Any] = {key: [dict(item) for item in items]}
+
+        path = settings.get_provider_endpoints("trakt")["sync"]["history"]
+
+        payload = self._authorized_post(path, json_body=body)
+        return payload if isinstance(payload, dict) else {"added": 0}
+
+    def delete_playback(self, playback_id: int | str) -> bool:
+        """Remove an in-progress playback item from Trakt."""
+        raw_id = str(playback_id or "").strip()
+        if not raw_id:
+            raise ValueError("playback_id is required")
+
+        path = settings.get_provider_endpoints("trakt")["sync"]["playback_item"].format(id=raw_id)
+        response = self._authorized_delete_response(path, allowed_statuses={404})
+        return response.status_code == 204
+
     def lookup_by_tmdb_id(
         self,
         tmdb_id: str | int,
@@ -1902,6 +1941,33 @@ class TraktManager:
                 _SERVICE_NAME,
                 path,
                 json_body=dict(json_body or {}),
+                headers=self._auth_headers(),
+                allowed_statuses=allowed,
+            )
+        return response
+
+    def _authorized_delete_response(
+        self,
+        path: str,
+        *,
+        allowed_statuses: Optional[Iterable[int]] = None,
+    ):
+        self._ensure_valid_token()
+        headers = self._auth_headers()
+        allowed = set(allowed_statuses or [])
+
+        try:
+            response = self._session.delete(
+                _SERVICE_NAME,
+                path,
+                headers=headers,
+                allowed_statuses=allowed,
+            )
+        except Unauthorized:
+            self.refresh_tokens()
+            response = self._session.delete(
+                _SERVICE_NAME,
+                path,
                 headers=self._auth_headers(),
                 allowed_statuses=allowed,
             )

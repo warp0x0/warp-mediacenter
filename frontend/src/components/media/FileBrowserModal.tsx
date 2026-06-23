@@ -1,6 +1,9 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
+
 import { ChevronRight, Folder, FolderOpen, X, Check, ChevronLeft } from 'lucide-react'
+
 import { apiGet } from '@/lib/api'
+import { useFocusTrap } from '@/hooks/useFocusTrap'
 import type { FileBrowseResponse } from '@/lib/types'
 
 interface Props {
@@ -14,6 +17,9 @@ export default function FileBrowserModal({ open, title = 'Select Folder', onSele
   const [currentPath, setCurrentPath] = useState('')
   const [browse, setBrowse] = useState<FileBrowseResponse | null>(null)
   const [isLoading, setIsLoading] = useState(false)
+  const dialogRef = useRef<HTMLDivElement>(null)
+
+  useFocusTrap(dialogRef, open, onClose)
 
   const navigate = async (path: string) => {
     setIsLoading(true)
@@ -51,6 +57,7 @@ export default function FileBrowserModal({ open, title = 'Select Folder', onSele
       onClick={onClose}
     >
       <div
+        ref={dialogRef}
         className="flex flex-col border border-white/10 rounded-2xl shadow-2xl overflow-hidden"
         style={{ width: 560, maxHeight: '70vh', background: 'rgba(14,14,20,0.98)' }}
         onClick={(e) => e.stopPropagation()}

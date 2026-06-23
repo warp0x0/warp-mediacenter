@@ -1,27 +1,57 @@
 import { Star } from 'lucide-react'
 import { useTmdbEnrichment } from '@/hooks/useTmdbEnrichment'
 import CollectionButtons from './CollectionButtons'
+import { useMemo } from 'react'
+import { useNavItem, useNavigation } from '@/navigation/NavigationProvider'
+import { useMediaContextMenuItems } from '@/navigation/useMediaContextMenuItems'
 import type { MediaItem } from '@/lib/types'
 
 interface PosterCardProps {
   item: MediaItem
   onSelect: (item: MediaItem) => void
   onNavigate: (item: MediaItem) => void
+  itemIndex?: number
+  navGroup?: string
+  navSectionId?: string
+  initialFocus?: boolean
 }
 
-export default function PosterCard({ item, onSelect, onNavigate }: PosterCardProps) {
+export default function PosterCard({ item, onSelect, onNavigate, itemIndex, navGroup, navSectionId, initialFocus }: PosterCardProps) {
   const title = item.title || item.media?.title || item.media?.name || 'Unknown'
   const { posterUrl, rating } = useTmdbEnrichment(item)
   const year = item.year
+  const stableId = String(item.tmdb_id || item.id || title)
+  const navId = `${navGroup ?? 'poster'}:${itemIndex ?? stableId}:${stableId}`
+  const menuItems = useMediaContextMenuItems(item)
+  const { rememberFocusForNavigation } = useNavigation()
+  const navConfig = useMemo(() => ({
+    onEnter: () => {
+      rememberFocusForNavigation(navId)
+      onNavigate(item)
+    },
+    getContextMenu: () => menuItems,
+  }), [item, menuItems, navId, onNavigate, rememberFocusForNavigation])
+  const navRef = useNavItem<HTMLDivElement>(navId, navConfig)
 
   return (
     <div
+      ref={navRef}
       role="button"
       tabIndex={0}
+      data-nav-item
+      data-nav-id={navId}
+      data-nav-kind="card"
+      data-nav-axis="horizontal"
+      {...(navGroup ? { 'data-nav-group': navGroup } : {})}
+      {...(navSectionId ? { 'data-nav-section-id': navSectionId } : {})}
+      {...(initialFocus ? { 'data-nav-initial': '' } : {})}
+      {...(itemIndex != null ? { 'data-item-index': itemIndex } : {})}
       onClick={() => onSelect(item)}
-      onDoubleClick={() => onNavigate(item)}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onSelect(item) }}
-      className="flex-shrink-0 flex flex-col gap-[clamp(4px,0.31vw,8px)] cursor-pointer rounded-[var(--card-radius)] focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary focus-visible:outline-none group transition-transform duration-150 ease-out hover:scale-105 active:scale-[0.98]"
+      onDoubleClick={() => {
+        rememberFocusForNavigation(navId)
+        onNavigate(item)
+      }}
+      className="flex-shrink-0 flex flex-col gap-[clamp(4px,0.31vw,8px)] cursor-pointer rounded-[var(--card-radius)] focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-bg-primary focus:outline-none group transition-transform duration-150 ease-out hover:scale-105 active:scale-[0.98]"
       style={{ width: 'var(--poster-width)' }}
     >
       <div

@@ -119,6 +119,25 @@ class HttpSession:
             allowed_statuses=allowed_statuses,
         )
 
+    def delete(
+        self,
+        service: str,
+        path: str,
+        *,
+        params: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+        allowed_statuses: Optional[Collection[int]] = None,
+    ) -> requests.Response:
+
+        return self._request(
+            "DELETE",
+            service,
+            path,
+            params=params,
+            headers=headers,
+            allowed_statuses=allowed_statuses,
+        )
+
     def register_token_refresher(
         self,
         service: str,

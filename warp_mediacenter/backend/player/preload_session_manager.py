@@ -30,27 +30,37 @@ class _LibtorrentProxyShim:
     def __init__(self, lt_manager: Any, lt_session_id: str) -> None:
         self._lt = lt_manager
         self._lt_sid = lt_session_id
+        # Cache the loopback URL once set — it never changes after proxy starts
+        self._cached_local_url: Optional[str] = None
 
     def snapshot(self) -> Dict[str, Any]:
-        raw = self._lt.status(self._lt_sid)
-        pct     = raw.get("progress_pct", 0.0)
-        total   = raw.get("total_bytes", 0)
-        seeding = raw.get("state") in ("seeding", "finished")
+        raw   = self._lt.status(self._lt_sid)
+        pct   = raw.get("progress_pct", 0.0)
+        total = raw.get("total_bytes", 0)
+        # done = True only when the StreamProxy is serving the complete file
+        done = bool(raw.get("local_url"))
+        # percent is kept at 0.0 during download so the frontend's `pct >= 20`
+        # threshold does NOT fire before the file is fully on disk.
+        # download_complete=True is the sole trigger for onStreamReady.
+        # bytes_downloaded still reflects real progress for the MB counter in the banner.
         return {
-            "url":               raw.get("local_url") or "",
+            "url":               "",
             "bytes_downloaded":  raw.get("bytes_downloaded", 0),
             "total_size":        total,
-            "remaining_size":    total,   # no partial-range offset for libtorrent
-            "percent":           pct,
-            "active":            raw.get("state") in ("downloading", "waiting_metadata"),
-            "download_complete": seeding,
+            "remaining_size":    total,
+            "percent":           100.0 if done else pct,
+            "active":            raw.get("state") in ("downloading", "waiting_metadata", "seeding"),
+            "download_complete": done,
             "error":             raw.get("error"),
-            "local_url":         raw.get("local_url"),
         }
 
     @property
     def local_url(self) -> Optional[str]:
-        return self._lt.status(self._lt_sid).get("local_url")
+        """Internal loopback URL used by the FastAPI stream endpoint to proxy bytes.
+        Cached once set — never changes after the proxy starts."""
+        if self._cached_local_url is None:
+            self._cached_local_url = self._lt.status(self._lt_sid).get("local_url")
+        return self._cached_local_url
 
     def close(self) -> None:
         self._lt.stop(self._lt_sid)
@@ -92,8 +102,7 @@ class _LibtorrentSession:
             "download_complete": snap["download_complete"],
             "error":             error,
             "active":            snap["active"],
-            "local_url":         snap.get("local_url"),
-            "playback_url":      snap.get("local_url") or "",
+            "local_torrent":     True,
             "buffer_ahead_bytes": 0,
             "active_streams":    self.active_streams,
             "created_at":        self.created_at.isoformat(),
@@ -218,9 +227,10 @@ class PreloadSessionManager:
     ) -> _LibtorrentSession:
         """Start a libtorrent download and expose it as a preload session.
 
-        Blocks until the StreamProxy loopback URL is available (torrent metadata
-        downloaded and piece selection applied) — mirrors how create_session()
-        blocks until CDN response headers arrive.
+        Blocks only until torrent metadata arrives (file name and size are known).
+        The actual download runs in the background; the proxy URL is populated once
+        the file is 100% on disk.  The frontend polls the status endpoint and fires
+        onStreamReady when download_complete becomes True.
         """
         from warp_mediacenter.backend.player.libtorrent_manager import get_manager as _lt_get  # noqa: PLC0415
 
@@ -230,11 +240,12 @@ class PreloadSessionManager:
         lt_manager    = _lt_get()
         lt_session_id = lt_manager.start(magnet=magnet, start_percent=start_percent)
 
-        # Poll until the StreamProxy loopback URL is ready (metadata downloaded)
+        # Poll until metadata arrives (state transitions to "downloading").
+        # This typically takes 5–30 s depending on tracker/peer availability.
         deadline = time.monotonic() + metadata_timeout
         while time.monotonic() < deadline:
             raw = lt_manager.status(lt_session_id)
-            if raw.get("local_url"):
+            if raw.get("state") == "downloading":
                 break
             if raw.get("state") == "error":
                 lt_manager.stop(lt_session_id)

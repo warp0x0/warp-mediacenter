@@ -31,6 +31,7 @@ interface DiscoverRowProps {
 function DiscoverRow({ title, items, isLoading, isError, seeMorePath, onNavigate }: DiscoverRowProps) {
   const navigate = useNavigate()
   const scrollRef = useRef<HTMLDivElement>(null)
+  const navGroup = `discover:${title.replace(/[^a-zA-Z0-9:_-]+/g, '-')}`
 
   const scroll = (dir: 'left' | 'right') => {
     scrollRef.current?.scrollBy({ left: dir === 'left' ? -700 : 700, behavior: 'smooth' })
@@ -57,6 +58,9 @@ function DiscoverRow({ title, items, isLoading, isError, seeMorePath, onNavigate
         </h3>
         {seeMorePath && !isLoading && items.length > 0 && (
           <button
+            data-nav-item
+            data-nav-id={`${navGroup}:see-more`}
+            data-nav-kind="button"
             onClick={() => navigate(seeMorePath)}
             className="flex items-center gap-1 font-medium transition-colors cursor-pointer"
             style={{ fontSize: 'clamp(11px,0.75vw,13px)', color: 'var(--accent)' }}
@@ -111,18 +115,21 @@ function DiscoverRow({ title, items, isLoading, isError, seeMorePath, onNavigate
           {/* Scrollable items */}
           <div
             ref={scrollRef}
+            data-nav-ribbon
             className="flex overflow-hidden scrollbar-hidden"
             style={{
               gap: 'var(--card-gap)',
               padding: '4px clamp(20px,2vw,40px) 6px',
             }}
           >
-            {items.map((item) => (
+            {items.map((item, idx) => (
               <PosterCard
                 key={item.id}
                 item={item}
                 onSelect={onNavigate}
                 onNavigate={onNavigate}
+                itemIndex={idx}
+                navGroup={navGroup}
               />
             ))}
           </div>
@@ -197,6 +204,11 @@ export default function DiscoverSubTab({ mediaType, setMediaType }: Props) {
           {(['movie', 'show'] as const).map((t) => (
             <button
               key={t}
+              data-nav-item
+              data-nav-id={`discover-type:${t}`}
+              data-nav-kind="tab"
+              data-nav-axis="horizontal"
+              data-nav-group="discover-type-tabs"
               onClick={() => setMediaType(t)}
               className="rounded-full font-medium transition-all duration-200 cursor-pointer"
               style={{
@@ -220,6 +232,7 @@ export default function DiscoverSubTab({ mediaType, setMediaType }: Props) {
 
       {/* Scrollable ribbon sections */}
       <div
+        data-nav-scroll-container
         className="flex-1 min-h-0 overflow-y-auto"
         style={{ paddingTop: 'clamp(16px,1.5vh,24px)' }}
       >

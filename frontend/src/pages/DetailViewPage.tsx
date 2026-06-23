@@ -1,22 +1,138 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { mutate } from 'swr'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, Play, Star, Plus, Share2, Heart, Loader2, Tags, CheckCircle2, HardDrive, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useBackdrop } from '@/contexts/BackdropContext'
-import { useTitleDetail, useTitleSources } from '@/hooks/useLibrary'
+import { useTitleDetail, useTitleSources, markAsWatched } from '@/hooks/useLibrary'
+import { useFocusTrap } from '@/hooks/useFocusTrap'
 import { useMovieDetail, useShowDetail, useShowSeasons, useImdbRating, useShowProgress } from '@/hooks/useDetail'
 import RatingBadges from '@/components/media/RatingBadges'
 import TorrentDialog from '@/components/media/TorrentDialog'
 import TrailerDialog from '@/components/media/TrailerDialog'
 import LoadingSpinner from '@/components/shared/LoadingSpinner'
+import ContextMenu from '@/components/shared/ContextMenu'
 import { useApi } from '@/hooks/useApi'
 import { useIsLiked, useIsWishlisted } from '@/hooks/useCollections'
 import { playMedia } from '@/hooks/usePlayer'
 import { isTauriRuntime, openPlayerWindow } from '@/lib/tauri'
 import { IMAGE_BASE } from '@/lib/constants'
 import { BASE_URL } from '@/lib/api'
+import { useNavItem } from '@/navigation/NavigationProvider'
+import type { NavContextMenuItem } from '@/navigation/NavigationProvider'
 import type { CastMember, CollectionItemPayload, EpisodeDetail, MediaItem, SourceRow, WatchProvidersResponse, SeasonDetail } from '@/lib/types'
 
 type DetailLocationState = { item?: MediaItem }
+
+function refreshWatchedCatalogs() {
+  void mutate((key) => {
+    if (!Array.isArray(key)) return false
+    const path = key[0]
+    return path === '/api/v1/catalog/trakt/continue_watching'
+      || path === '/api/v1/catalog/continue-watching'
+      || path === '/api/v1/catalog/trakt/based_on_watched'
+  })
+}
+
+interface EpisodePlayButtonProps {
+  navId: string
+  seasonNum: number
+  episodeNum: number
+  episodeIndex: number
+  isWatched: boolean
+  isResumeEpisode: boolean
+  scrobblePercent: number | null
+  hasLocalSource: boolean
+  isMarkingWatched: boolean
+  onPlay: () => void
+  onMarkWatched: () => Promise<void>
+}
+
+function EpisodePlayButton({
+  navId,
+  seasonNum,
+  episodeNum,
+  episodeIndex,
+  isWatched,
+  isResumeEpisode,
+  scrobblePercent,
+  hasLocalSource,
+  isMarkingWatched,
+  onPlay,
+  onMarkWatched,
+}: EpisodePlayButtonProps) {
+  const menuItems = useMemo<NavContextMenuItem[]>(() => [
+    {
+      key: 'mark-watched',
+      label: 'Mark as Watched',
+      icon: <CheckCircle2 size={16} />,
+      onSelect: onMarkWatched,
+    },
+  ], [onMarkWatched])
+
+  const navConfig = useMemo(() => ({
+    onEnter: () => {
+      if (!isMarkingWatched) onPlay()
+    },
+    getContextMenu: () => menuItems,
+  }), [isMarkingWatched, menuItems, onPlay])
+  const ref = useNavItem<HTMLDivElement>(navId, navConfig)
+
+  const watchedDone = isWatched && !isResumeEpisode
+  const background = watchedDone
+    ? 'rgba(16,185,129,0.16)'
+    : scrobblePercent != null
+      ? 'rgba(217,119,6,0.9)'
+      : 'rgba(229,9,20,0.85)'
+  const boxShadow = watchedDone
+    ? '0 2px 12px rgba(16,185,129,0.16)'
+    : scrobblePercent != null
+      ? '0 2px 12px rgba(217,119,6,0.4)'
+      : '0 2px 12px rgba(229,9,20,0.3)'
+
+  return (
+    <div
+      ref={ref}
+      role="button"
+      tabIndex={0}
+      data-nav-item
+      data-nav-id={navId}
+      data-nav-kind="button"
+      data-nav-axis="vertical"
+      data-nav-group="detail-episodes"
+      data-episode-play-button
+      data-episode-idx={episodeIndex}
+      data-season-number={seasonNum}
+      data-episode-number={episodeNum}
+      aria-busy={isMarkingWatched}
+      onClick={() => {
+        if (!isMarkingWatched) onPlay()
+      }}
+      className={`flex-shrink-0 flex items-center gap-2 font-semibold cursor-pointer transition-all duration-200 ${
+        isMarkingWatched ? 'opacity-80' : 'hover:scale-105 hover:brightness-110'
+      }`}
+      style={{
+        padding: '10px 22px',
+        fontSize: 13,
+        borderRadius: 8,
+        background,
+        boxShadow,
+        color: watchedDone ? 'rgb(110,231,183)' : '#fff',
+        border: watchedDone ? '1px solid rgba(16,185,129,0.35)' : '1px solid transparent',
+        whiteSpace: 'nowrap',
+        marginRight: '20px',
+      }}
+    >
+      {isMarkingWatched
+        ? <Loader2 size={14} className="animate-spin" />
+        : watchedDone
+        ? <CheckCircle2 size={14} />
+        : hasLocalSource
+          ? <HardDrive size={14} />
+          : <Play size={14} fill="currentColor" />}
+      {isMarkingWatched ? 'Updating...' : watchedDone ? 'Watched' : scrobblePercent != null ? 'Resume' : 'Play'}
+    </div>
+  )
+}
 
 export default function DetailViewPage() {
   const { mediaId } = useParams()
@@ -31,7 +147,16 @@ export default function DetailViewPage() {
   // Resume modal state
   const [resumeModalOpen, setResumeModalOpen] = useState(false)
   const [resumePercent, setResumePercent] = useState<number | null>(null)
+  const resumeModalRef = useRef<HTMLDivElement>(null)
+  const episodesContainerRef = useRef<HTMLDivElement>(null)
+  const [episodeContextMenu, setEpisodeContextMenu] = useState<{
+    open: boolean; season: number; episode: number; loading: boolean
+  }>({ open: false, season: 0, episode: 0, loading: false })
+  const [markingEpisodeKey, setMarkingEpisodeKey] = useState<string | null>(null)
+  const episodeContextAnchorRef = useRef<HTMLElement | null>(null)
   const state = location.state as DetailLocationState | null
+
+  useFocusTrap(resumeModalRef, resumeModalOpen, () => setResumeModalOpen(false))
 
   const media = state?.item ?? null
   const titleId = media?.tmdb_id || mediaId || null
@@ -113,6 +238,13 @@ export default function DetailViewPage() {
   const isDetailLoading = isShow ? showDetail.isLoading : movieDetail.isLoading
 
   const trailerUrl = richDetail?.trailers?.[0]?.url ?? null
+  const title = media?.title || detail?.title || richDetail?.title || 'Detail'
+  const year = media?.year ?? detail?.year ?? null
+  const rating = media?.rating ?? richDetail?.vote_average ?? null
+  const overview = media?.overview || detail?.overview || richDetail?.overview || 'No synopsis available.'
+  const genres = (media?.genres?.length ? media.genres : richDetail?.genres) || []
+  const tagline = !isShow ? (richDetail as { tagline?: string } | null)?.tagline ?? null : null
+  const runtime = !isShow ? (richDetail as { runtime_minutes?: number } | null)?.runtime_minutes ?? null : null
 
   function handlePlayTrailer() {
     if (!trailerUrl) return
@@ -147,14 +279,56 @@ export default function DetailViewPage() {
     setTorrentOpen(true)
   }
 
-  const title = media?.title || detail?.title || richDetail?.title || 'Detail'
-  const year = media?.year ?? detail?.year ?? null
-  const rating = media?.rating ?? richDetail?.vote_average ?? null
-  const overview = media?.overview || detail?.overview || richDetail?.overview || 'No synopsis available.'
-  const genres = (media?.genres?.length ? media.genres : richDetail?.genres) || []
-  const tagline = !isShow ? (richDetail as { tagline?: string } | null)?.tagline ?? null : null
-  const runtime = !isShow ? (richDetail as { runtime_minutes?: number } | null)?.runtime_minutes ?? null : null
-  
+  // Restore focus to the episode card that opened the context menu after it closes
+  const prevEpisodeContextMenuOpen = useRef(episodeContextMenu.open)
+  useEffect(() => {
+    if (prevEpisodeContextMenuOpen.current && !episodeContextMenu.open && episodeContextAnchorRef.current) {
+      const anchor = episodeContextAnchorRef.current
+      requestAnimationFrame(() => {
+        anchor.focus({ preventScroll: true })
+      })
+      episodeContextAnchorRef.current = null
+    }
+    prevEpisodeContextMenuOpen.current = episodeContextMenu.open
+  }, [episodeContextMenu.open])
+
+  const handleMarkEpisodeWatched = useCallback(async (seasonNumber: number, episodeNumber: number, playbackId?: number | null) => {
+    const episodeKey = `${seasonNumber}:${episodeNumber}`
+    setMarkingEpisodeKey(episodeKey)
+    try {
+      await markAsWatched({
+        tmdb_id: media?.tmdb_id || mediaId || '',
+        media_type: 'episode',
+        season: seasonNumber,
+        episode: episodeNumber,
+        playback_id: playbackId ?? undefined,
+        title,
+        year,
+        overview,
+        poster_path: media?.poster_path || detail?.poster_path || null,
+        backdrop_path: media?.backdrop_path || detail?.backdrop_path || null,
+      })
+      await showProgressQuery.mutate()
+      refreshWatchedCatalogs()
+    } finally {
+      setMarkingEpisodeKey((current) => (current === episodeKey ? null : current))
+    }
+  }, [detail?.backdrop_path, detail?.poster_path, media?.backdrop_path, media?.poster_path, media?.tmdb_id, mediaId, overview, showProgressQuery, title, year])
+
+  async function handleEpisodeContextMenuAction(key: string) {
+    if (key === 'mark-watched') {
+      setEpisodeContextMenu((prev) => ({ ...prev, loading: true }))
+      try {
+        const progressSeason = showProgressQuery.data?.seasons?.find((s) => s.number === episodeContextMenu.season)
+        const progressEp = progressSeason?.episodes?.find((ep) => ep.number === episodeContextMenu.episode)
+        await handleMarkEpisodeWatched(episodeContextMenu.season, episodeContextMenu.episode, progressEp?.playback_id)
+        setEpisodeContextMenu({ open: false, season: 0, episode: 0, loading: false })
+      } catch {
+        setEpisodeContextMenu((prev) => ({ ...prev, loading: false }))
+      }
+    }
+  }
+
   type CrewMember = { job?: string; department?: string; name?: string }
   const director = (richDetail?.credits?.crew as CrewMember[] | undefined)?.find((c) => c.job === 'Director')?.name ?? null
   const writers = (richDetail?.credits?.crew as CrewMember[] | undefined)?.filter((c) => c.department === 'Writing')?.slice(0, 2).map((c) => c.name).filter((n): n is string => !!n) ?? []
@@ -169,6 +343,33 @@ export default function DetailViewPage() {
     else clearBackdrop()
     return () => clearBackdrop()
   }, [media?.backdrop_path, richDetail?.backdrop?.url, detail?.backdrop_path, clearBackdrop, setBackdrop])
+
+  // Long-press context menu for episodes
+  useEffect(() => {
+    const el = episodesContainerRef.current
+    if (!el) return
+    const handler = (e: Event) => {
+      const target = e.target as HTMLElement
+      const playButton = target.closest('[data-episode-play-button]')
+      const idxAttr = playButton?.getAttribute('data-episode-idx')
+      if (idxAttr != null) {
+        const idx = parseInt(idxAttr, 10)
+        const episodes = seasonsQuery.data?.seasons[selectedSeasonIdx]?.episodes
+        if (!isNaN(idx) && episodes && episodes[idx]) {
+          const seasonNum = seasonsQuery.data!.seasons[selectedSeasonIdx].season_number
+          episodeContextAnchorRef.current = playButton as HTMLElement
+          setEpisodeContextMenu({
+            open: true,
+            season: seasonNum,
+            episode: episodes[idx].episode_number ?? idx + 1,
+            loading: false,
+          })
+        }
+      }
+    }
+    el.addEventListener('remotelongpress', handler)
+    return () => el.removeEventListener('remotelongpress', handler)
+  }, [seasonsQuery.data, selectedSeasonIdx])
 
   function handleBack() { navigate(-1) }
 
@@ -343,7 +544,7 @@ export default function DetailViewPage() {
   } : undefined
 
   return (
-    <div className="w-full h-screen overflow-y-auto overflow-x-hidden bg-[#0a0a0a]">
+    <div className="w-full h-screen overflow-y-auto overflow-x-hidden bg-[#0a0a0a]" data-nav-scroll-container>
       {/* HERO SECTION WITH BACKDROP */}
       <div className="relative w-full" style={{ height: '70vh', minHeight: '500px' }}>
         {backdropUrl && (
@@ -365,6 +566,12 @@ export default function DetailViewPage() {
 
         {/* BACK BUTTON */}
         <button 
+          data-nav-item
+          data-nav-id="detail:back"
+          data-nav-kind="button"
+          data-nav-role="back"
+          data-nav-axis="horizontal"
+          data-nav-group="detail-actions"
           onClick={handleBack} 
           className="absolute z-30 flex items-center justify-center gap-2 text-[15px] font-medium text-white bg-black/90 backdrop-blur-md border border-white px-5 py-2.5 rounded-lg hover:bg-black/80 hover:border-white/30 transition-all duration-200"
           style={{ top: 'clamp(20px, 2.5vw, 48px)', left: 'clamp(20px, 2.5vw, 48px)', width: '100px', height: '40px' }}
@@ -379,6 +586,12 @@ export default function DetailViewPage() {
         >
           {trailerUrl && (
             <button 
+              data-nav-item
+              data-nav-id="detail:play-trailer"
+              data-nav-kind="button"
+              data-nav-axis="horizontal"
+              data-nav-group="detail-actions"
+              data-nav-initial
               onClick={handlePlayTrailer} 
               disabled={trailerPlaying} 
               className="flex items-center justify-center gap-2 px-8 py-3.5 rounded-lg text-base font-semibold text-white transition-all duration-200 hover:-translate-y-0.5"
@@ -399,6 +612,12 @@ export default function DetailViewPage() {
           )}
           
           <button
+            data-nav-item
+            data-nav-id="detail:play"
+            data-nav-kind="button"
+            data-nav-axis="horizontal"
+            data-nav-group="detail-actions"
+            {...(!trailerUrl ? { 'data-nav-initial': '' } : {})}
             onClick={() => {
               if (isShow && showResumeInfo) {
                 const { season, episode: epNum, isScrobbled, progress } = showResumeInfo
@@ -457,6 +676,11 @@ export default function DetailViewPage() {
           </button>
           
           <button
+            data-nav-item
+            data-nav-id="detail:wishlist"
+            data-nav-kind="button"
+            data-nav-axis="horizontal"
+            data-nav-group="detail-actions"
             onClick={() => toggleWishlisted(collectionPayload)}
             title={isWishlisted ? 'Remove from Wishlist' : 'Add to Wishlist'}
             className="w-12 h-12 rounded-full backdrop-blur-3xl flex items-center justify-center hover:scale-110 transition-all duration-200"
@@ -468,10 +692,22 @@ export default function DetailViewPage() {
           >
             {isWishlisted ? <CheckCircle2 size={20} /> : <Plus size={20} />}
           </button>
-          <button className="w-12 h-12 rounded-full bg-black/40 backdrop-blur-3xl border border-white/20 flex items-center justify-center text-white hover:bg-white/20 hover:border-white/40 hover:scale-110 transition-all duration-200">
+          <button
+            data-nav-item
+            data-nav-id="detail:share"
+            data-nav-kind="button"
+            data-nav-axis="horizontal"
+            data-nav-group="detail-actions"
+            className="w-12 h-12 rounded-full bg-black/40 backdrop-blur-3xl border border-white/20 flex items-center justify-center text-white hover:bg-white/20 hover:border-white/40 hover:scale-110 transition-all duration-200"
+          >
             <Share2 size={18} />
           </button>
           <button
+            data-nav-item
+            data-nav-id="detail:like"
+            data-nav-kind="button"
+            data-nav-axis="horizontal"
+            data-nav-group="detail-actions"
             onClick={() => toggleLiked(collectionPayload)}
             title={isLiked ? 'Unlike' : 'Like'}
             className="w-12 h-12 rounded-full backdrop-blur-3xl flex items-center justify-center hover:scale-110 transition-all duration-200"
@@ -685,12 +921,18 @@ export default function DetailViewPage() {
 
             <div
               ref={seasonScrollRef}
+              data-nav-ribbon
               className="flex gap-2 overflow-x-auto pb-1"
               style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
             >
               {seasonsQuery.data.seasons.map((season: SeasonDetail, idx: number) => (
                 <button
                   key={season.season_number}
+                  data-nav-item
+                  data-nav-id={`detail:season:${season.season_number}`}
+                  data-nav-kind="tab"
+                  data-nav-axis="horizontal"
+                  data-nav-group="detail-seasons"
                   onClick={() => setSelectedSeasonIdx(idx)}
                   className="flex-shrink-0 flex items-center gap-1.5 rounded-full font-semibold text-sm transition-all duration-200 cursor-pointer"
                   style={{
@@ -722,8 +964,8 @@ export default function DetailViewPage() {
 
           {/* Episode cards */}
           {seasonsQuery.data.seasons[selectedSeasonIdx] && (
-            <div className="space-y-3">
-              {seasonsQuery.data.seasons[selectedSeasonIdx].episodes?.map((ep) => {
+            <div ref={episodesContainerRef} data-nav-ribbon className="space-y-3">
+              {seasonsQuery.data.seasons[selectedSeasonIdx].episodes?.map((ep, epIdx) => {
                 const seasonNum = seasonsQuery.data!.seasons[selectedSeasonIdx].season_number
                 const epCode = `S${String(seasonNum).padStart(2, '0')}E${String(ep.episode_number ?? 1).padStart(2, '0')}`
                 const stillUrl = ep.still_frame?.url
@@ -757,12 +999,22 @@ export default function DetailViewPage() {
                 return (
                   <div
                     key={ep.id}
-                    className="group relative flex items-stretch rounded-xl overflow-hidden border transition-all duration-200 hover:shadow-[0_4px_24px_rgba(0,0,0,0.5)]"
+                    role="button"
+                    tabIndex={0}
+                    data-episode-idx={epIdx}
+                    className="group relative flex items-stretch rounded-xl overflow-hidden border transition-all duration-200 hover:shadow-[0_4px_24px_rgba(0,0,0,0.5)] focus:ring-2 focus:ring-accent focus:outline-none"
                     style={{
                       background: isResumeEp ? 'rgba(217,119,6,0.08)' : isWatched ? 'rgba(255,255,255,0.02)' : 'rgba(255,255,255,0.03)',
                       borderColor: isResumeEp ? 'rgba(217,119,6,0.4)' : isWatched ? 'rgba(255,255,255,0.04)' : 'rgba(255,255,255,0.07)',
                       minHeight: '110px',
                       opacity: isWatched && !isResumeEp ? 0.65 : 1,
+                    }}
+                    onKeyDown={(e) => {
+                      if ((e.target as HTMLElement).closest('[data-episode-play-button]')) return
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        handlePlayEpisode(ep, seasonNum, epScrobblePct)
+                      }
                     }}
                   >
                     {/* Scrobble progress bar — full card width, top edge */}
@@ -861,29 +1113,19 @@ export default function DetailViewPage() {
                         )}
                       </div>
 
-                      <button
-                        onClick={() => handlePlayEpisode(ep, seasonNum, epScrobblePct)}
-                        className="flex-shrink-0 flex items-center gap-2 font-semibold cursor-pointer transition-all duration-200 hover:scale-105 hover:brightness-110"
-                        style={{
-                          padding: '10px 22px',
-                          fontSize: 13,
-                          borderRadius: 8,
-                          background: epScrobblePct != null
-                            ? 'rgba(217,119,6,0.9)'
-                            : 'rgba(229,9,20,0.85)',
-                          boxShadow: epScrobblePct != null
-                            ? '0 2px 12px rgba(217,119,6,0.4)'
-                            : '0 2px 12px rgba(229,9,20,0.3)',
-                          color: '#fff',
-                          whiteSpace: 'nowrap',
-                          marginRight: '20px',
-                        }}
-                      >
-                        {epLocalSrc
-                          ? <HardDrive size={14} />
-                          : <Play size={14} fill="currentColor" />}
-                        {epScrobblePct != null ? 'Resume' : 'Play'}
-                      </button>
+                      <EpisodePlayButton
+                        navId={`detail:episode:${seasonNum}:${ep.episode_number ?? epIdx}:play`}
+                        seasonNum={seasonNum}
+                        episodeNum={ep.episode_number ?? epIdx + 1}
+                        episodeIndex={epIdx}
+                        isWatched={isWatched}
+                        isResumeEpisode={isResumeEp}
+                        scrobblePercent={epScrobblePct}
+                        hasLocalSource={Boolean(epLocalSrc)}
+                        isMarkingWatched={markingEpisodeKey === `${seasonNum}:${ep.episode_number ?? epIdx + 1}`}
+                        onPlay={() => handlePlayEpisode(ep, seasonNum, epScrobblePct)}
+                        onMarkWatched={() => handleMarkEpisodeWatched(seasonNum, ep.episode_number ?? epIdx + 1, progressEp?.playback_id)}
+                      />
                     </div>
                   </div>
                 )
@@ -980,9 +1222,16 @@ export default function DetailViewPage() {
                 Streaming Now
               </p>
               <div className="flex flex-wrap gap-4" >
-                {providersQuery.data.streaming.map((p) => (
+                {providersQuery.data.streaming.map((p, idx) => (
                   <div 
                     key={p.provider_id} 
+                    role="button"
+                    tabIndex={0}
+                    data-nav-item
+                    data-nav-id={`detail:provider:streaming:${p.provider_id}`}
+                    data-nav-kind="button"
+                    data-nav-axis="horizontal"
+                    data-nav-group="detail-providers"
                     className="hover:scale-110 transition-all duration-200 cursor-pointer" 
                   >
                     {p.logo_path ? (
@@ -1011,6 +1260,13 @@ export default function DetailViewPage() {
                 {[...providersQuery.data.rent, ...providersQuery.data.buy].map((p) => (
                   <div 
                     key={`${p.provider_id}-${p.provider_name}`} 
+                    role="button"
+                    tabIndex={0}
+                    data-nav-item
+                    data-nav-id={`detail:provider:rent-buy:${p.provider_id}`}
+                    data-nav-kind="button"
+                    data-nav-axis="horizontal"
+                    data-nav-group="detail-providers"
                     className="hover:scale-110 transition-all duration-200 cursor-pointer"
                   >
                     {p.logo_path ? (
@@ -1067,6 +1323,11 @@ export default function DetailViewPage() {
                   </span>
                 </div>
                 <button 
+                  data-nav-item
+                  data-nav-id={`detail:source:${source.id}:play`}
+                  data-nav-kind="button"
+                  data-nav-axis="vertical"
+                  data-nav-group="detail-local-sources"
                   onClick={() => handlePlaySource(source)} 
                   className="flex items-center gap-2 bg-white/10 hover:bg-white/15 border border-white/20 px-4 py-2 rounded-lg text-white font-semibold text-sm transition-colors"
                 >
@@ -1099,6 +1360,7 @@ export default function DetailViewPage() {
           onClick={() => setResumeModalOpen(false)}
         >
           <div
+            ref={resumeModalRef}
             className="flex flex-col gap-6 border border-white/10 rounded-2xl shadow-2xl"
             style={{ width: 360, padding: '32px', background: 'rgba(12,12,16,0.98)' }}
             onClick={(e) => e.stopPropagation()}
@@ -1177,6 +1439,17 @@ export default function DetailViewPage() {
       />
 
       <TrailerDialog url={trailerModalUrl} onClose={handleCloseTrailer} />
+
+      <ContextMenu
+        open={episodeContextMenu.open}
+        items={[
+          { key: 'mark-watched', label: 'Mark as Watched', icon: <CheckCircle2 size={16} /> },
+        ]}
+        onSelect={handleEpisodeContextMenuAction}
+        onClose={() => setEpisodeContextMenu({ open: false, season: 0, episode: 0, loading: false })}
+        loading={episodeContextMenu.loading}
+        anchorRef={episodeContextAnchorRef}
+      />
     </div>
   )
 }
