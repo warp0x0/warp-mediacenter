@@ -141,7 +141,28 @@ async def trakt_auth_clear() -> Dict[str, Any]:
     """Clear Trakt authentication tokens."""
     manager = _get_trakt()
     manager.clear_token()
+    # Reset in-memory device-flow state so poll_device_auth_status() no longer
+    # returns "authorized" after tokens are cleared (same fix applied to RD).
+    with manager._device_auth_lock:
+        manager._device_auth_state = {}
     return {"authenticated": False}
+
+
+@router.get("/account")
+async def trakt_account() -> Dict[str, Any]:
+    """Get Trakt user profile info."""
+    manager = _get_trakt()
+    try:
+        profile = manager.get_profile()
+        return {
+            "username": profile.username,
+            "name": profile.name,
+            "vip": profile.vip,
+            "private": profile.private,
+            "about": getattr(profile, "about", None),
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail=f"Trakt not authenticated: {exc}")
 
 
 # ------------------------------------------------------------------

@@ -5,7 +5,7 @@ from __future__ import annotations
 import random
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date
+from datetime import date, datetime, timezone
 from threading import Lock
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -73,6 +73,24 @@ def invalidate_trakt_continue_watching_caches() -> None:
         for key in list(_shuffle_cache):
             if key.startswith("trakt:based_on_watched:"):
                 _shuffle_cache.pop(key, None)
+
+
+def _parse_sort_datetime(value: Any) -> datetime:
+    """Normalize Trakt ISO timestamps for stable newest-first sorting."""
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if not value:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    raw = str(value).strip()
+    if not raw:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc) if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 # ---------------------------------------------------------------------------
@@ -584,6 +602,7 @@ async def trakt_continue_watching_catalog(
             _tc_set(ep_pb_key, episode_entries)
 
         scrobble_map: Dict[str, Dict[str, Any]] = {}
+        playback_show_entries: Dict[str, Tuple[datetime, Dict[str, Any]]] = {}
         for pb_entry in episode_entries:
             pb_media = pb_entry.media.model_dump(mode="json")
             pb_extra = pb_media.get("extra") or {}
@@ -592,13 +611,26 @@ async def trakt_continue_watching_catalog(
             pb_show_ids = (pb_show.get("ids") or {}) if isinstance(pb_show, dict) else {}
             pb_tmdb = str(pb_show_ids.get("tmdb") or "")
             pb_ep = pb_raw.get("episode") or {}
+            paused_at_iso = pb_entry.paused_at.isoformat() if pb_entry.paused_at else None
             if pb_tmdb and pb_tmdb not in scrobble_map:
                 scrobble_map[pb_tmdb] = {
                     "progress": float(pb_entry.progress),
                     "season": pb_ep.get("season") if isinstance(pb_ep, dict) else None,
                     "episode": pb_ep.get("number") if isinstance(pb_ep, dict) else None,
                     "playback_id": pb_entry.id,
+                    "paused_at": paused_at_iso,
                 }
+            if isinstance(pb_show, dict):
+                show_key = str(pb_show_ids.get("tmdb") or pb_show_ids.get("slug") or pb_show_ids.get("trakt") or "")
+                paused_at = _parse_sort_datetime(pb_entry.paused_at)
+                if show_key and paused_at > playback_show_entries.get(show_key, (datetime.min.replace(tzinfo=timezone.utc), {}))[0]:
+                    playback_show_entries[show_key] = (
+                        paused_at,
+                        {
+                            "last_watched_at": paused_at_iso,
+                            "show": pb_show,
+                        },
+                    )
 
         # Step B: watched shows list (cached)
         ws_key = "trakt:watched_shows"
@@ -610,11 +642,37 @@ async def trakt_continue_watching_catalog(
                 raise HTTPException(status_code=500, detail=f"Trakt watched shows error: {exc}")
             _tc_set(ws_key, watched_shows)
 
-        watched_shows = sorted(
-            watched_shows,
-            key=lambda x: x.get("last_watched_at") or "",
-            reverse=True,
-        )
+        # Merge completed-watch history with active in-progress episodes, then
+        # sort by the newest episode activity. `/sync/watched/shows` alone does
+        # not move a show to the front when an episode was paused before the
+        # watched threshold, but that is still the user's latest activity.
+        combined_show_entries: Dict[str, Tuple[datetime, Mapping[str, Any]]] = {}
+        for watched_entry in watched_shows:
+            show_payload = watched_entry.get("show") or {}
+            if not isinstance(show_payload, dict):
+                continue
+            show_ids = show_payload.get("ids") or {}
+            if not isinstance(show_ids, dict):
+                continue
+            show_key = str(show_ids.get("tmdb") or show_ids.get("slug") or show_ids.get("trakt") or "")
+            if not show_key:
+                continue
+            combined_show_entries[show_key] = (_parse_sort_datetime(watched_entry.get("last_watched_at")), watched_entry)
+
+        for show_key, playback_entry in playback_show_entries.items():
+            paused_at, watched_entry = playback_entry
+            existing_at = combined_show_entries.get(show_key, (datetime.min.replace(tzinfo=timezone.utc), {}))[0]
+            if paused_at > existing_at:
+                combined_show_entries[show_key] = (paused_at, watched_entry)
+
+        watched_shows = [
+            entry
+            for _, entry in sorted(
+                combined_show_entries.values(),
+                key=lambda item: item[0],
+                reverse=True,
+            )
+        ]
 
         # Step C: extract candidate (trakt_id, watched_entry) pairs for parallel fetch
         candidates: List[Tuple[str, Any]] = []
@@ -843,6 +901,36 @@ async def trakt_based_on_watched_catalog(
         "items": items,
         "count": len(items),
     }
+
+
+# ------------------------------------------------------------------
+# Movie playback progress — scrobble/pause state for a single movie
+# ------------------------------------------------------------------
+
+@catalog_router.get("/trakt/movie_progress/{tmdb_id}")
+async def trakt_movie_progress(tmdb_id: str) -> Dict[str, Any]:
+    """Return Trakt scrobble/pause progress for a single movie.
+
+    Reuses the same playback cache populated by the continue-watching widget
+    so no extra Trakt API call is needed when the cache is warm.
+    """
+    providers = _get_providers()
+
+    pb_key = "trakt:pb:movies"
+    entries = _tc_get(pb_key, _TTL_PLAYBACK)
+    if entries is None:
+        try:
+            entries = providers.get_trakt_playback_resume(MediaType.MOVIE)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Trakt movie progress error: {exc}")
+        _tc_set(pb_key, entries)
+
+    for entry in (entries or []):
+        item_dict = _catalog_item_to_dict(entry.media)
+        if str(item_dict.get("tmdb_id") or "") == str(tmdb_id):
+            return {"progress": float(entry.progress), "resume_available": True}
+
+    return {"progress": 0.0, "resume_available": False}
 
 
 # ------------------------------------------------------------------

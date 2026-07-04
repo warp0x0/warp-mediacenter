@@ -45,6 +45,7 @@ class _LibtorrentProxyShim:
         # bytes_downloaded still reflects real progress for the MB counter in the banner.
         return {
             "url":               "",
+            "file_path":         raw.get("file_path") if done else None,
             "bytes_downloaded":  raw.get("bytes_downloaded", 0),
             "total_size":        total,
             "remaining_size":    total,
@@ -52,6 +53,8 @@ class _LibtorrentProxyShim:
             "active":            raw.get("state") in ("downloading", "waiting_metadata", "seeding"),
             "download_complete": done,
             "error":             raw.get("error"),
+            "download_rate_kb":  raw.get("download_rate_kb", 0.0),
+            "num_peers":         raw.get("num_peers", 0),
         }
 
     @property
@@ -93,6 +96,7 @@ class _LibtorrentSession:
             "session_id":        self.session_id,
             "state":             state,
             "url":               snap.get("url", ""),
+            "file_path":         snap.get("file_path"),
             "title":             self.title,
             "media_kind":        self.media_kind,
             "bytes_downloaded":  snap["bytes_downloaded"],
@@ -103,6 +107,8 @@ class _LibtorrentSession:
             "error":             error,
             "active":            snap["active"],
             "local_torrent":     True,
+            "download_rate_kb":  snap.get("download_rate_kb", 0.0),
+            "num_peers":         snap.get("num_peers", 0),
             "buffer_ahead_bytes": 0,
             "active_streams":    self.active_streams,
             "created_at":        self.created_at.isoformat(),

@@ -1,0 +1,75 @@
+name: warp_mediacenter_client
+description: Warp MediaCenter — Flutter client for Desktop, Android TV, and mobile.
+publish_to: 'none'
+version: 0.0.1+1
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # ── State & routing ──────────────────────────────────────────────────────────
+  flutter_riverpod: ^3.3.2
+  riverpod_annotation: ^4.0.3
+  go_router: ^17.3.0
+
+  # ── HTTP & networking ────────────────────────────────────────────────────────
+  dio: ^5.9.2
+
+  # ── Media playback — libmpv on ALL platforms ─────────────────────────────────
+  media_kit: ^1.2.6
+  media_kit_video: ^2.0.1
+  media_kit_libs_video: ^1.0.7             # libmpv for all platforms (Android, macOS, Windows, Linux, iOS)
+
+  # ── YouTube trailers ─────────────────────────────────────────────────────────
+  youtube_explode_dart: ^3.1.0             # Primary: direct stream extraction (no WebView)
+  youtube_player_iframe: ^6.0.2            # Fallback WebView player
+  webview_flutter: ^4.14.0                 # Required by youtube_player_iframe
+
+  # ── UI ───────────────────────────────────────────────────────────────────────
+  cached_network_image: ^3.4.1
+  flutter_cache_manager: ^3.4.1               # Cache clearing (transitive dep of cached_network_image, used directly)
+  flutter_animate: ^4.5.2
+
+  # ── Models (code gen) ────────────────────────────────────────────────────────
+  freezed_annotation: ^3.1.0
+  json_annotation: ^4.12.0
+
+  # ── Storage & platform ───────────────────────────────────────────────────────
+  shared_preferences: ^2.5.5
+  flutter_secure_storage: ^10.3.1          # OAuth tokens (Trakt, RealDebrid)
+  url_launcher: ^6.3.2                     # Open OAuth verification URLs in browser
+  device_info_plus: ^13.2.0               # Android TV detection
+  window_manager: ^0.5.1                   # Desktop window chrome + fullscreen
+  audio_service: ^0.18.18                  # Android TV media session (notification, BT remotes)
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  build_runner: ^2.15.0
+  freezed: ^3.2.5
+  json_serializable: ^6.14.0
+  riverpod_generator: ^4.0.4
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/fonts/
+
+  fonts:
+    - family: WarpUI
+      fonts:
+        - asset: assets/fonts/Inter-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/Inter-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Inter-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/Inter-Bold.ttf
+          weight: 700
+        - asset: assets/fonts/Inter-ExtraBold.ttf
+          weight: 800

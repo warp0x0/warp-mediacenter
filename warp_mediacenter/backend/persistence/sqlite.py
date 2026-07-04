@@ -14,7 +14,7 @@ from warp_mediacenter.config.settings import get_database_path
 
 log = get_logger(__name__)
 
-_SCHEMA_VERSION = 5
+_SCHEMA_VERSION = 6
 
 
 def _resolve_path(path: Optional[Path]) -> Path:
@@ -77,6 +77,8 @@ def migrate(connection: sqlite3.Connection) -> None:
         _apply_v4(connection)
     if current < 5:
         _apply_v5(connection)
+    if current < 6:
+        _apply_v6(connection)
 
     connection.execute(
         "INSERT OR REPLACE INTO schema_version (version) VALUES (?)",
@@ -269,6 +271,35 @@ def _apply_v5(connection: sqlite3.Connection) -> None:
             ON user_collections(collection_type, type);
         CREATE INDEX IF NOT EXISTS idx_user_collections_added_at
             ON user_collections(collection_type, added_at DESC);
+        """
+    )
+
+
+def _apply_v6(connection: sqlite3.Connection) -> None:
+    """Fix source_type data corrupted by the v2 migration default.
+
+    When v2 added the source_type column it used DEFAULT 'local', so every
+    pre-existing row (debrid links, remote URLs, etc.) was silently tagged
+    as 'local'.  Real local sources always have file_path set; anything
+    without a file_path is a remote/debrid/URL source and must be corrected.
+    """
+    # Remote/debrid sources that have a URL but no local file path
+    connection.execute(
+        """
+        UPDATE sources
+        SET source_type = 'remote'
+        WHERE source_type = 'local'
+          AND file_path IS NULL
+          AND url IS NOT NULL AND url != ''
+        """
+    )
+    # Orphaned rows with neither a file path nor a URL — no useful content
+    connection.execute(
+        """
+        DELETE FROM sources
+        WHERE source_type = 'local'
+          AND file_path IS NULL
+          AND (url IS NULL OR url = '')
         """
     )
 

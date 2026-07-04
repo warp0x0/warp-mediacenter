@@ -324,15 +324,17 @@ class LibtorrentDownloadManager:
         try:
             s = h.status()
             return {
-                "session_id":       dl.session_id,
-                "state":            dl.state,
-                "progress_pct":     round(s.progress * 100.0, 2),
-                "bytes_downloaded": int(s.total_done),
-                "total_bytes":      dl.total_bytes or 1,
-                "file_path":        dl.file_path,
-                "local_url":        None,
+                "session_id":        dl.session_id,
+                "state":             dl.state,
+                "progress_pct":      round(s.progress * 100.0, 2),
+                "bytes_downloaded":  int(s.total_done),
+                "total_bytes":       dl.total_bytes or 1,
+                "file_path":         dl.file_path,
+                "local_url":         None,
                 "download_complete": False,
-                "ready":            False,
+                "ready":             False,
+                "download_rate_kb":  round(s.download_rate / 1024, 1),
+                "num_peers":         s.num_peers,
             }
         except Exception as exc:
             return {

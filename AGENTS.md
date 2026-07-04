@@ -1,134 +1,54 @@
-# AGENTS.md — Warp MediaCenter
+# AGENTS.md - Warp MediaCenter
 
-## Project Overview
+## Repo Shape
 
-Python media center app with a Tauri desktop shell. Manages, catalogs, and plays local media files with TMDb/Trakt integration. Two-tier architecture: Python backend (FastAPI + SQLite) and React/TypeScript frontend wrapped by Tauri (mpv for native playback).
+- `warp_mediacenter/` is the Python backend/runtime package. There is no `pyproject.toml` or `setup.py`; run Python module commands from the repo root so imports resolve.
+- `frontend/` is the React 19 + Vite 8 + Tauri 2 desktop shell. `flutter_client/` is a separate Flutter client. `Torrent-Api-py/` is a nested torrent-service repo with its own `AGENTS.md`; root startup can launch it.
+- `warp-mediacenter-client/` is ignored by root `.gitignore`; do not treat it as tracked app code unless the user explicitly asks.
 
-## Key Commands
+## Commands
 
-```bash
-# Install Python deps
-pip install -r requirements.txt
+- Python deps: `pip install -r requirements.txt`
+- Backend startup smoke: `python -m warp_mediacenter.warpmc_startup`
+- Full API server with services wired: `python -m warp_mediacenter.cli.media serve --host 0.0.0.0 --port 8000`
+- Full stack API + Torrent-API-Py: `python -m warp_mediacenter.cli.media warp-startup --port 8000 --torrent-port 8009`
+- CLI discovery: `python -m warp_mediacenter.cli.media --help` and `python -m warp_mediacenter.cli.admin --help`
+- API contract smoke: `python scripts/phase6_contract_smoke.py` (requires `httpx`, which is not listed in root `requirements.txt`).
+- Frontend setup: `cd frontend && npm install`
+- Frontend dev/build/lint: `cd frontend && npm run dev`, `cd frontend && npm run build`, `cd frontend && npm run lint`
+- Tauri dev/build: `cd frontend && npm run tauri:dev` or `cd frontend && npm run tauri:build`; `tauri.conf.json` already runs `npm run tauri:prepare-sidecar` before dev/build.
+- Focused sidecar prep: `cd frontend && npm run tauri:prepare-sidecar`
+- Flutter setup/checks: `cd flutter_client && flutter pub get`, `cd flutter_client && dart run build_runner build --delete-conflicting-outputs`, `cd flutter_client && flutter analyze`, `cd flutter_client && flutter test`
 
-# Install frontend deps
-cd frontend && npm install
+## Backend Notes
 
-# Startup smoke test
-python -m warp_mediacenter.warpmc_startup
+- Prefer `python -m warp_mediacenter.cli.media serve` over direct `uvicorn warp_mediacenter.backend.api.app:create_app --factory`; the CLI initializes `ServiceContainer` and legacy route globals before creating the app.
+- FastAPI routes are registered in `warp_mediacenter/backend/api/app.py` under `/api/v1/*`; service wiring lives in `warp_mediacenter/cli/api_server.py` and `warp_mediacenter/backend/api/middleware/container.py`.
+- Settings load `warp_mediacenter/.env` (not repo-root `.env`). JSON config placeholders like `${TMDB_API_KEY}` expand from `os.environ` and become empty strings if unset.
+- Runtime DB/cache/tokens/plugins resolve under `warp_mediacenter/var/`; `var/` directories are gitignored.
+- SQLite schema auto-migrates on `warp_mediacenter/backend/persistence/sqlite.py:connect()`. Add a new incremental migration and bump `_SCHEMA_VERSION`; do not rewrite already-applied migration steps.
+- Use `InformationProviders` (`backend/information_handlers/providers.py`) as the TMDb/Trakt/public-archives facade; Trakt can be unavailable while other providers still work.
+- Normalized media types/models live in `backend/information_handlers/models.py`; avoid returning raw provider payloads from new API surfaces unless an existing route already does.
+- Player logic is split between `PlayerController`/`PlaybackService`, adapters (`vlc_adapter.py`, `http_adapter.py`), and Tauri's Rust/mpv native player. Keep shared playback behavior out of frontend-only code when it belongs in `PlaybackService`.
+- Torrent search depends on RealDebrid and/or Torrent-API-Py. Env overrides include `TORRENT_API_URL`, `TORRENT_API_KEY`, `REALDEBRID_*`, and `TORRENT_API_MAIN_PATH` for locating `Torrent-Api-py/main.py`.
+- Plugins require a `plugin.json`; entrypoints must be `module:function` (`backend/plugins/manifest.py`).
 
-# FastAPI dev server
-uvicorn warp_mediacenter.backend.api.app:create_app --factory --reload
+## Frontend Notes
 
-# Media CLI (search, catalogs, Trakt auth, public domain)
-python -m warp_mediacenter.cli.media --help
-python -m warp_mediacenter.cli.media search tmdb "Inception" --media-type movie
-python -m warp_mediacenter.cli.media trakt auth start
-python -m warp_mediacenter.cli.media public-domain list-sources
+- Frontend API base URL is `VITE_API_BASE_URL` with fallback `http://localhost:8000` (`frontend/src/lib/api.ts`). Vite uses strict port `1420`.
+- Tauri IPC wrappers live in `frontend/src/lib/tauri.ts`; Rust commands and mpv IPC live in `frontend/src-tauri/src/main.rs`. Native player status is emitted as `native-player-status`.
+- The mpv sidecar script creates `frontend/src-tauri/bin/mpv-aarch64-apple-darwin` and `frontend/src-tauri/bin/macos-arm64/lib/*`; check generated sidecar artifacts before committing because only the `macos-arm64/` folder is ignored by `frontend/.gitignore`.
+- Remote/keyboard navigation is centralized in `frontend/src/navigation/NavigationProvider.tsx`. Register focus targets with `data-nav-item`, `data-nav-id`, `data-nav-group`, `data-nav-axis`, `data-nav-initial`, and `useNavItem`; do not reintroduce a separate `useRemoteNav` hook.
+- Modals participate in navigation with `data-nav-modal`, close via `data-nav-modal-close`, and may delegate arrows with `data-nav-delegate-arrows`/`navmodalarrow`. `useFocusTrap` also looks for `data-nav-initial`.
+- Context menus are opened by `NavigationProvider` long-press/right-click via each item’s `getContextMenu`; shared media menu items live in `frontend/src/navigation/useMediaContextMenuItems.tsx`.
 
-# Admin CLI (settings, plugins, database, provider config)
-python -m warp_mediacenter.cli.admin --help
-python -m warp_mediacenter.cli.admin settings show
-python -m warp_mediacenter.cli.admin db stats
-python -m warp_mediacenter.cli.admin providers list
+## Flutter Notes
 
-# Tauri desktop dev (builds mpv sidecar first)
-cd frontend && npm run tauri:dev
+- `flutter_client/lib/main.dart` initializes `media_kit`, locks landscape, detects Android TV density, and persists the API base URL via Riverpod/shared_preferences.
+- Generated Dart files are part of the current client (`*.g.dart`); rerun `dart run build_runner build --delete-conflicting-outputs` after changing Riverpod providers, GoRouter routes, or json/freezed models.
+- `flutter_client/build.yaml` sets `json_serializable` `field_rename: snake`; keep backend JSON field names aligned with that.
 
-# mpv sidecar preparation (run before Tauri dev/build)
-python scripts/prepare_tauri_mpv_sidecar.py
-```
+## Verification Gaps
 
-## Architecture
-
-```
-warp_mediacenter/                  # Python package root
-  cli/                             # CLI entry points (media.py, admin.py)
-  backend/
-    api/                           # FastAPI app, routes, middleware
-      app.py                       # FastAPI factory (create_app)
-      routes/                      # torrent, stream, images, scrobble, library,
-                                   #   player, subtitles, trakt, debrid, settings,
-                                   #   discovery (search + catalog)
-      middleware/                   # CORS, error handler, request logging, ServiceContainer
-    library/                       # File scanning, filename parsing (guessit), artwork download
-    player/                        # Playback engine (adapter pattern)
-      service.py                   # Player-agnostic playback logic
-      adapter.py                   # PlayerAdapter interface
-      vlc_adapter.py               # VLC desktop adapter
-      http_adapter.py              # HTTP thin-client adapter
-      debrid/                      # RealDebrid torrent streaming
-      subtitles/                   # Subtitle discovery + download
-    information_handlers/          # TMDb, Trakt, public archives, trailers managers
-      providers.py                 # InformationProviders unified facade
-      models.py                    # Normalized Pydantic models (Movie, Show, CatalogItem...)
-    persistence/                   # SQLite (titles, episodes, sources, play_history, settings, widgets)
-    plugins/                       # Plugin system (manifest-based, zip/dir install)
-    resource_management/           # Adaptive tuning via psutil (RAM/CPU-aware worker counts)
-    network_handlers/              # HTTP sessions, proxy management, rate limiting
-    common/                        # Logging, tasks, types, errors
-  config/
-    config_paths.json              # Relative path definitions (resolved from project root)
-    informationproviderservicesettings.json  # Provider endpoints, rate limits, API key placeholders
-    proxysettings.json             # Proxy configuration
-    settings/                      # Pydantic-backed settings modules
-  resources/                       # App resources
-
-frontend/                          # React + TypeScript + Vite
-  src/                             # React app (components, hooks, contexts, pages)
-    hooks/
-      useRemoteNav.ts              # Android TV D-pad remote navigation (explicit zone transitions)
-      useFocusTrap.ts              # Modal focus trapping (Tab cycling, Escape to close)
-    components/shared/
-      ContextMenu.tsx              # Long-press context menu overlay (AnimatePresence + focus trap)
-      HelpDialog.tsx               # Keyboard shortcuts overlay
-    components/media/
-      WidgetSection.tsx            # Ribbon + hero backdrop rows (remote nav + long-press wired)
-    components/cards/
-      CatalogRow.tsx               # Horizontal poster grid (remote nav + long-press wired)
-  src-tauri/                       # Tauri Rust shell
-    src/main.rs                    # mpv IPC bridge, native player commands
-    tauri.conf.json                # Tauri config (sidecar, bundled resources)
-    Cargo.toml                     # Rust deps (tauri 2, serde)
-
-scripts/
-  prepare_tauri_mpv_sidecar.py     # Downloads mpv binary for Tauri sidecar
-  phase6_contract_smoke.py         # API contract smoke test
-```
-
-## Configuration Quirks
-
-- **Path resolution**: `config_paths.json` uses paths relative to project root. Always run from project root.
-- **API key placeholders**: JSON configs use `${ENV_VAR}` syntax (e.g., `${TMDB_API_KEY}`, `${TRAKT_CLIENT_ID}`). Resolved at runtime via `os.environ`.
-- **Runtime data**: `var/` is gitignored — holds cache, tokens, logs. Do not commit anything under `var/`.
-- **Trakt auth**: Requires `TRAKT_CLIENT_ID` and `TRAKT_CLIENT_SECRET`. Uses OAuth device flow — start with `trakt auth start`, then poll with the returned device code.
-- **mpv sidecar**: Tauri bundles mpv as a sidecar binary. Run `python scripts/prepare_tauri_mpv_sidecar.py` before `tauri dev` or `tauri build`. Binary lives in `frontend/src-tauri/bin/`.
-- **mpv config**: uosc OSC scripts bundled in `frontend/src-tauri/resources/mpv-config/`. Tauri bundles these as resources.
-- **Env files**: `.env` is gitignored. `.env.example` exists at package root for reference.
-
-## Important Patterns
-
-- **`InformationProviders`** (`backend/information_handlers/providers.py`) is the unified facade for all provider calls. Use it instead of calling individual managers directly.
-- **Normalized models** (`backend/information_handlers/models.py`) — all provider responses converted to Pydantic models via `MediaModelFacade`.
-- **PlayerAdapter pattern** (`backend/player/adapter.py`) — player-agnostic interface. `vlc_adapter.py` for desktop, `http_adapter.py` for thin clients. `service.py` contains all shared playback logic.
-- **SQLite persistence** (`backend/persistence/sqlite.py`) — auto-migrates on connect. Tables: `titles`, `episodes`, `sources`, `play_history`, `settings`, `catalog_widgets`.
-- **Resource-aware tasks** — `TaskRunner` + `ResourceManager` adapt concurrency based on system RAM/CPU. Always pass `resource_manager` when creating runners.
-- **Plugin entrypoints** must be `module:function` format. Plugins require a `plugin.json` manifest at their root.
-- **FastAPI routes** are registered in `backend/api/app.py` under `/api/v1/` prefix. Service dependencies injected via `ServiceContainer` middleware.
-- **Tauri IPC** — Rust side (`main.rs`) manages mpv via Unix socket IPC. React communicates with mpv through Tauri commands (`player_open_window`, `player_pause`, etc.). Events emitted as `native-player-status`.
-- **Remote D-pad navigation** — `useRemoteNav` (mounted at App root) intercepts Arrow/Enter/Backspace keys for Android TV remote control. Uses explicit zone transitions: Up from content → TabBar, Down from TabBar → first content element, Left/Right sequential in ribbons and tabbars. Components declare zones via `data-nav-ribbon`, `data-nav-tabbar`, `data-nav-initial-focus` attributes.
-- **Modal focus trapping** — `useFocusTrap` saves/restores focus, traps Tab cycling within the dialog container, Escape to close. Applied to all modal/dialog components (TorrentDialog, SubtitleDialog, HelpDialog, AuthDialog, FileBrowserModal, ScanDialog, TrailerDialog, ResumeModal).
-- **Long-press context menus** — `useRemoteNav` fires `remotelongpress` CustomEvent on `document.activeElement` after 600ms hold. Components listen via event delegation on containers. `ContextMenu` component provides positioned overlay with focus trap. Context menu items: "Mark as Watched" (updates local play_history + Trakt `/sync/history`).
-- **Mark as Watched API** — `POST /api/v1/library/mark-watched` records a full-progress play_history entry in SQLite and syncs to Trakt via `POST /sync/history/{movies|episodes}`. Resolves title_id from tmdb_id, looks up Trakt IDs via TMDb→Trakt mapping.
-
-## Current State
-
-- **No tests** — test suite not yet created.
-- **No lint/typecheck/formatter** — no ruff, mypy, black, or similar configured for Python. Frontend has ESLint via Vite template.
-- **No CI/CD** — no GitHub Actions or pre-commit hooks.
-- **No pyproject.toml/setup.py** — Python dependencies managed via `requirements.txt` only.
-- Version: `0.0.1`
-
-## Notebooks
-
-- `notebooks/trakt_integration_demo.ipynb` — Trakt OAuth and API smoke tests
-- `notebooks/cli_functionality_test.ipynb` — CLI layer functionality tests
+- No root CI, pre-commit, Python formatter, Python linter, mypy, or pytest config is present.
+- For Python changes, use targeted `python -m py_compile <files>` plus the relevant CLI/API smoke command; for frontend changes use `npm run lint` and `npm run build` from `frontend/`.

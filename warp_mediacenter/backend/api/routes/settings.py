@@ -172,6 +172,20 @@ async def add_search_query(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {"history": history}
 
 
+@router.delete("/search-history")
+async def delete_search_query(query: str) -> Dict[str, Any]:
+    """Remove a specific query from search history by query param."""
+    q = query.strip()
+    if not q:
+        raise HTTPException(status_code=400, detail="query is required")
+    with db_connection() as conn:
+        existing = get_setting(conn, "search_history")
+        history: List[str] = json.loads(existing) if existing else []
+        history = [item for item in history if item != q]
+        set_setting(conn, "search_history", json.dumps(history))
+    return {"history": history}
+
+
 @router.put("/{key}")
 async def update_setting(key: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     """Update a setting by key.

@@ -17,8 +17,10 @@ class SubtitleQuery:
     episode: Optional[int] = None
     year: Optional[int] = None
     release_group: Optional[str] = None
-    media_path: Optional[Path] = None
+    media_path: Optional[str] = None  # local file path or HTTP stream URL
     is_stream: bool = False
+    imdb_id: Optional[str] = None
+    tmdb_id: Optional[str] = None
 
 
 @dataclass(slots=True)

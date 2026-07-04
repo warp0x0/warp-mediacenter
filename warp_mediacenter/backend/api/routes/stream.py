@@ -25,7 +25,7 @@ router = APIRouter()
 _CHUNK_SIZE = 1024 * 1024  # 1MB chunks for streaming
 
 
-@router.get("/{source_id}")
+@router.get("/{source_id:path}")
 async def stream_media(source_id: str, request: Request) -> StreamingResponse:
     """Stream a media file by source ID.
 
@@ -95,6 +95,12 @@ def _resolve_source_path(source_id: str) -> Optional[Path]:
     """Resolve a source ID to a local file path."""
     if source_id.startswith("/"):
         return Path(source_id)
+
+    # Leading slash stripped by URL routing (e.g. /tmp/... → tmp/...).
+    # Reconstruct the absolute path and verify it exists.
+    candidate = Path("/" + source_id)
+    if candidate.is_file():
+        return candidate
 
     try:
         numeric_id = int(source_id)

@@ -676,10 +676,30 @@ class StreamProxy:
 
                 # Backward-offset bypass: when a resume download started at a
                 # byte offset (e.g. 60%), the temp file has no content before
-                # that offset.  Requests for the file header (e.g. MP4 moov
-                # atom, MKV EBML header) land here — serve them from the CDN.
+                # that offset.  If the player asks for a range that only starts
+                # slightly before the offset and then continues forward, fetch
+                # only the missing prefix from the CDN and serve the rest from
+                # the temp file.  Fetching the whole tail from the CDN here can
+                # make playback appear to wait for the full preload download.
                 dl_start = proxy._download_start
                 if cdn_url and dl_start > 0 and start < dl_start:
+                    if end is not None and end >= dl_start:
+                        log.info(
+                            "proxy_backward_offset_split",
+                            start_mb=start // (1024 * 1024),
+                            offset_mb=dl_start // (1024 * 1024),
+                            end_mb=end // (1024 * 1024),
+                        )
+                        self._serve_split_cdn_prefix(
+                            tmpfile=tmpfile,
+                            cdn_url=cdn_url,
+                            start=start,
+                            prefix_end=dl_start - 1,
+                            end=end,
+                            total=total,
+                        )
+                        return
+
                     log.info(
                         "proxy_backward_offset_cdn",
                         start_mb=start // (1024 * 1024),
@@ -720,6 +740,67 @@ class StreamProxy:
                 except Exception as exc:
                     log.debug("proxy_range_serve_err", error=str(exc)[:120])
 
+            # ── CDN bypass helpers ────────────────────────────────────
+
+            def _serve_split_cdn_prefix(
+                self,
+                *,
+                tmpfile: str,
+                cdn_url: str,
+                start: int,
+                prefix_end: int,
+                end: int,
+                total: int,
+            ) -> None:
+                if not self._wait_for(prefix_end + 2):
+                    self.send_error(503, "Timed out waiting for stream data")
+                    return
+
+                content_len = end - start + 1
+                self.send_response(206)
+                self._common_headers(total)
+                self.send_header("Content-Length", str(content_len))
+                if total:
+                    self.send_header("Content-Range", f"bytes {start}-{end}/{total}")
+                self.end_headers()
+
+                try:
+                    self._write_cdn_range_body(cdn_url, start, prefix_end)
+                    with open(tmpfile, "rb") as f:
+                        f.seek(prefix_end + 1)
+                        self._stream_from(f, end_offset=end)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+                except Exception as exc:
+                    log.debug("proxy_split_serve_err", error=str(exc)[:120])
+
+            def _write_cdn_range_body(self, cdn_url: str, start: int, end: int) -> None:
+                rng = f"bytes={start}-{end}"
+                expected = end - start + 1
+                with requests.get(
+                    cdn_url,
+                    stream=True,
+                    timeout=(10, 60),
+                    headers={"Range": rng, "User-Agent": "VLC/3.0"},
+                ) as r:
+                    r.raise_for_status()
+                    range_honored = r.status_code == 206 or bool(r.headers.get("Content-Range"))
+                    if start > 0 and not range_honored:
+                        raise RuntimeError("CDN ignored byte range request")
+                    sent = 0
+                    for chunk in r.iter_content(chunk_size=65536):
+                        if not chunk:
+                            continue
+                        remaining = expected - sent
+                        if remaining <= 0:
+                            break
+                        if len(chunk) > remaining:
+                            chunk = chunk[:remaining]
+                        self.wfile.write(chunk)
+                        sent += len(chunk)
+                    if sent < expected:
+                        raise RuntimeError("CDN range ended before requested prefix was served")
+
             # ── CDN bypass for forward seeks ──────────────────────────
 
             def _range_from_cdn(
@@ -731,35 +812,37 @@ class StreamProxy:
             ) -> None:
                 rng = f"bytes={start}-{end}" if end is not None else f"bytes={start}-"
                 try:
-                    r = requests.get(
-                        cdn_url, stream=True, timeout=30,
+                    with requests.get(
+                        cdn_url,
+                        stream=True,
+                        timeout=(10, 60),
                         headers={"Range": rng, "User-Agent": "VLC/3.0"},
-                    )
-                    r.raise_for_status()
+                    ) as r:
+                        r.raise_for_status()
 
-                    cr = r.headers.get("Content-Range", "")
-                    cl = r.headers.get("Content-Length", "")
+                        cr = r.headers.get("Content-Range", "")
+                        cl = r.headers.get("Content-Length", "")
 
-                    self.send_response(206)
-                    self.send_header("Content-Type", proxy._content_type)
-                    self.send_header("Accept-Ranges", "bytes")
-                    if cl:
-                        self.send_header("Content-Length", cl)
-                        self.send_header("Connection", "keep-alive")
-                    else:
-                        self.send_header("Connection", "close")
-                    if cr:
-                        self.send_header("Content-Range", cr)
-                    elif total:
-                        self.send_header(
-                            "Content-Range",
-                            f"bytes {start}-{end if end is not None else '*'}/{total}",
-                        )
-                    self.end_headers()
+                        self.send_response(206)
+                        self.send_header("Content-Type", proxy._content_type)
+                        self.send_header("Accept-Ranges", "bytes")
+                        if cl:
+                            self.send_header("Content-Length", cl)
+                            self.send_header("Connection", "keep-alive")
+                        else:
+                            self.send_header("Connection", "close")
+                        if cr:
+                            self.send_header("Content-Range", cr)
+                        elif total:
+                            self.send_header(
+                                "Content-Range",
+                                f"bytes {start}-{end if end is not None else '*'}/{total}",
+                            )
+                        self.end_headers()
 
-                    for chunk in r.iter_content(chunk_size=65536):
-                        if chunk:
-                            self.wfile.write(chunk)
+                        for chunk in r.iter_content(chunk_size=65536):
+                            if chunk:
+                                self.wfile.write(chunk)
 
                 except (BrokenPipeError, ConnectionResetError):
                     pass

@@ -10,6 +10,7 @@ from typing import Any, AsyncGenerator, Dict, Optional
 import aiohttp
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from starlette.background import BackgroundTask
 
 from warp_mediacenter.backend.common.logging import get_logger
 from warp_mediacenter.backend.api.middleware import get_container
@@ -112,13 +113,21 @@ def _run_scrobble(action: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(media_payload, dict):
         raise HTTPException(status_code=400, detail="media payload is required")
 
-    show_payload = payload.get("show")
-    if show_payload is not None and not isinstance(show_payload, dict):
-        raise HTTPException(status_code=400, detail="show must be an object when provided")
-
     media_type = _normalize_scrobble_media_type(payload.get("media_type"))
     progress = _normalize_scrobble_progress(payload.get("progress"))
     session_id = str(payload.get("session_id") or "").strip() or None
+
+    # Episode scrobble: Flutter sends show info as "media" and the episode's
+    # season/number under an "episode" key.  The Trakt manager expects
+    #   media  = episode payload  (season, number, ids)
+    #   show   = show payload     (title, ids with tmdb)
+    # Remap so the manager builds the correct Trakt request body.
+    show_payload = payload.get("show")
+    if media_type == MediaType.EPISODE:
+        episode_key_payload = payload.get("episode")
+        if isinstance(episode_key_payload, dict):
+            show_payload = show_payload or media_payload   # show info was in "media"
+            media_payload = episode_key_payload            # episode season/number
 
     manager = _get_trakt_manager()
     try:
@@ -142,6 +151,17 @@ def _run_scrobble(action: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Scrobble {action} failed: {exc}")
+
+    # After a stop scrobble, the continue-watching + show-progress caches are stale.
+    # Clear them so the next Flutter fetch returns fresh Trakt data immediately.
+    if action == "stop":
+        try:
+            from warp_mediacenter.backend.api.routes.discovery import (  # noqa: PLC0415
+                invalidate_trakt_continue_watching_caches,
+            )
+            invalidate_trakt_continue_watching_caches()
+        except Exception:
+            pass
 
     return {
         "ok": True,
@@ -288,7 +308,7 @@ async def preload_session_stream(session_id: str, request: Request) -> Streaming
 
     if upstream.status >= 400:
         manager.release_stream(session_id)
-        await upstream.release()
+        upstream.release()
         await client.close()
         raise HTTPException(status_code=upstream.status, detail="Upstream preload stream unavailable")
 
@@ -311,28 +331,35 @@ async def preload_session_stream(session_id: str, request: Request) -> Streaming
     elif content_length:
         response_headers["Content-Length"] = content_length
 
+    cleanup_done = False
+
+    async def cleanup_upstream() -> None:
+        nonlocal cleanup_done
+        if cleanup_done:
+            return
+        cleanup_done = True
+        try:
+            upstream.release()
+        except Exception:
+            pass
+        try:
+            await client.close()
+        except Exception:
+            pass
+        manager.release_stream(session_id)
+
     async def chunk_iterator() -> AsyncGenerator[bytes, None]:
         try:
             async for chunk in upstream.content.iter_chunked(1024 * 1024):
                 yield chunk
         finally:
-            # Each cleanup step is wrapped independently: if one raises (e.g.
-            # the response was already released because the client disconnected
-            # mid-stream), the others still execute and no session is leaked.
-            try:
-                await upstream.release()
-            except Exception:
-                pass
-            try:
-                await client.close()
-            except Exception:
-                pass
-            manager.release_stream(session_id)
+            await cleanup_upstream()
 
     return StreamingResponse(
         chunk_iterator(),
         status_code=upstream.status,
         headers=response_headers,
+        background=BackgroundTask(cleanup_upstream),
     )
 
 

@@ -207,6 +207,11 @@ async def debrid_auth_clear() -> Dict[str, Any]:
         # Reload the singleton so the live client reflects the cleared state
         client = _get_debrid()
         client._reload_settings()
+        # Reset the in-memory device-flow state so poll_device_auth_status()
+        # no longer returns "authorized" after tokens are cleared — this was
+        # the reason the frontend kept showing "Authenticated" after disconnect.
+        with client._device_auth_lock:
+            client._device_auth_state = {}
         log.info("rd_auth_cleared")
     except Exception as exc:
         log.warning("rd_auth_clear_error", error=str(exc))
@@ -459,58 +464,93 @@ async def debrid_list_torrents(
 # Stream and availability endpoints
 # ------------------------------------------------------------------
 
+_VIDEO_EXTS = frozenset({
+    ".mkv", ".mp4", ".avi", ".m2ts", ".ts", ".mov", ".wmv", ".m4v",
+    ".iso", ".vob", ".mpg", ".mpeg",
+})
+_ARCHIVE_EXTS = frozenset({".rar", ".zip", ".7z", ".gz", ".tar", ".001", ".r01", ".r00"})
+
+
+def _file_ext(path: str) -> str:
+    dot = path.rfind(".")
+    return path[dot:].lower() if dot >= 0 else ""
+
+
 @router.get("/stream/{torrent_id}/{file_id}")
 async def debrid_stream_url(
     torrent_id: str,
     file_id: int,
 ) -> Dict[str, Any]:
-    """Get a streamable URL for a specific file in a torrent."""
+    """Get a streamable URL for a specific file in a torrent.
+
+    The file_id hint from the caller is used as a starting point, but we
+    always re-derive the best file: largest video-extension file among all
+    selected files (ignoring .rar/.zip archives and small samples).
+    """
     client = _get_debrid()
     try:
         info = client.get_torrent_info(torrent_id)
 
-        target_file = None
-        target_idx = -1
-        for idx, f in enumerate(info.files):
-            if f.id == file_id:
-                target_file = f
-                target_idx = idx
-                break
-
-        if target_file is None:
-            raise HTTPException(status_code=404, detail=f"File {file_id} not found")
-
-        if info.links and target_idx < len(info.links):
-            raw_link = info.links[target_idx]
-        elif info.links:
-            raw_link = info.links[0]
-        else:
+        if not info.links:
             raise HTTPException(status_code=400, detail="No download links available yet")
 
+        # Build a list of (file, link) pairs for selected files only.
+        # info.links is parallel to the selected-files sub-list (not all files).
+        selected_files = [f for f in info.files if f.selected]
+        if not selected_files:
+            raise HTTPException(status_code=400, detail="No files selected in torrent")
+
+        file_link_pairs = list(zip(selected_files, info.links))
+
+        # Prefer the largest video file; fall back to the requested file_id, then first selected.
+        video_pairs = sorted(
+            [(f, lnk) for f, lnk in file_link_pairs if _file_ext(f.path) in _VIDEO_EXTS],
+            key=lambda x: x[0].bytes,
+            reverse=True,
+        )
+        if video_pairs:
+            target_file, raw_link = video_pairs[0]
+        else:
+            # No video files — use the requested file_id as fallback
+            match = next(((f, lnk) for f, lnk in file_link_pairs if f.id == file_id), None)
+            target_file, raw_link = match or file_link_pairs[0]
+
         # info.links contains pre-unrestricted RD torrent links (https://real-debrid.com/d/HASH).
-        # These cannot be streamed directly — VLC cannot authenticate to them.
-        # We must call unrestrict_link() to get the actual CDN download URL.
+        # These cannot be streamed directly — we must call unrestrict_link() to get the CDN URL.
         unrestricted = client.unrestrict_link(raw_link)
         stream_url = unrestricted.download
         if not stream_url:
             raise HTTPException(status_code=502, detail="RealDebrid did not return a download URL")
 
+        ext = _file_ext(stream_url.split("?")[0])
+        if ext in _ARCHIVE_EXTS:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"This release is packaged as a {ext.lstrip('.')} archive and cannot be streamed. "
+                    "Try a different source."
+                ),
+            )
+
         log.info(
             "debrid_stream_url_resolved",
             torrent_id=torrent_id,
-            file_id=file_id,
+            file_id=target_file.id,
+            file_name=target_file.path,
             host=unrestricted.host,
             streamable=unrestricted.streamable,
         )
 
         return {
             "torrent_id": torrent_id,
-            "file_id": file_id,
+            "file_id": target_file.id,
             "file_name": target_file.path,
             "stream_url": stream_url,
             "mime_type": unrestricted.mimeType,
             "filesize": unrestricted.filesize,
         }
+    except HTTPException:
+        raise
     except RealDebridOAuthError as exc:
         raise HTTPException(status_code=401, detail=f"RealDebrid not authenticated: {exc}")
     except RealDebridAPIError as exc:

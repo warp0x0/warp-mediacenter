@@ -6,6 +6,7 @@ from concurrent.futures import Future
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Optional
+import gzip
 import tempfile
 import zipfile
 import io
@@ -23,18 +24,12 @@ from warp_mediacenter.backend.player.subtitles.models import (
     SubtitleResult,
     pick_best_subtitle_file,
 )
+from warp_mediacenter.backend.player.subtitles.ranking import parse_release, ranked
 from warp_mediacenter.backend.player.subtitles.providers.base import SubtitleProvider
-from warp_mediacenter.backend.player.subtitles.providers.opensubtitles import (
-    OpenSubtitlesProvider,
-)
-from warp_mediacenter.backend.player.subtitles.providers.podnapisi import (
-    PodnapisiProvider,
-)
-from warp_mediacenter.backend.player.subtitles.providers.stub import (
-    Addic7edProvider,
-    BSPlayerProvider,
-    SubsceneProvider,
-)
+from warp_mediacenter.backend.player.subtitles.providers.opensubtitles_com import OpenSubtitlesComProvider
+from warp_mediacenter.backend.player.subtitles.providers.subdl import SubDLProvider
+from warp_mediacenter.backend.player.subtitles.providers.subsource import SubSourceProvider
+from warp_mediacenter.backend.player.subtitles.providers.subliminal_provider import SubliminalProvider
 from warp_mediacenter.backend.resource_management import get_resource_manager
 
 log = get_logger(__name__)
@@ -69,14 +64,12 @@ class SubtitleService:
         self._temp_dir.mkdir(parents=True, exist_ok=True)
 
     def _default_providers(self) -> List[SubtitleProvider]:
-        providers: List[SubtitleProvider] = [
-            OpenSubtitlesProvider.from_settings(),
-            PodnapisiProvider(),
-            BSPlayerProvider(),
-            SubsceneProvider(),
-            Addic7edProvider(),
+        return [
+            SubliminalProvider(),
+            SubDLProvider(),
+            SubSourceProvider(),
+            OpenSubtitlesComProvider(),
         ]
-        return providers
 
     def search(self, query: SubtitleQuery) -> List[SubtitleResult]:
         futures: List[Future] = []
@@ -103,8 +96,58 @@ class SubtitleService:
                     results.extend(payload)
             except Exception as exc:  # noqa: BLE001
                 log.warning("subtitle_provider_failed", error=str(exc))
-        results.sort(key=lambda r: (-r.score, r.provider))
-        return results
+        results = self._filter_episode_results(query, results)
+        subliminal_results = [item for item in results if item.provider == SubliminalProvider.name][: SubliminalProvider.max_results]
+        ranked_results = ranked(query, [item for item in results if item.provider != SubliminalProvider.name])
+        return subliminal_results + ranked_results
+
+    def _filter_episode_results(self, query: SubtitleQuery, results: list[SubtitleResult]) -> list[SubtitleResult]:
+        if query.media_kind != "show" or not (query.season or query.episode):
+            return results
+        filtered: list[SubtitleResult] = []
+        for result in results:
+            parsed = parse_release(result.release or result.file_name)
+            season = self._int_or_none(result.metadata.get("season")) or parsed.get("season")
+            episode = self._int_or_none(result.metadata.get("episode")) or parsed.get("episode")
+            if query.season and season and int(season) != int(query.season):
+                continue
+            if query.episode and episode and int(episode) != int(query.episode):
+                continue
+            if self._has_conflicting_external_id(query, result):
+                continue
+            filtered.append(result)
+        return filtered
+
+    def _has_conflicting_external_id(self, query: SubtitleQuery, result: SubtitleResult) -> bool:
+        expected_imdb = str(query.imdb_id or "").lower().removeprefix("tt")
+        if expected_imdb:
+            ids = {
+                str(result.metadata.get("imdb_id") or "").lower().removeprefix("tt"),
+                str(result.metadata.get("parent_imdb_id") or "").lower().removeprefix("tt"),
+                str(result.metadata.get("series_imdb_id") or "").lower().removeprefix("tt"),
+            }
+            ids.discard("")
+            if ids and expected_imdb not in ids:
+                return True
+
+        expected_tmdb = str(query.tmdb_id or "").strip()
+        if expected_tmdb:
+            ids = {
+                str(result.metadata.get("tmdb_id") or "").strip(),
+                str(result.metadata.get("parent_tmdb_id") or "").strip(),
+                str(result.metadata.get("series_tmdb_id") or "").strip(),
+            }
+            ids.discard("")
+            if ids and expected_tmdb not in ids:
+                return True
+
+        return False
+
+    def _int_or_none(self, value: object) -> int | None:
+        try:
+            return int(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return None
 
     def download(self, result: SubtitleResult, destination: Optional[Path] = None) -> SubtitleDownload:
         provider = self._provider_map.get(result.provider)
@@ -116,13 +159,32 @@ class SubtitleService:
         path = self._write_payload(dest_dir, payload)
         return SubtitleDownload(path=path, provider=result.provider, language=result.language)
 
+    def refresh_opensubtitles_token(self) -> dict[str, object]:
+        provider = self._provider_map.get(OpenSubtitlesComProvider.name)
+        if not isinstance(provider, OpenSubtitlesComProvider):
+            provider = OpenSubtitlesComProvider()
+            self._provider_map[provider.name] = provider
+        return provider.refresh_token()
+
     def _write_payload(self, dest_dir: Path, payload: SubtitlePayload) -> Path:
         buffer = io.BytesIO(payload.content)
         if zipfile.is_zipfile(buffer):
             buffer.seek(0)
             return self._extract_zip_bytes(buffer, dest_dir)
+        if payload.content.startswith(b"\x1f\x8b"):
+            return self._extract_gzip_bytes(payload, dest_dir)
         target = dest_dir / payload.file_name
         target.write_bytes(payload.content)
+        return target
+
+    def _extract_gzip_bytes(self, payload: SubtitlePayload, dest_dir: Path) -> Path:
+        file_name = payload.file_name
+        if file_name.endswith(".gz"):
+            file_name = file_name[:-3]
+        if Path(file_name).suffix.lower() not in PREFERRED_EXTENSIONS:
+            file_name = f"{Path(file_name).stem or 'subtitle'}.srt"
+        target = dest_dir / file_name
+        target.write_bytes(gzip.decompress(payload.content))
         return target
 
     def _extract_zip_bytes(self, buffer: io.BytesIO, dest_dir: Path) -> Path:
@@ -143,9 +205,16 @@ class SubtitleService:
         return selected
 
     def cleanup_temp(self) -> None:
-        for item in self._temp_dir.glob("**/*"):
+        items = sorted(
+            self._temp_dir.glob("**/*"),
+            key=lambda item: len(item.relative_to(self._temp_dir).parts),
+            reverse=True,
+        )
+        for item in items:
             try:
                 if item.is_file():
                     item.unlink()
+                elif item.is_dir():
+                    item.rmdir()
             except OSError:
                 log.debug("subtitle_cleanup_failed", path=str(item))

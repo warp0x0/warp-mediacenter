@@ -81,7 +81,14 @@ class _FakePreloadManager:
         self._upstream_url = upstream_url
         self._sessions: Dict[str, SimpleNamespace] = {}
 
-    def create_session(self, stream_url: str, *, title: str | None = None, media_kind: str | None = None) -> SimpleNamespace:
+    def create_session(
+        self,
+        stream_url: str,
+        *,
+        title: str | None = None,
+        media_kind: str | None = None,
+        start_percent: float = 0.0,
+    ) -> SimpleNamespace:
         session_id = f"s{len(self._sessions) + 1}"
         session = SimpleNamespace(
             session_id=session_id,
