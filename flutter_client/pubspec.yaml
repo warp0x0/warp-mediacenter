@@ -44,6 +44,7 @@ dependencies:
   device_info_plus: ^13.2.0               # Android TV detection
   window_manager: ^0.5.1                   # Desktop window chrome + fullscreen
   audio_service: ^0.18.18                  # Android TV media session (notification, BT remotes)
+  dpad: ^3.0.0
 
 dev_dependencies:
   flutter_test:
