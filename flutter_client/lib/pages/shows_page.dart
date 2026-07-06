@@ -24,6 +24,7 @@ class _ShowsPageState extends ConsumerState<ShowsPage> {
   List<WidgetConfig> _widgets = kDefaultShowWidgets;
   bool _snapping = false;
   double _trackpadAccum = 0.0;
+  int? _pendingDpadFocusRow;
 
   @override
   void initState() {
@@ -62,6 +63,43 @@ class _ShowsPageState extends ConsumerState<ShowsPage> {
           final node = _rowRegistry.entryFor(target);
           if (node != null) Dpad.of(context).requestFocus(node);
         });
+  }
+
+  bool _tryFocusRow(int rowIndex) {
+    final node = _rowRegistry.entryFor(rowIndex);
+    if (node == null) return false;
+    return Dpad.of(context).requestFocus(node);
+  }
+
+  void _onFirstCardRegistered(int rowIndex) {
+    if (_pendingDpadFocusRow != rowIndex) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _pendingDpadFocusRow != rowIndex) return;
+      if (_tryFocusRow(rowIndex)) _pendingDpadFocusRow = null;
+    });
+  }
+
+  Future<void> _focusRowByDpad(int rowIndex) async {
+    if (rowIndex < 0 || rowIndex >= _widgets.length) return;
+    _pendingDpadFocusRow = rowIndex;
+    if (_pageCtrl.hasClients) {
+      final page = _pageCtrl.page?.round() ?? _pageCtrl.initialPage;
+      if (page != rowIndex) {
+        _snapping = true;
+        await _pageCtrl.animateToPage(
+          rowIndex,
+          duration: const Duration(milliseconds: 500),
+          curve: Curves.easeInOutCubic,
+        );
+        if (!mounted) return;
+        _snapping = false;
+        _trackpadAccum = 0.0;
+      }
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _pendingDpadFocusRow != rowIndex) return;
+      if (_tryFocusRow(rowIndex)) _pendingDpadFocusRow = null;
+    });
   }
 
   void _onPointerSignal(PointerSignalEvent event) {
@@ -124,34 +162,43 @@ class _ShowsPageState extends ConsumerState<ShowsPage> {
                 items: const [],
                 isLoading: true,
                 rowIndex: idx,
+                rowCount: _widgets.length,
                 ownRoute: '/shows',
                 rowRegistry: _rowRegistry,
                 mediaType: 'show',
                 provider: w.provider,
                 category: w.category,
                 initialFocus: idx == 0,
+                onRowFocusRequested: _focusRowByDpad,
+                onFirstCardRegistered: _onFirstCardRegistered,
               ),
               error: (_, _) => WidgetSection(
                 title: w.title,
                 items: const [],
                 rowIndex: idx,
+                rowCount: _widgets.length,
                 ownRoute: '/shows',
                 rowRegistry: _rowRegistry,
                 mediaType: 'show',
                 provider: w.provider,
                 category: w.category,
+                onRowFocusRequested: _focusRowByDpad,
+                onFirstCardRegistered: _onFirstCardRegistered,
               ),
               data: (catalog) => WidgetSection(
                 key: ValueKey('shows-$idx-${w.category}'),
                 title: w.title,
                 items: catalog.items,
                 rowIndex: idx,
+                rowCount: _widgets.length,
                 ownRoute: '/shows',
                 rowRegistry: _rowRegistry,
                 mediaType: 'show',
                 provider: w.provider,
                 category: w.category,
                 initialFocus: idx == 0,
+                onRowFocusRequested: _focusRowByDpad,
+                onFirstCardRegistered: _onFirstCardRegistered,
               ),
             );
           },

@@ -122,12 +122,16 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog> {
     _searchWrapperFocus.dispose();
     _searchBtnFocus.dispose();
     _localConfirmCancelFocus.dispose();
-    for (final fn in _resultFocusNodes) { fn.dispose(); }
+    for (final fn in _resultFocusNodes) {
+      fn.dispose();
+    }
     super.dispose();
   }
 
   void _syncResultFocusNodes() {
-    for (final fn in _resultFocusNodes) { fn.dispose(); }
+    for (final fn in _resultFocusNodes) {
+      fn.dispose();
+    }
     _resultFocusNodes = List.generate(_results.length, (_) => FocusNode());
   }
 
@@ -640,60 +644,60 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog> {
           horizontalEdge: DpadEdgeBehavior.stop,
           verticalEdge: DpadEdgeBehavior.stop,
           child: Stack(
-        children: [
-          // Main dialog
-          Center(
-            child: Container(
-              width: (size.width * 0.62).clamp(520.0, 900.0),
-              constraints: BoxConstraints(maxHeight: size.height * 0.82),
-              decoration: BoxDecoration(
-                color: const Color(0xF7000000).withAlpha(247),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.white.withAlpha(23)),
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(16),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // Accent top stripe
-                    Container(
-                      height: 3,
-                      decoration: const BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: [Color(0xFF0DB2E2), Color(0x1F0DB2E2)],
+            children: [
+              // Main dialog
+              Center(
+                child: Container(
+                  width: (size.width * 0.62).clamp(520.0, 900.0),
+                  constraints: BoxConstraints(maxHeight: size.height * 0.82),
+                  decoration: BoxDecoration(
+                    color: const Color(0xF7000000).withAlpha(247),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: Colors.white.withAlpha(23)),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(16),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // Accent top stripe
+                        Container(
+                          height: 3,
+                          decoration: const BoxDecoration(
+                            gradient: LinearGradient(
+                              colors: [Color(0xFF0DB2E2), Color(0x1F0DB2E2)],
+                            ),
+                          ),
                         ),
-                      ),
+
+                        // Header
+                        _buildHeader(t, episodeTag),
+
+                        // Search bar
+                        _buildSearchBar(t),
+
+                        // Banner
+                        if (_banner != null) _buildBanner(_banner!, t),
+
+                        // Scrollable body
+                        Flexible(child: _buildBody(t)),
+                      ],
                     ),
-
-                    // Header
-                    _buildHeader(t, episodeTag),
-
-                    // Search bar
-                    _buildSearchBar(t),
-
-                    // Banner
-                    if (_banner != null) _buildBanner(_banner!, t),
-
-                    // Scrollable body
-                    Flexible(child: _buildBody(t)),
-                  ],
+                  ),
                 ),
               ),
-            ),
-          ),
 
-          // Local confirm overlay — an in-page overlay (not a routed dialog),
-          // so it needs its own explicit DpadRegion trap; Dpad.wrap()'s
-          // route-level isolation doesn't cover it automatically.
-          if (_localConfirmResult != null)
-            DpadRegion(
-              memoryKey: 'torrent-local-confirm',
-              horizontalEdge: DpadEdgeBehavior.stop,
-              verticalEdge: DpadEdgeBehavior.stop,
-              child: _buildLocalConfirmOverlay(t),
-            ),
-        ],
+              // Local confirm overlay — an in-page overlay (not a routed dialog),
+              // so it needs its own explicit DpadRegion trap; Dpad.wrap()'s
+              // route-level isolation doesn't cover it automatically.
+              if (_localConfirmResult != null)
+                DpadRegion(
+                  memoryKey: 'torrent-local-confirm',
+                  horizontalEdge: DpadEdgeBehavior.stop,
+                  verticalEdge: DpadEdgeBehavior.stop,
+                  child: _buildLocalConfirmOverlay(t),
+                ),
+            ],
           ),
         ),
       ),
@@ -749,7 +753,13 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog> {
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(8),
                 boxShadow: state.focused
-                    ? [BoxShadow(color: const Color(0xFF0DB2E2).withAlpha(140), blurRadius: 18, spreadRadius: 2)]
+                    ? [
+                        BoxShadow(
+                          color: const Color(0xFF0DB2E2).withAlpha(140),
+                          blurRadius: 18,
+                          spreadRadius: 2,
+                        ),
+                      ]
                     : null,
               ),
               alignment: Alignment.center,
@@ -789,7 +799,9 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog> {
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(10),
                   border: Border.all(
-                    color: state.focused ? const Color(0xFF0DB2E2) : Colors.transparent,
+                    color: state.focused
+                        ? const Color(0xFF0DB2E2)
+                        : Colors.transparent,
                     width: 2,
                   ),
                 ),
@@ -973,37 +985,46 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog> {
                 ),
               ),
               if (b.kind == _BannerKind.progress)
-                GestureDetector(
-                  onTap: _handleCancel,
-                  child: Container(
-                    margin: const EdgeInsets.only(left: 8),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 3,
-                    ),
-                    decoration: BoxDecoration(
-                      border: Border.all(color: textColor.withAlpha(128)),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          Icons.close,
-                          size: 10,
-                          color: textColor.withAlpha(153),
+                DpadFocusable(
+                  onSelect: _handleCancel,
+                  builder: (context, state, child) => GestureDetector(
+                    onTap: _handleCancel,
+                    child: Container(
+                      margin: const EdgeInsets.only(left: 8),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 3,
+                      ),
+                      decoration: BoxDecoration(
+                        border: Border.all(
+                          color: state.focused
+                              ? Colors.white
+                              : textColor.withAlpha(128),
+                          width: state.focused ? 2 : 1,
                         ),
-                        const SizedBox(width: 3),
-                        Text(
-                          'Cancel',
-                          style: TextStyle(
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.close,
+                            size: 10,
                             color: textColor.withAlpha(153),
-                            fontSize: 10,
                           ),
-                        ),
-                      ],
+                          const SizedBox(width: 3),
+                          Text(
+                            'Cancel',
+                            style: TextStyle(
+                              color: textColor.withAlpha(153),
+                              fontSize: 10,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
+                  child: const SizedBox.shrink(),
                 ),
             ],
           ),
@@ -1089,7 +1110,9 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog> {
             result: result,
             isRdBlocked: isBlocked,
             isBusy: _isBusy,
-            focusNode: i < _resultFocusNodes.length ? _resultFocusNodes[i] : null,
+            focusNode: i < _resultFocusNodes.length
+                ? _resultFocusNodes[i]
+                : null,
             onTap: () {
               if (_isBusy) return;
               if (isBlocked) {
@@ -1210,7 +1233,9 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog> {
                         ),
                         decoration: BoxDecoration(
                           border: Border.all(
-                            color: state.focused ? const Color(0xFF0DB2E2) : Colors.white.withAlpha(20),
+                            color: state.focused
+                                ? const Color(0xFF0DB2E2)
+                                : Colors.white.withAlpha(20),
                             width: state.focused ? 2 : 1,
                           ),
                           borderRadius: BorderRadius.circular(8),
@@ -1240,7 +1265,9 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog> {
                           color: const Color(0xFF0DB2E2),
                           borderRadius: BorderRadius.circular(8),
                           border: Border.all(
-                            color: state.focused ? Colors.white : Colors.transparent,
+                            color: state.focused
+                                ? Colors.white
+                                : Colors.transparent,
                             width: 2,
                           ),
                         ),
@@ -1306,105 +1333,107 @@ class _ResultRowState extends State<_ResultRow> {
         onSelect: widget.onTap,
         tapToSelect: false,
         builder: (context, state, child) => GestureDetector(
-        onTap: () {
-          widget.focusNode?.requestFocus();
-          if (!widget.isBusy) widget.onTap();
-        },
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 140),
-          margin: const EdgeInsets.only(bottom: 8),
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          decoration: BoxDecoration(
-            color: _hovered
-                ? Colors.white.withAlpha(13)
-                : Colors.white.withAlpha(6),
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(
-              color: state.focused
-                  ? const Color(0xFF0DB2E2)
-                  : (_hovered ? Colors.white.withAlpha(30) : Colors.white.withAlpha(15)),
-              width: state.focused ? 2 : 1,
+          onTap: () {
+            widget.focusNode?.requestFocus();
+            if (!widget.isBusy) widget.onTap();
+          },
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 140),
+            margin: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              color: _hovered
+                  ? Colors.white.withAlpha(13)
+                  : Colors.white.withAlpha(6),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: state.focused
+                    ? const Color(0xFF0DB2E2)
+                    : (_hovered
+                          ? Colors.white.withAlpha(30)
+                          : Colors.white.withAlpha(15)),
+                width: state.focused ? 2 : 1,
+              ),
             ),
-          ),
-          child: Opacity(
-            opacity: widget.isBusy ? 0.4 : 1.0,
-            child: Row(
-              children: [
-                // Left: name + metadata
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+            child: Opacity(
+              opacity: widget.isBusy ? 0.4 : 1.0,
+              child: Row(
+                children: [
+                  // Left: name + metadata
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          r.name,
+                          style: TextStyle(
+                            color: Colors.white.withAlpha(217),
+                            fontSize: t.fontSubtitle.clamp(12.0, 15.0),
+                            fontWeight: FontWeight.w500,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 4),
+                        Row(
+                          children: [
+                            Text(
+                              '${r.seeders} seeders',
+                              style: TextStyle(
+                                color: Colors.white.withAlpha(90),
+                                fontSize: 11,
+                              ),
+                            ),
+                            Text(
+                              '  ·  ',
+                              style: TextStyle(
+                                color: Colors.white.withAlpha(51),
+                                fontSize: 11,
+                              ),
+                            ),
+                            Text(
+                              r.size,
+                              style: TextStyle(
+                                color: Colors.white.withAlpha(90),
+                                fontSize: 11,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  const SizedBox(width: 10),
+
+                  // Right: badges
+                  Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text(
-                        r.name,
-                        style: TextStyle(
-                          color: Colors.white.withAlpha(217),
-                          fontSize: t.fontSubtitle.clamp(12.0, 15.0),
-                          fontWeight: FontWeight.w500,
+                      if (widget.isRdBlocked) ...[
+                        _Pill(
+                          label: 'RD Blocked',
+                          bg: const Color(0x1FF59E0B),
+                          fg: const Color(0xFFFBBF24),
+                          border: const Color(0x40F59E0B),
+                          icon: Icons.warning_amber_rounded,
                         ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 4),
-                      Row(
-                        children: [
-                          Text(
-                            '${r.seeders} seeders',
-                            style: TextStyle(
-                              color: Colors.white.withAlpha(90),
-                              fontSize: 11,
-                            ),
-                          ),
-                          Text(
-                            '  ·  ',
-                            style: TextStyle(
-                              color: Colors.white.withAlpha(51),
-                              fontSize: 11,
-                            ),
-                          ),
-                          Text(
-                            r.size,
-                            style: TextStyle(
-                              color: Colors.white.withAlpha(90),
-                              fontSize: 11,
-                            ),
-                          ),
-                        ],
-                      ),
+                        const SizedBox(width: 6),
+                      ],
+                      if (r.quality.isNotEmpty && r.quality != 'unknown')
+                        _Pill(
+                          label: r.quality,
+                          bg: const Color(0xFF0DB2E2).withAlpha(38),
+                          fg: const Color(0xFF0DB2E2),
+                          border: Colors.transparent,
+                        ),
                     ],
                   ),
-                ),
-
-                const SizedBox(width: 10),
-
-                // Right: badges
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (widget.isRdBlocked) ...[
-                      _Pill(
-                        label: 'RD Blocked',
-                        bg: const Color(0x1FF59E0B),
-                        fg: const Color(0xFFFBBF24),
-                        border: const Color(0x40F59E0B),
-                        icon: Icons.warning_amber_rounded,
-                      ),
-                      const SizedBox(width: 6),
-                    ],
-                    if (r.quality.isNotEmpty && r.quality != 'unknown')
-                      _Pill(
-                        label: r.quality,
-                        bg: const Color(0xFF0DB2E2).withAlpha(38),
-                        fg: const Color(0xFF0DB2E2),
-                        border: Colors.transparent,
-                      ),
-                  ],
-                ),
-              ],
+                ],
+              ),
             ),
           ),
-        ),
         ),
         child: const SizedBox.shrink(),
       ),

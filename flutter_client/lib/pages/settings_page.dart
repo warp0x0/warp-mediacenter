@@ -11,15 +11,16 @@ import '../navigation/tab_bar_focus_registry.dart';
 import '../providers/catalog_provider.dart';
 import '../providers/settings_provider.dart';
 import '../theme/warp_tokens.dart';
+import '../widgets/shared/dpad_controls.dart';
 
 // Settings API key names (must match backend)
-const _kTmdbApiKey          = 'tmdb_api_key';
-const _kTraktClientId       = 'trakt_client_id';
-const _kTraktClientSecret   = 'trakt_client_secret';
-const _kDebridClientId      = 'realdebrid_client_id';
-const _kDebridClientSecret  = 'realdebrid_client_secret';
-const _kTorrentApiUrl       = 'torrent_api_url';
-const _kTorrentApiKey       = 'torrent_api_key';
+const _kTmdbApiKey = 'tmdb_api_key';
+const _kTraktClientId = 'trakt_client_id';
+const _kTraktClientSecret = 'trakt_client_secret';
+const _kDebridClientId = 'realdebrid_client_id';
+const _kDebridClientSecret = 'realdebrid_client_secret';
+const _kTorrentApiUrl = 'torrent_api_url';
+const _kTorrentApiKey = 'torrent_api_key';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SettingsPage — mirrors Tauri SettingsPage.tsx:
@@ -37,12 +38,42 @@ class _SectionMeta {
 }
 
 const _sections = [
-  _SectionMeta(_SettingsSection.auth,       Icons.shield_outlined,      'Authentication', 'Trakt & Real Debrid accounts'),
-  _SectionMeta(_SettingsSection.providers,  Icons.bolt_outlined,        'Providers',      'Service connection status'),
-  _SectionMeta(_SettingsSection.apiKeys,    Icons.key_outlined,         'API Keys',       'TMDb and provider keys'),
-  _SectionMeta(_SettingsSection.connection, Icons.dns_outlined,         'Connection',     'Backend server settings'),
-  _SectionMeta(_SettingsSection.catalog,    Icons.grid_view_outlined,   'Catalog',        'Content sources & widgets'),
-  _SectionMeta(_SettingsSection.general,    Icons.tune_outlined,        'General',        'App preferences'),
+  _SectionMeta(
+    _SettingsSection.auth,
+    Icons.shield_outlined,
+    'Authentication',
+    'Trakt & Real Debrid accounts',
+  ),
+  _SectionMeta(
+    _SettingsSection.providers,
+    Icons.bolt_outlined,
+    'Providers',
+    'Service connection status',
+  ),
+  _SectionMeta(
+    _SettingsSection.apiKeys,
+    Icons.key_outlined,
+    'API Keys',
+    'TMDb and provider keys',
+  ),
+  _SectionMeta(
+    _SettingsSection.connection,
+    Icons.dns_outlined,
+    'Connection',
+    'Backend server settings',
+  ),
+  _SectionMeta(
+    _SettingsSection.catalog,
+    Icons.grid_view_outlined,
+    'Catalog',
+    'Content sources & widgets',
+  ),
+  _SectionMeta(
+    _SettingsSection.general,
+    Icons.tune_outlined,
+    'General',
+    'App preferences',
+  ),
 ];
 
 class SettingsPage extends ConsumerStatefulWidget {
@@ -69,14 +100,14 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
   @override
   Widget build(BuildContext context) {
-    final t    = WarpTokens.watch(context, ref);
+    final t = WarpTokens.watch(context, ref);
     final size = MediaQuery.sizeOf(context);
     final meta = _sections.firstWhere((s) => s.id == _section);
 
-    final sidebarW   = (size.width * 0.175).clamp(240.0, 310.0);
-    final hPadSide   = (size.width * 0.012).clamp(16.0, 22.0);
-    final vPadSide   = (size.height * 0.015).clamp(14.0, 22.0);
-    final bodyPad    = (size.width * 0.0167).clamp(16.0, 28.0);
+    final sidebarW = (size.width * 0.175).clamp(240.0, 310.0);
+    final hPadSide = (size.width * 0.012).clamp(16.0, 22.0);
+    final vPadSide = (size.height * 0.015).clamp(14.0, 22.0);
+    final bodyPad = (size.width * 0.0167).clamp(16.0, 28.0);
 
     return ColoredBox(
       color: const Color(0xFF181818),
@@ -92,7 +123,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 Container(
                   width: sidebarW,
                   decoration: BoxDecoration(
-                    border: Border(right: BorderSide(color: Colors.white.withAlpha(18))),
+                    border: Border(
+                      right: BorderSide(color: Colors.white.withAlpha(18)),
+                    ),
                     gradient: const LinearGradient(
                       begin: Alignment.topCenter,
                       end: Alignment.bottomCenter,
@@ -103,9 +136,16 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     children: [
                       // Sidebar header
                       Container(
-                        padding: EdgeInsets.symmetric(horizontal: hPadSide, vertical: vPadSide),
+                        padding: EdgeInsets.symmetric(
+                          horizontal: hPadSide,
+                          vertical: vPadSide,
+                        ),
                         decoration: BoxDecoration(
-                          border: Border(bottom: BorderSide(color: Colors.white.withAlpha(18))),
+                          border: Border(
+                            bottom: BorderSide(
+                              color: Colors.white.withAlpha(18),
+                            ),
+                          ),
                         ),
                         child: Row(
                           children: [
@@ -116,7 +156,11 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                                 color: const Color(0xFF0DB2E2).withAlpha(51),
                                 borderRadius: BorderRadius.circular(8),
                               ),
-                              child: const Icon(Icons.settings, color: Color(0xFF0DB2E2), size: 15),
+                              child: const Icon(
+                                Icons.settings,
+                                color: Color(0xFF0DB2E2),
+                                size: 15,
+                              ),
                             ),
                             const SizedBox(width: 12),
                             Column(
@@ -126,7 +170,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                                   'SETTINGS',
                                   style: TextStyle(
                                     color: Colors.white,
-                                    fontSize: (size.width * 0.0065).clamp(11.0, 13.0),
+                                    fontSize: (size.width * 0.0065).clamp(
+                                      11.0,
+                                      13.0,
+                                    ),
                                     fontWeight: FontWeight.w700,
                                     letterSpacing: 1.8,
                                   ),
@@ -135,7 +182,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                                   'Warp Media Center',
                                   style: TextStyle(
                                     color: Colors.white.withAlpha(77),
-                                    fontSize: (size.width * 0.0055).clamp(9.0, 11.0),
+                                    fontSize: (size.width * 0.0055).clamp(
+                                      9.0,
+                                      11.0,
+                                    ),
                                   ),
                                 ),
                               ],
@@ -153,7 +203,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                               _NavItem(
                                 meta: _sections[i],
                                 selected: _section == _sections[i].id,
-                                onTap: () => setState(() => _section = _sections[i].id),
+                                onTap: () =>
+                                    setState(() => _section = _sections[i].id),
                                 screenSize: size,
                                 autofocus: i == 0,
                                 onDirection: i == 0 ? _firstNavItemUp : null,
@@ -164,9 +215,14 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
                       // Footer version
                       Container(
-                        padding: EdgeInsets.symmetric(horizontal: hPadSide, vertical: (size.height * 0.01).clamp(10.0, 14.0)),
+                        padding: EdgeInsets.symmetric(
+                          horizontal: hPadSide,
+                          vertical: (size.height * 0.01).clamp(10.0, 14.0),
+                        ),
                         decoration: BoxDecoration(
-                          border: Border(top: BorderSide(color: Colors.white.withAlpha(18))),
+                          border: Border(
+                            top: BorderSide(color: Colors.white.withAlpha(18)),
+                          ),
                         ),
                         child: Text(
                           'v1.0.0 · WARP MEDIA CENTER',
@@ -193,7 +249,11 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                         ),
                         decoration: BoxDecoration(
                           color: Colors.white.withAlpha(5),
-                          border: Border(bottom: BorderSide(color: Colors.white.withAlpha(18))),
+                          border: Border(
+                            bottom: BorderSide(
+                              color: Colors.white.withAlpha(18),
+                            ),
+                          ),
                         ),
                         child: Row(
                           children: [
@@ -204,7 +264,11 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                                 color: const Color(0xFF0DB2E2).withAlpha(51),
                                 borderRadius: BorderRadius.circular(12),
                               ),
-                              child: Icon(meta.icon, color: const Color(0xFF0DB2E2), size: 18),
+                              child: Icon(
+                                meta.icon,
+                                color: const Color(0xFF0DB2E2),
+                                size: 18,
+                              ),
                             ),
                             const SizedBox(width: 16),
                             Column(
@@ -214,7 +278,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                                   meta.label,
                                   style: TextStyle(
                                     color: Colors.white,
-                                    fontSize: (size.width * 0.011).clamp(15.0, 20.0),
+                                    fontSize: (size.width * 0.011).clamp(
+                                      15.0,
+                                      20.0,
+                                    ),
                                     fontWeight: FontWeight.w700,
                                   ),
                                 ),
@@ -222,7 +289,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                                   meta.description,
                                   style: TextStyle(
                                     color: Colors.white.withAlpha(90),
-                                    fontSize: (size.width * 0.0065).clamp(11.0, 13.0),
+                                    fontSize: (size.width * 0.0065).clamp(
+                                      11.0,
+                                      13.0,
+                                    ),
                                   ),
                                 ),
                               ],
@@ -236,12 +306,14 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                         child: SingleChildScrollView(
                           padding: EdgeInsets.all(bodyPad),
                           child: switch (_section) {
-                            _SettingsSection.auth       => _AuthSectionPanel(t: t),
-                            _SettingsSection.providers  => _ProvidersPanel(t: t),
-                            _SettingsSection.apiKeys    => _ApiKeysPanel(t: t),
-                            _SettingsSection.connection => _ConnectionPanel(t: t),
-                            _SettingsSection.catalog    => _CatalogPanel(t: t),
-                            _SettingsSection.general    => _GeneralPanel(t: t),
+                            _SettingsSection.auth => _AuthSectionPanel(t: t),
+                            _SettingsSection.providers => _ProvidersPanel(t: t),
+                            _SettingsSection.apiKeys => _ApiKeysPanel(t: t),
+                            _SettingsSection.connection => _ConnectionPanel(
+                              t: t,
+                            ),
+                            _SettingsSection.catalog => _CatalogPanel(t: t),
+                            _SettingsSection.general => _GeneralPanel(t: t),
                           },
                         ),
                       ),
@@ -291,10 +363,10 @@ class _NavItemState extends State<_NavItem> {
     final selected = widget.selected;
     final meta = widget.meta;
     final iconBoxSize = (w * 0.025).clamp(36.0, 46.0);
-    final labelFs     = (w * 0.010).clamp(15.0, 17.0);
-    final descFs      = (w * 0.007).clamp(11.5, 13.0);
-    final vPad        = (widget.screenSize.height * 0.012).clamp(10.0, 16.0);
-    final hPad        = (w * 0.012).clamp(14.0, 22.0);
+    final labelFs = (w * 0.010).clamp(15.0, 17.0);
+    final descFs = (w * 0.007).clamp(11.5, 13.0);
+    final vPad = (widget.screenSize.height * 0.012).clamp(10.0, 16.0);
+    final hPad = (w * 0.012).clamp(14.0, 22.0);
 
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
@@ -305,95 +377,126 @@ class _NavItemState extends State<_NavItem> {
         onDirection: widget.onDirection,
         onSelect: widget.onTap,
         tapToSelect: false,
-        builder: (context, state, child) => _buildContent(state.focused || _hovered, selected, meta, iconBoxSize, labelFs, descFs, vPad, hPad),
+        builder: (context, state, child) => _buildContent(
+          state.focused || _hovered,
+          selected,
+          meta,
+          iconBoxSize,
+          labelFs,
+          descFs,
+          vPad,
+          hPad,
+        ),
         child: const SizedBox.shrink(),
       ),
     );
   }
 
-  Widget _buildContent(bool active, bool selected, _SectionMeta meta, double iconBoxSize, double labelFs, double descFs, double vPad, double hPad) {
+  Widget _buildContent(
+    bool active,
+    bool selected,
+    _SectionMeta meta,
+    double iconBoxSize,
+    double labelFs,
+    double descFs,
+    double vPad,
+    double hPad,
+  ) {
     return AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        color: !selected && active ? Colors.white.withAlpha(18) : Colors.transparent,
-        child: GestureDetector(
-          onTap: widget.onTap,
-          child: Stack(
-            children: [
-              // Row content
-              Padding(
-                padding: EdgeInsets.symmetric(horizontal: hPad, vertical: vPad),
-                child: Row(
-                  children: [
-                    // Icon box
-                    Container(
-                      width: iconBoxSize,
-                      height: iconBoxSize,
-                      decoration: BoxDecoration(
-                        color: selected
-                            ? const Color(0xFF0DB2E2).withAlpha(64)
-                            : (active ? Colors.white.withAlpha(20) : Colors.white.withAlpha(13)),
-                        borderRadius: BorderRadius.circular(8),
-                        boxShadow: selected
-                            ? [BoxShadow(color: const Color(0xFF0DB2E2).withAlpha(56), blurRadius: 14)]
-                            : null,
-                      ),
-                      child: Icon(
-                        meta.icon,
-                        size: 16,
-                        color: selected
-                            ? const Color(0xFF0DB2E2)
-                            : (active ? Colors.white.withAlpha(160) : Colors.white.withAlpha(102)),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    // Label + description
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            meta.label,
-                            style: TextStyle(
-                              color: selected
-                                  ? const Color(0xFF0DB2E2)
-                                  : (active ? Colors.white.withAlpha(200) : Colors.white.withAlpha(140)),
-                              fontSize: labelFs,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          Text(
-                            meta.description,
-                            style: TextStyle(
-                              color: Colors.white.withAlpha(64),
-                              fontSize: descFs,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-
-              // Left accent bar (active only)
-              if (selected)
-                Positioned(
-                  left: 0,
-                  top: vPad + iconBoxSize * 0.18,
-                  bottom: vPad + iconBoxSize * 0.18,
-                  child: Container(
-                    width: 3,
+      duration: const Duration(milliseconds: 150),
+      color: !selected && active
+          ? Colors.white.withAlpha(18)
+          : Colors.transparent,
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: Stack(
+          children: [
+            // Row content
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: hPad, vertical: vPad),
+              child: Row(
+                children: [
+                  // Icon box
+                  Container(
+                    width: iconBoxSize,
+                    height: iconBoxSize,
                     decoration: BoxDecoration(
-                      color: const Color(0xFF0DB2E2),
-                      borderRadius: BorderRadius.circular(2),
+                      color: selected
+                          ? const Color(0xFF0DB2E2).withAlpha(64)
+                          : (active
+                                ? Colors.white.withAlpha(20)
+                                : Colors.white.withAlpha(13)),
+                      borderRadius: BorderRadius.circular(8),
+                      boxShadow: selected
+                          ? [
+                              BoxShadow(
+                                color: const Color(0xFF0DB2E2).withAlpha(56),
+                                blurRadius: 14,
+                              ),
+                            ]
+                          : null,
+                    ),
+                    child: Icon(
+                      meta.icon,
+                      size: 16,
+                      color: selected
+                          ? const Color(0xFF0DB2E2)
+                          : (active
+                                ? Colors.white.withAlpha(160)
+                                : Colors.white.withAlpha(102)),
                     ),
                   ),
+                  const SizedBox(width: 12),
+                  // Label + description
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          meta.label,
+                          style: TextStyle(
+                            color: selected
+                                ? const Color(0xFF0DB2E2)
+                                : (active
+                                      ? Colors.white.withAlpha(200)
+                                      : Colors.white.withAlpha(140)),
+                            fontSize: labelFs,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        Text(
+                          meta.description,
+                          style: TextStyle(
+                            color: Colors.white.withAlpha(64),
+                            fontSize: descFs,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            // Left accent bar (active only)
+            if (selected)
+              Positioned(
+                left: 0,
+                top: vPad + iconBoxSize * 0.18,
+                bottom: vPad + iconBoxSize * 0.18,
+                child: Container(
+                  width: 3,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0DB2E2),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
                 ),
-            ],
-          ),
+              ),
+          ],
         ),
+      ),
     );
   }
 }
@@ -438,9 +541,20 @@ class _ConnectionPanelState extends ConsumerState<_ConnectionPanel> {
     try {
       final testClient = ApiClient(_urlCtrl.text.trim());
       await testClient.get<Map<String, dynamic>>('/api/v1/health');
-      if (mounted) setState(() { _testing = false; _testOk = true; });
+      if (mounted) {
+        setState(() {
+          _testing = false;
+          _testOk = true;
+        });
+      }
     } catch (e) {
-      if (mounted) setState(() { _testing = false; _testOk = false; _testError = e.toString(); });
+      if (mounted) {
+        setState(() {
+          _testing = false;
+          _testOk = false;
+          _testError = e.toString();
+        });
+      }
     }
   }
 
@@ -531,7 +645,9 @@ class _ConnectionPanelState extends ConsumerState<_ConnectionPanel> {
                       ? 'Connection successful!'
                       : 'Connection failed: ${_testError ?? 'Unknown error'}',
                   style: TextStyle(
-                    color: _testOk! ? const Color(0xFF10B981) : Colors.redAccent,
+                    color: _testOk!
+                        ? const Color(0xFF10B981)
+                        : Colors.redAccent,
                     fontSize: t.fontSubtitle,
                   ),
                 ),
@@ -565,21 +681,54 @@ class _ApiKeysPanel extends ConsumerWidget {
         ),
         const SizedBox(height: 24),
 
-        _KeyGroup(title: 'TMDB', t: t, fields: [
-          _ApiKeyField(label: 'API Key', settingKey: _kTmdbApiKey, t: t),
-        ]),
-        _KeyGroup(title: 'Trakt.tv', t: t, fields: [
-          _ApiKeyField(label: 'Client ID',     settingKey: _kTraktClientId,     t: t),
-          _ApiKeyField(label: 'Client Secret', settingKey: _kTraktClientSecret, t: t),
-        ]),
-        _KeyGroup(title: 'Real-Debrid', t: t, fields: [
-          _ApiKeyField(label: 'Client ID',     settingKey: _kDebridClientId,     t: t),
-          _ApiKeyField(label: 'Client Secret', settingKey: _kDebridClientSecret, t: t),
-        ]),
-        _KeyGroup(title: 'Torrent API', t: t, fields: [
-          _ApiKeyField(label: 'API URL', settingKey: _kTorrentApiUrl, t: t, obscure: false),
-          _ApiKeyField(label: 'API Key', settingKey: _kTorrentApiKey, t: t),
-        ]),
+        _KeyGroup(
+          title: 'TMDB',
+          t: t,
+          fields: [
+            _ApiKeyField(label: 'API Key', settingKey: _kTmdbApiKey, t: t),
+          ],
+        ),
+        _KeyGroup(
+          title: 'Trakt.tv',
+          t: t,
+          fields: [
+            _ApiKeyField(label: 'Client ID', settingKey: _kTraktClientId, t: t),
+            _ApiKeyField(
+              label: 'Client Secret',
+              settingKey: _kTraktClientSecret,
+              t: t,
+            ),
+          ],
+        ),
+        _KeyGroup(
+          title: 'Real-Debrid',
+          t: t,
+          fields: [
+            _ApiKeyField(
+              label: 'Client ID',
+              settingKey: _kDebridClientId,
+              t: t,
+            ),
+            _ApiKeyField(
+              label: 'Client Secret',
+              settingKey: _kDebridClientSecret,
+              t: t,
+            ),
+          ],
+        ),
+        _KeyGroup(
+          title: 'Torrent API',
+          t: t,
+          fields: [
+            _ApiKeyField(
+              label: 'API URL',
+              settingKey: _kTorrentApiUrl,
+              t: t,
+              obscure: false,
+            ),
+            _ApiKeyField(label: 'API Key', settingKey: _kTorrentApiKey, t: t),
+          ],
+        ),
       ],
     );
   }
@@ -635,6 +784,8 @@ class _ApiKeyField extends ConsumerStatefulWidget {
 
 class _ApiKeyFieldState extends ConsumerState<_ApiKeyField> {
   late final TextEditingController _ctrl;
+  final _fieldFocusNode = FocusNode();
+  final _wrapperFocusNode = FocusNode();
   bool _showText = false;
   bool _saving = false;
   bool _saved = false;
@@ -647,6 +798,8 @@ class _ApiKeyFieldState extends ConsumerState<_ApiKeyField> {
 
   @override
   void dispose() {
+    _wrapperFocusNode.dispose();
+    _fieldFocusNode.dispose();
     _ctrl.dispose();
     super.dispose();
   }
@@ -662,7 +815,10 @@ class _ApiKeyFieldState extends ConsumerState<_ApiKeyField> {
         body: {'value': val},
       );
       if (mounted) {
-        setState(() { _saving = false; _saved = true; });
+        setState(() {
+          _saving = false;
+          _saved = true;
+        });
         await Future.delayed(const Duration(seconds: 2));
         if (mounted) setState(() => _saved = false);
       }
@@ -679,16 +835,29 @@ class _ApiKeyFieldState extends ConsumerState<_ApiKeyField> {
       child: Row(
         children: [
           Expanded(
-            child: TextField(
+            child: WarpDpadTextField(
               controller: _ctrl,
+              fieldFocusNode: _fieldFocusNode,
+              wrapperFocusNode: _wrapperFocusNode,
+              tokens: t,
               obscureText: widget.obscure && !_showText,
-              style: TextStyle(color: Colors.white, fontSize: t.fontSubtitle, fontFamily: 'monospace'),
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: t.fontSubtitle,
+                fontFamily: 'monospace',
+              ),
               decoration: InputDecoration(
                 labelText: widget.label,
-                labelStyle: const TextStyle(color: Colors.white38, fontSize: 12),
+                labelStyle: const TextStyle(
+                  color: Colors.white38,
+                  fontSize: 12,
+                ),
                 filled: true,
                 fillColor: Colors.white.withAlpha(8),
-                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(8),
                   borderSide: BorderSide(color: Colors.white.withAlpha(25)),
@@ -715,32 +884,34 @@ class _ApiKeyFieldState extends ConsumerState<_ApiKeyField> {
             ),
           ),
           const SizedBox(width: 8),
-          GestureDetector(
-            onTap: _saving ? null : _save,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                color: _saved
-                    ? const Color(0xFF10B981).withAlpha(30)
-                    : const Color(0xFF0DB2E2).withAlpha(20),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(
-                  color: _saved
-                      ? const Color(0xFF10B981).withAlpha(80)
-                      : const Color(0xFF0DB2E2).withAlpha(60),
-                ),
-              ),
-              child: _saving
-                  ? const SizedBox(
-                      width: 14, height: 14,
-                      child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF0DB2E2)),
-                    )
-                  : Icon(
-                      _saved ? Icons.check : Icons.save_outlined,
-                      color: _saved ? const Color(0xFF10B981) : const Color(0xFF0DB2E2),
-                      size: 16,
+          WarpDpadButton(
+            tokens: t,
+            enabled: !_saving,
+            onSelect: _save,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            backgroundColor: _saved
+                ? const Color(0xFF10B981).withAlpha(30)
+                : const Color(0xFF0DB2E2).withAlpha(20),
+            borderColor: _saved
+                ? const Color(0xFF10B981).withAlpha(80)
+                : const Color(0xFF0DB2E2).withAlpha(60),
+            borderRadius: 8,
+            child: _saving
+                ? const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 1.5,
+                      color: Color(0xFF0DB2E2),
                     ),
-            ),
+                  )
+                : Icon(
+                    _saved ? Icons.check : Icons.save_outlined,
+                    color: _saved
+                        ? const Color(0xFF10B981)
+                        : const Color(0xFF0DB2E2),
+                    size: 16,
+                  ),
           ),
         ],
       ),
@@ -760,17 +931,25 @@ class _ProvidersPanel extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final async = ref.watch(providersStatusProvider);
     return async.when(
-      loading: () => const Center(child: CircularProgressIndicator(color: Color(0xFF0DB2E2), strokeWidth: 2)),
-      error: (e, _) => Text('$e', style: TextStyle(color: Colors.redAccent, fontSize: t.fontBody)),
+      loading: () => const Center(
+        child: CircularProgressIndicator(
+          color: Color(0xFF0DB2E2),
+          strokeWidth: 2,
+        ),
+      ),
+      error: (e, _) => Text(
+        '$e',
+        style: TextStyle(color: Colors.redAccent, fontSize: t.fontBody),
+      ),
       data: (resp) => Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _SectionTitle('Provider Status', t),
           const SizedBox(height: 16),
-          _ProviderRow(name: 'TMDB',        status: resp.tmdb,        t: t),
-          _ProviderRow(name: 'Trakt.tv',    status: resp.trakt,       t: t),
-          _ProviderRow(name: 'Real-Debrid', status: resp.realdebrid,  t: t),
-          _ProviderRow(name: 'Torrent API', status: resp.torrentApi,  t: t),
+          _ProviderRow(name: 'TMDB', status: resp.tmdb, t: t),
+          _ProviderRow(name: 'Trakt.tv', status: resp.trakt, t: t),
+          _ProviderRow(name: 'Real-Debrid', status: resp.realdebrid, t: t),
+          _ProviderRow(name: 'Torrent API', status: resp.torrentApi, t: t),
         ],
       ),
     );
@@ -782,11 +961,18 @@ class _ProviderRow extends StatelessWidget {
   final ProviderStatus status;
   final WarpTokens t;
 
-  const _ProviderRow({required this.name, required this.status, required this.t});
+  const _ProviderRow({
+    required this.name,
+    required this.status,
+    required this.t,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final ok = status.authenticated == true || status.status == 'configured' || status.status == 'available';
+    final ok =
+        status.authenticated == true ||
+        status.status == 'configured' ||
+        status.status == 'available';
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -807,7 +993,10 @@ class _ProviderRow extends StatelessWidget {
           ),
           const SizedBox(width: 12),
           Expanded(
-            child: Text(name, style: TextStyle(color: Colors.white, fontSize: t.fontBody)),
+            child: Text(
+              name,
+              style: TextStyle(color: Colors.white, fontSize: t.fontBody),
+            ),
           ),
           Text(
             status.status,
@@ -852,7 +1041,10 @@ class _TraktPanelState extends ConsumerState<_TraktPanel> {
     });
     try {
       final client = ref.read(apiClientProvider);
-      final raw = await client.post<Map<String, dynamic>>('/api/v1/trakt/auth/start', body: {});
+      final raw = await client.post<Map<String, dynamic>>(
+        '/api/v1/trakt/auth/start',
+        body: {},
+      );
       final resp = TraktAuthStartResponse.fromJson(raw);
       setState(() {
         _deviceFlow = resp;
@@ -873,7 +1065,9 @@ class _TraktPanelState extends ConsumerState<_TraktPanel> {
   Future<void> _pollStatus() async {
     try {
       final client = ref.read(apiClientProvider);
-      final raw = await client.get<Map<String, dynamic>>('/api/v1/trakt/auth/status');
+      final raw = await client.get<Map<String, dynamic>>(
+        '/api/v1/trakt/auth/status',
+      );
       final status = AuthStatus.fromJson(raw);
       if (status.authenticated) {
         _pollTimer?.cancel();
@@ -899,12 +1093,20 @@ class _TraktPanelState extends ConsumerState<_TraktPanel> {
   @override
   Widget build(BuildContext context) {
     final t = widget.t;
-    final authAsync    = ref.watch(traktAuthStatusProvider);
+    final authAsync = ref.watch(traktAuthStatusProvider);
     final accountAsync = ref.watch(traktAccountProvider);
 
     return authAsync.when(
-      loading: () => const Center(child: CircularProgressIndicator(color: Color(0xFF0DB2E2), strokeWidth: 2)),
-      error: (e, _) => Text('$e', style: TextStyle(color: Colors.redAccent, fontSize: t.fontBody)),
+      loading: () => const Center(
+        child: CircularProgressIndicator(
+          color: Color(0xFF0DB2E2),
+          strokeWidth: 2,
+        ),
+      ),
+      error: (e, _) => Text(
+        '$e',
+        style: TextStyle(color: Colors.redAccent, fontSize: t.fontBody),
+      ),
       data: (status) {
         final isAuthed = _authed || status.authenticated;
 
@@ -942,7 +1144,13 @@ class _TraktPanelState extends ConsumerState<_TraktPanel> {
               if (_error != null)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 12),
-                  child: Text(_error!, style: const TextStyle(color: Colors.redAccent, fontSize: 13)),
+                  child: Text(
+                    _error!,
+                    style: const TextStyle(
+                      color: Colors.redAccent,
+                      fontSize: 13,
+                    ),
+                  ),
                 ),
               _ActionButton(
                 label: _starting ? 'Connecting…' : 'Connect Trakt',
@@ -991,14 +1199,20 @@ class _DebridPanelState extends ConsumerState<_DebridPanel> {
     });
     try {
       final client = ref.read(apiClientProvider);
-      final raw = await client.post<Map<String, dynamic>>('/api/v1/debrid/auth/start', body: {});
+      final raw = await client.post<Map<String, dynamic>>(
+        '/api/v1/debrid/auth/start',
+        body: {},
+      );
       setState(() {
         _flowData = raw;
         _starting = false;
       });
       // Poll completion
       final interval = (raw['interval'] as num?)?.toInt() ?? 5;
-      _pollTimer = Timer.periodic(Duration(seconds: interval), (_) => _pollStatus());
+      _pollTimer = Timer.periodic(
+        Duration(seconds: interval),
+        (_) => _pollStatus(),
+      );
     } catch (e) {
       setState(() {
         _error = e.toString();
@@ -1010,7 +1224,9 @@ class _DebridPanelState extends ConsumerState<_DebridPanel> {
   Future<void> _pollStatus() async {
     try {
       final client = ref.read(apiClientProvider);
-      final raw = await client.get<Map<String, dynamic>>('/api/v1/debrid/auth/status');
+      final raw = await client.get<Map<String, dynamic>>(
+        '/api/v1/debrid/auth/status',
+      );
       final status = AuthStatus.fromJson(raw);
       if (status.authenticated) {
         _pollTimer?.cancel();
@@ -1044,8 +1260,16 @@ class _DebridPanelState extends ConsumerState<_DebridPanel> {
     final accountAsync = ref.watch(debridAccountProvider);
 
     return authAsync.when(
-      loading: () => const Center(child: CircularProgressIndicator(color: Color(0xFF0DB2E2), strokeWidth: 2)),
-      error: (e, _) => Text('$e', style: TextStyle(color: Colors.redAccent, fontSize: t.fontBody)),
+      loading: () => const Center(
+        child: CircularProgressIndicator(
+          color: Color(0xFF0DB2E2),
+          strokeWidth: 2,
+        ),
+      ),
+      error: (e, _) => Text(
+        '$e',
+        style: TextStyle(color: Colors.redAccent, fontSize: t.fontBody),
+      ),
       data: (status) {
         final isAuthed = _authed || status.authenticated;
         return Column(
@@ -1073,7 +1297,13 @@ class _DebridPanelState extends ConsumerState<_DebridPanel> {
               if (_error != null)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 12),
-                  child: Text(_error!, style: const TextStyle(color: Colors.redAccent, fontSize: 13)),
+                  child: Text(
+                    _error!,
+                    style: const TextStyle(
+                      color: Colors.redAccent,
+                      fontSize: 13,
+                    ),
+                  ),
                 ),
               _ActionButton(
                 label: _starting ? 'Connecting…' : 'Connect Real-Debrid',
@@ -1125,7 +1355,7 @@ class _CatalogPanel extends ConsumerStatefulWidget {
 }
 
 class _CatalogPanelState extends ConsumerState<_CatalogPanel> {
-  String _mediaTab = 'movies';       // 'movies' | 'shows'
+  String _mediaTab = 'movies'; // 'movies' | 'shows'
   bool _initialized = false;
   bool _saving = false;
   bool _savedOk = false;
@@ -1133,7 +1363,7 @@ class _CatalogPanelState extends ConsumerState<_CatalogPanel> {
 
   // Local draft — edited locally, sent to backend only on Save
   List<WidgetConfig> _movies = List.of(kDefaultMovieWidgets);
-  List<WidgetConfig> _shows  = List.of(kDefaultShowWidgets);
+  List<WidgetConfig> _shows = List.of(kDefaultShowWidgets);
 
   @override
   void initState() {
@@ -1144,21 +1374,35 @@ class _CatalogPanelState extends ConsumerState<_CatalogPanel> {
   void _syncFromServer(WidgetsConfigResponse resp) {
     if (_initialized) return;
     _initialized = true;
-    _movies = List.of(resp.movies.length == 6 ? resp.movies : kDefaultMovieWidgets);
-    _shows  = List.of(resp.shows.length  == 6 ? resp.shows  : kDefaultShowWidgets);
+    _movies = List.of(
+      resp.movies.length == 6 ? resp.movies : kDefaultMovieWidgets,
+    );
+    _shows = List.of(resp.shows.length == 6 ? resp.shows : kDefaultShowWidgets);
   }
 
   Future<void> _save() async {
-    setState(() { _saving = true; _savedOk = false; _saveError = null; });
+    setState(() {
+      _saving = true;
+      _savedOk = false;
+      _saveError = null;
+    });
     try {
       await saveWidgets(ref.read(apiClientProvider), _movies, _shows);
       if (mounted) {
-        setState(() { _saving = false; _savedOk = true; });
+        setState(() {
+          _saving = false;
+          _savedOk = true;
+        });
         await Future.delayed(const Duration(milliseconds: 2500));
         if (mounted) setState(() => _savedOk = false);
       }
     } catch (e) {
-      if (mounted) setState(() { _saving = false; _saveError = e.toString(); });
+      if (mounted) {
+        setState(() {
+          _saving = false;
+          _saveError = e.toString();
+        });
+      }
     }
   }
 
@@ -1167,7 +1411,9 @@ class _CatalogPanelState extends ConsumerState<_CatalogPanel> {
     ref.invalidate(widgetsConfigProvider);
     // Invalidate all catalog data so the ribbon content refreshes too
     ref.invalidate(catalogDataProvider);
-    setState(() { _initialized = false; });
+    setState(() {
+      _initialized = false;
+    });
   }
 
   void _openConfigure(int idx) {
@@ -1179,6 +1425,7 @@ class _CatalogPanelState extends ConsumerState<_CatalogPanel> {
         widgetIndex: idx,
         mediaType: _mediaTab,
         current: current,
+        t: widget.t,
       ),
     ).then((selected) {
       if (selected == null) return;
@@ -1220,7 +1467,11 @@ class _CatalogPanelState extends ConsumerState<_CatalogPanel> {
                 padding: const EdgeInsets.fromLTRB(20, 18, 20, 14),
                 child: Row(
                   children: [
-                    Icon(Icons.grid_view_outlined, color: const Color(0xFF0DB2E2), size: 16),
+                    Icon(
+                      Icons.grid_view_outlined,
+                      color: const Color(0xFF0DB2E2),
+                      size: 16,
+                    ),
                     const SizedBox(width: 10),
                     Text(
                       'CATALOG CONFIGURATION',
@@ -1253,7 +1504,12 @@ class _CatalogPanelState extends ConsumerState<_CatalogPanel> {
               if (configAsync.isLoading && !_initialized)
                 const Padding(
                   padding: EdgeInsets.all(32),
-                  child: Center(child: CircularProgressIndicator(color: Color(0xFF0DB2E2), strokeWidth: 2)),
+                  child: Center(
+                    child: CircularProgressIndicator(
+                      color: Color(0xFF0DB2E2),
+                      strokeWidth: 2,
+                    ),
+                  ),
                 )
               else
                 // 6 widget rows
@@ -1279,7 +1535,9 @@ class _CatalogPanelState extends ConsumerState<_CatalogPanel> {
                 child: Row(
                   children: [
                     _ActionButton(
-                      label: _saving ? 'Saving…' : (_savedOk ? 'Saved!' : 'Save'),
+                      label: _saving
+                          ? 'Saving…'
+                          : (_savedOk ? 'Saved!' : 'Save'),
                       icon: _savedOk ? Icons.check : Icons.save_outlined,
                       onTap: _saving ? null : _save,
                       t: t,
@@ -1301,7 +1559,13 @@ class _CatalogPanelState extends ConsumerState<_CatalogPanel> {
               if (_saveError != null)
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                  child: Text(_saveError!, style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
+                  child: Text(
+                    _saveError!,
+                    style: const TextStyle(
+                      color: Colors.redAccent,
+                      fontSize: 12,
+                    ),
+                  ),
                 ),
             ],
           ),
@@ -1317,7 +1581,11 @@ class _MediaToggle extends StatelessWidget {
   final String selected;
   final ValueChanged<String> onChanged;
   final WarpTokens t;
-  const _MediaToggle({required this.selected, required this.onChanged, required this.t});
+  const _MediaToggle({
+    required this.selected,
+    required this.onChanged,
+    required this.t,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1331,22 +1599,24 @@ class _MediaToggle extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: ['movies', 'shows'].map((tab) {
           final isActive = selected == tab;
-          return GestureDetector(
-            onTap: () => onChanged(tab),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 150),
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-              decoration: BoxDecoration(
-                color: isActive ? const Color(0xFF0DB2E2) : Colors.transparent,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Text(
-                tab[0].toUpperCase() + tab.substring(1),
-                style: TextStyle(
-                  color: isActive ? Colors.white : Colors.white.withAlpha(100),
-                  fontSize: t.fontBody,
-                  fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
-                ),
+          return WarpDpadButton(
+            tokens: t,
+            onSelect: () => onChanged(tab),
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+            backgroundColor: isActive
+                ? const Color(0xFF0DB2E2)
+                : Colors.transparent,
+            focusBackgroundColor: isActive
+                ? const Color(0xFF0DB2E2)
+                : Colors.white.withAlpha(20),
+            borderColor: Colors.transparent,
+            borderRadius: 8,
+            child: Text(
+              tab[0].toUpperCase() + tab.substring(1),
+              style: TextStyle(
+                color: isActive ? Colors.white : Colors.white.withAlpha(100),
+                fontSize: t.fontBody,
+                fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
               ),
             ),
           );
@@ -1413,37 +1683,44 @@ class _WidgetRow extends StatelessWidget {
               children: [
                 Text(
                   config.title,
-                  style: TextStyle(color: Colors.white, fontSize: t.fontBody, fontWeight: FontWeight.w600),
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: t.fontBody,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
                 const SizedBox(height: 2),
                 Text(
                   '$providerLabel · $categoryLabel',
-                  style: TextStyle(color: Colors.white.withAlpha(100), fontSize: t.fontSubtitle),
+                  style: TextStyle(
+                    color: Colors.white.withAlpha(100),
+                    fontSize: t.fontSubtitle,
+                  ),
                 ),
               ],
             ),
           ),
 
           // Configure button
-          GestureDetector(
-            onTap: onConfigure,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-              decoration: BoxDecoration(
-                color: Colors.white.withAlpha(8),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.white.withAlpha(20)),
-              ),
-              child: Row(
-                children: [
-                  Icon(Icons.tune, color: Colors.white.withAlpha(160), size: 14),
-                  const SizedBox(width: 6),
-                  Text(
-                    'Configure',
-                    style: TextStyle(color: Colors.white.withAlpha(160), fontSize: t.fontSubtitle),
+          WarpDpadButton(
+            tokens: t,
+            onSelect: onConfigure,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+            backgroundColor: Colors.white.withAlpha(8),
+            borderColor: Colors.white.withAlpha(20),
+            borderRadius: 8,
+            child: Row(
+              children: [
+                Icon(Icons.tune, color: Colors.white.withAlpha(160), size: 14),
+                const SizedBox(width: 6),
+                Text(
+                  'Configure',
+                  style: TextStyle(
+                    color: Colors.white.withAlpha(160),
+                    fontSize: t.fontSubtitle,
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         ],
@@ -1458,13 +1735,15 @@ class _WidgetRow extends StatelessWidget {
 
 class _ConfigureWidgetDialog extends StatefulWidget {
   final int widgetIndex;
-  final String mediaType;   // 'movies' | 'shows'
+  final String mediaType; // 'movies' | 'shows'
   final WidgetConfig current;
+  final WarpTokens t;
 
   const _ConfigureWidgetDialog({
     required this.widgetIndex,
     required this.mediaType,
     required this.current,
+    required this.t,
   });
 
   @override
@@ -1482,18 +1761,20 @@ class _ConfigureWidgetDialogState extends State<_ConfigureWidgetDialog> {
 
   List<CatalogDef> get _catalogs {
     if (_providerTab == 'tmdb') {
-      return widget.mediaType == 'movies' ? kTmdbMovieCatalogs : kTmdbShowCatalogs;
+      return widget.mediaType == 'movies'
+          ? kTmdbMovieCatalogs
+          : kTmdbShowCatalogs;
     } else {
-      return widget.mediaType == 'movies' ? kTraktMovieCatalogs : kTraktShowCatalogs;
+      return widget.mediaType == 'movies'
+          ? kTraktMovieCatalogs
+          : kTraktShowCatalogs;
     }
   }
 
   void _select(CatalogDef def) {
-    Navigator.of(context).pop(WidgetConfig(
-      provider: _providerTab,
-      category: def.id,
-      title: def.label,
-    ));
+    Navigator.of(context).pop(
+      WidgetConfig(provider: _providerTab, category: def.id, title: def.label),
+    );
   }
 
   @override
@@ -1509,164 +1790,208 @@ class _ConfigureWidgetDialogState extends State<_ConfigureWidgetDialog> {
         vertical: (size.height * 0.06).clamp(32.0, 60.0),
       ),
       child: ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: 760, maxHeight: size.height * 0.88),
-        child: Container(
-        decoration: BoxDecoration(
-          color: const Color(0xFF1A1A24),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: Colors.white.withAlpha(20)),
-          boxShadow: [BoxShadow(color: Colors.black.withAlpha(180), blurRadius: 40, spreadRadius: 4)],
+        constraints: BoxConstraints(
+          maxWidth: 760,
+          maxHeight: size.height * 0.88,
         ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // Dialog header
-            Container(
-              padding: const EdgeInsets.fromLTRB(22, 20, 16, 18),
-              decoration: BoxDecoration(
-                border: Border(bottom: BorderSide(color: Colors.white.withAlpha(18))),
-                gradient: const LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [Color(0xFF0DB2E2), Color(0xFF0A8FBA)],
+        child: Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFF1A1A24),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.white.withAlpha(20)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withAlpha(180),
+                blurRadius: 40,
+                spreadRadius: 4,
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // Dialog header
+              Container(
+                padding: const EdgeInsets.fromLTRB(22, 20, 16, 18),
+                decoration: BoxDecoration(
+                  border: Border(
+                    bottom: BorderSide(color: Colors.white.withAlpha(18)),
+                  ),
+                  gradient: const LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [Color(0xFF0DB2E2), Color(0xFF0A8FBA)],
+                  ),
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(16),
+                    topRight: Radius.circular(16),
+                  ),
                 ),
-                borderRadius: const BorderRadius.only(topLeft: Radius.circular(16), topRight: Radius.circular(16)),
-              ),
-              child: Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(7),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withAlpha(25),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: const Icon(Icons.tune, color: Colors.white, size: 16),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Configure Widget ${widget.widgetIndex + 1}',
-                          style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700),
-                        ),
-                        Text(
-                          '${widget.mediaType == 'movies' ? 'Movie' : 'Show'} catalog — click any source to assign it',
-                          style: TextStyle(color: Colors.white.withAlpha(180), fontSize: 12),
-                        ),
-                      ],
-                    ),
-                  ),
-                  GestureDetector(
-                    onTap: () => Navigator.of(context).pop(),
-                    child: Container(
-                      padding: const EdgeInsets.all(6),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(7),
                       decoration: BoxDecoration(
-                        color: Colors.white.withAlpha(20),
-                        borderRadius: BorderRadius.circular(6),
+                        color: Colors.white.withAlpha(25),
+                        borderRadius: BorderRadius.circular(8),
                       ),
-                      child: const Icon(Icons.close, color: Colors.white, size: 16),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-
-            // TMDb / Trakt tab toggle
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
-              child: Row(
-                children: ['tmdb', 'trakt'].map((tab) {
-                  final isActive = _providerTab == tab;
-                  final label = tab == 'tmdb' ? 'TMDb Catalogs' : 'Trakt Catalogs';
-                  return Expanded(
-                    child: GestureDetector(
-                      onTap: () => setState(() => _providerTab = tab),
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 150),
-                        padding: const EdgeInsets.symmetric(vertical: 10),
-                        decoration: BoxDecoration(
-                          color: isActive ? const Color(0xFF0DB2E2).withAlpha(30) : Colors.white.withAlpha(8),
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(
-                            color: isActive ? const Color(0xFF0DB2E2).withAlpha(100) : Colors.white.withAlpha(15),
-                          ),
-                        ),
-                        child: Text(
-                          label,
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            color: isActive ? const Color(0xFF0DB2E2) : Colors.white.withAlpha(120),
-                            fontSize: 13,
-                            fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
-                          ),
-                        ),
+                      child: const Icon(
+                        Icons.tune,
+                        color: Colors.white,
+                        size: 16,
                       ),
                     ),
-                  );
-                }).expand((w) => [w, const SizedBox(width: 8)]).toList()..removeLast(),
-              ),
-            ),
-
-            // Grouped catalog grid — scrollable
-            Flexible(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: groups.entries.map((entry) {
-                    final group = entry.key;
-                    final items = entry.value;
-                    final label = kCatalogGroupLabels[group] ?? group.name.toUpperCase();
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 20),
+                    const SizedBox(width: 12),
+                    Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // Group header
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 10),
-                            child: Text(
-                              '$label(${items.length})',
-                              style: TextStyle(
-                                color: Colors.white.withAlpha(100),
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                                letterSpacing: 1.1,
-                              ),
+                          Text(
+                            'Configure Widget ${widget.widgetIndex + 1}',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
                             ),
                           ),
-                          // 2-column grid
-                          GridView.builder(
-                            shrinkWrap: true,
-                            physics: const NeverScrollableScrollPhysics(),
-                            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                              crossAxisCount: 2,
-                              crossAxisSpacing: 8,
-                              mainAxisSpacing: 8,
-                              childAspectRatio: 5.5,
-                            ),
-                            itemCount: items.length,
-                            itemBuilder: (_, i) => _CatalogCard(
-                              def: items[i],
-                              isSelected: widget.current.provider == _providerTab &&
-                                          widget.current.category == items[i].id,
-                              onTap: () => _select(items[i]),
+                          Text(
+                            '${widget.mediaType == 'movies' ? 'Movie' : 'Show'} catalog — click any source to assign it',
+                            style: TextStyle(
+                              color: Colors.white.withAlpha(180),
+                              fontSize: 12,
                             ),
                           ),
                         ],
                       ),
-                    );
-                  }).toList(),
+                    ),
+                    WarpDpadButton(
+                      tokens: widget.t,
+                      onSelect: () => Navigator.of(context).pop(),
+                      padding: const EdgeInsets.all(6),
+                      backgroundColor: Colors.white.withAlpha(20),
+                      borderColor: Colors.transparent,
+                      borderRadius: 6,
+                      child: const Icon(
+                        Icons.close,
+                        color: Colors.white,
+                        size: 16,
+                      ),
+                    ),
+                  ],
                 ),
               ),
-            ),
-          ],
+
+              // TMDb / Trakt tab toggle
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+                child: Row(
+                  children:
+                      ['tmdb', 'trakt']
+                          .map((tab) {
+                            final isActive = _providerTab == tab;
+                            final label = tab == 'tmdb'
+                                ? 'TMDb Catalogs'
+                                : 'Trakt Catalogs';
+                            return Expanded(
+                              child: WarpDpadButton(
+                                tokens: widget.t,
+                                onSelect: () =>
+                                    setState(() => _providerTab = tab),
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 10,
+                                ),
+                                backgroundColor: isActive
+                                    ? const Color(0xFF0DB2E2).withAlpha(30)
+                                    : Colors.white.withAlpha(8),
+                                borderColor: isActive
+                                    ? const Color(0xFF0DB2E2).withAlpha(100)
+                                    : Colors.white.withAlpha(15),
+                                borderRadius: 10,
+                                child: Text(
+                                  label,
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    color: isActive
+                                        ? const Color(0xFF0DB2E2)
+                                        : Colors.white.withAlpha(120),
+                                    fontSize: 13,
+                                    fontWeight: isActive
+                                        ? FontWeight.w600
+                                        : FontWeight.w400,
+                                  ),
+                                ),
+                              ),
+                            );
+                          })
+                          .expand((w) => [w, const SizedBox(width: 8)])
+                          .toList()
+                        ..removeLast(),
+                ),
+              ),
+
+              // Grouped catalog grid — scrollable
+              Flexible(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: groups.entries.map((entry) {
+                      final group = entry.key;
+                      final items = entry.value;
+                      final label =
+                          kCatalogGroupLabels[group] ??
+                          group.name.toUpperCase();
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 20),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // Group header
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 10),
+                              child: Text(
+                                '$label(${items.length})',
+                                style: TextStyle(
+                                  color: Colors.white.withAlpha(100),
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  letterSpacing: 1.1,
+                                ),
+                              ),
+                            ),
+                            // 2-column grid
+                            GridView.builder(
+                              shrinkWrap: true,
+                              physics: const NeverScrollableScrollPhysics(),
+                              gridDelegate:
+                                  const SliverGridDelegateWithFixedCrossAxisCount(
+                                    crossAxisCount: 2,
+                                    crossAxisSpacing: 8,
+                                    mainAxisSpacing: 8,
+                                    childAspectRatio: 5.5,
+                                  ),
+                              itemCount: items.length,
+                              itemBuilder: (_, i) => _CatalogCard(
+                                def: items[i],
+                                isSelected:
+                                    widget.current.provider == _providerTab &&
+                                    widget.current.category == items[i].id,
+                                onTap: () => _select(items[i]),
+                                t: widget.t,
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
-      ),
-      ),  // ConstrainedBox
+      ), // ConstrainedBox
     );
   }
 
@@ -1685,50 +2010,50 @@ class _CatalogCard extends StatelessWidget {
   final CatalogDef def;
   final bool isSelected;
   final VoidCallback onTap;
+  final WarpTokens t;
 
-  const _CatalogCard({required this.def, required this.isSelected, required this.onTap});
+  const _CatalogCard({
+    required this.def,
+    required this.isSelected,
+    required this.onTap,
+    required this.t,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 120),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        decoration: BoxDecoration(
-          color: isSelected
-              ? const Color(0xFF0DB2E2).withAlpha(30)
-              : Colors.white.withAlpha(8),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(
-            color: isSelected
-                ? const Color(0xFF0DB2E2).withAlpha(120)
-                : Colors.white.withAlpha(15),
+    return WarpDpadButton(
+      tokens: t,
+      onSelect: onTap,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      backgroundColor: isSelected
+          ? const Color(0xFF0DB2E2).withAlpha(30)
+          : Colors.white.withAlpha(8),
+      borderColor: isSelected
+          ? const Color(0xFF0DB2E2).withAlpha(120)
+          : Colors.white.withAlpha(15),
+      borderRadius: 10,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Text(
+            def.label,
+            style: TextStyle(
+              color: isSelected ? const Color(0xFF0DB2E2) : Colors.white,
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
           ),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(
-              def.label,
-              style: TextStyle(
-                color: isSelected ? const Color(0xFF0DB2E2) : Colors.white,
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            const SizedBox(height: 2),
-            Text(
-              def.description,
-              style: TextStyle(color: Colors.white.withAlpha(100), fontSize: 11),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ],
-        ),
+          const SizedBox(height: 2),
+          Text(
+            def.description,
+            style: TextStyle(color: Colors.white.withAlpha(100), fontSize: 11),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
       ),
     );
   }
@@ -1759,14 +2084,31 @@ class _GeneralPanel extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('Warp MediaCenter', style: TextStyle(color: Colors.white, fontSize: t.fontHeading, fontWeight: FontWeight.w700)),
+              Text(
+                'Warp MediaCenter',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: t.fontHeading,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
               const SizedBox(height: 6),
-              Text('Flutter client (macOS/Linux/Windows/Android TV)', style: TextStyle(color: Colors.white54, fontSize: t.fontSubtitle)),
+              Text(
+                'Flutter client (macOS/Linux/Windows/Android TV)',
+                style: TextStyle(
+                  color: Colors.white54,
+                  fontSize: t.fontSubtitle,
+                ),
+              ),
               const SizedBox(height: 16),
               _InfoRow(label: 'Version', value: 'v1.0.0', t: t),
               _InfoRow(label: 'Backend', value: 'FastAPI + Python', t: t),
-              _InfoRow(label: 'Video',   value: 'libmpv via media_kit', t: t),
-              _InfoRow(label: 'Auth',    value: 'Device flow (Trakt + RealDebrid)', t: t),
+              _InfoRow(label: 'Video', value: 'libmpv via media_kit', t: t),
+              _InfoRow(
+                label: 'Auth',
+                value: 'Device flow (Trakt + RealDebrid)',
+                t: t,
+              ),
             ],
           ),
         ),
@@ -1788,7 +2130,11 @@ class _SectionTitle extends StatelessWidget {
   Widget build(BuildContext context) {
     return Text(
       text,
-      style: TextStyle(color: Colors.white, fontSize: t.fontSection, fontWeight: FontWeight.w700),
+      style: TextStyle(
+        color: Colors.white,
+        fontSize: t.fontSection,
+        fontWeight: FontWeight.w700,
+      ),
     );
   }
 }
@@ -1817,21 +2163,46 @@ class _ConnectedBox extends StatelessWidget {
       ),
       child: Row(
         children: [
-          const Icon(Icons.check_circle_outline, color: Color(0xFF10B981), size: 20),
+          const Icon(
+            Icons.check_circle_outline,
+            color: Color(0xFF10B981),
+            size: 20,
+          ),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Connected to $provider', style: TextStyle(color: Colors.white, fontSize: t.fontBody, fontWeight: FontWeight.w600)),
+                Text(
+                  'Connected to $provider',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: t.fontBody,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
                 if (detail != null)
-                  Text(detail!, style: TextStyle(color: Colors.white54, fontSize: t.fontSubtitle)),
+                  Text(
+                    detail!,
+                    style: TextStyle(
+                      color: Colors.white54,
+                      fontSize: t.fontSubtitle,
+                    ),
+                  ),
               ],
             ),
           ),
-          TextButton(
-            onPressed: onDisconnect,
-            child: const Text('Disconnect', style: TextStyle(color: Colors.redAccent)),
+          WarpDpadButton(
+            tokens: t,
+            onSelect: onDisconnect,
+            backgroundColor: Colors.redAccent.withAlpha(16),
+            focusBackgroundColor: Colors.redAccent.withAlpha(32),
+            borderColor: Colors.redAccent.withAlpha(50),
+            focusBorderColor: Colors.redAccent,
+            child: const Text(
+              'Disconnect',
+              style: TextStyle(color: Colors.redAccent),
+            ),
           ),
         ],
       ),
@@ -1857,16 +2228,25 @@ class _DeviceFlowBox extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Connect your Trakt account:', style: TextStyle(color: Colors.white70, fontSize: t.fontBody)),
+          Text(
+            'Connect your Trakt account:',
+            style: TextStyle(color: Colors.white70, fontSize: t.fontBody),
+          ),
           const SizedBox(height: 14),
-          Text('1. Visit:', style: TextStyle(color: Colors.white38, fontSize: t.fontSubtitle)),
+          Text(
+            '1. Visit:',
+            style: TextStyle(color: Colors.white38, fontSize: t.fontSubtitle),
+          ),
           const SizedBox(height: 4),
           SelectableText(
             flow.verificationUrl,
             style: const TextStyle(color: Color(0xFF0DB2E2), fontSize: 14),
           ),
           const SizedBox(height: 12),
-          Text('2. Enter code:', style: TextStyle(color: Colors.white38, fontSize: t.fontSubtitle)),
+          Text(
+            '2. Enter code:',
+            style: TextStyle(color: Colors.white38, fontSize: t.fontSubtitle),
+          ),
           const SizedBox(height: 4),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -1876,15 +2256,33 @@ class _DeviceFlowBox extends StatelessWidget {
             ),
             child: Text(
               flow.userCode,
-              style: const TextStyle(color: Color(0xFF0DB2E2), fontSize: 22, fontWeight: FontWeight.w700, letterSpacing: 4),
+              style: const TextStyle(
+                color: Color(0xFF0DB2E2),
+                fontSize: 22,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 4,
+              ),
             ),
           ),
           const SizedBox(height: 12),
           Row(
             children: [
-              const SizedBox(width: 2, height: 2, child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF0DB2E2))),
+              const SizedBox(
+                width: 2,
+                height: 2,
+                child: CircularProgressIndicator(
+                  strokeWidth: 1.5,
+                  color: Color(0xFF0DB2E2),
+                ),
+              ),
               const SizedBox(width: 10),
-              Text('Waiting for authorisation…', style: TextStyle(color: Colors.white38, fontSize: t.fontSubtitle)),
+              Text(
+                'Waiting for authorisation…',
+                style: TextStyle(
+                  color: Colors.white38,
+                  fontSize: t.fontSubtitle,
+                ),
+              ),
             ],
           ),
         ],
@@ -1902,7 +2300,8 @@ class _DebridFlowBox extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final verUrl = data['verification_url'] as String? ?? '';
-    final code   = data['user_code'] as String? ?? data['device_code'] as String? ?? '';
+    final code =
+        data['user_code'] as String? ?? data['device_code'] as String? ?? '';
 
     return Container(
       padding: const EdgeInsets.all(20),
@@ -1914,13 +2313,25 @@ class _DebridFlowBox extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Connect your Real-Debrid account:', style: TextStyle(color: Colors.white70, fontSize: t.fontBody)),
+          Text(
+            'Connect your Real-Debrid account:',
+            style: TextStyle(color: Colors.white70, fontSize: t.fontBody),
+          ),
           const SizedBox(height: 14),
-          Text('1. Visit:', style: TextStyle(color: Colors.white38, fontSize: t.fontSubtitle)),
+          Text(
+            '1. Visit:',
+            style: TextStyle(color: Colors.white38, fontSize: t.fontSubtitle),
+          ),
           const SizedBox(height: 4),
-          SelectableText(verUrl, style: const TextStyle(color: Color(0xFF0DB2E2), fontSize: 14)),
+          SelectableText(
+            verUrl,
+            style: const TextStyle(color: Color(0xFF0DB2E2), fontSize: 14),
+          ),
           const SizedBox(height: 12),
-          Text('2. Enter code:', style: TextStyle(color: Colors.white38, fontSize: t.fontSubtitle)),
+          Text(
+            '2. Enter code:',
+            style: TextStyle(color: Colors.white38, fontSize: t.fontSubtitle),
+          ),
           const SizedBox(height: 4),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -1930,15 +2341,33 @@ class _DebridFlowBox extends StatelessWidget {
             ),
             child: Text(
               code,
-              style: const TextStyle(color: Color(0xFF0DB2E2), fontSize: 22, fontWeight: FontWeight.w700, letterSpacing: 4),
+              style: const TextStyle(
+                color: Color(0xFF0DB2E2),
+                fontSize: 22,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 4,
+              ),
             ),
           ),
           const SizedBox(height: 12),
           Row(
             children: [
-              const SizedBox(width: 2, height: 2, child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF0DB2E2))),
+              const SizedBox(
+                width: 2,
+                height: 2,
+                child: CircularProgressIndicator(
+                  strokeWidth: 1.5,
+                  color: Color(0xFF0DB2E2),
+                ),
+              ),
               const SizedBox(width: 10),
-              Text('Waiting for authorisation…', style: TextStyle(color: Colors.white38, fontSize: t.fontSubtitle)),
+              Text(
+                'Waiting for authorisation…',
+                style: TextStyle(
+                  color: Colors.white38,
+                  fontSize: t.fontSubtitle,
+                ),
+              ),
             ],
           ),
         ],
@@ -1970,35 +2399,39 @@ class _ActionButton extends StatelessWidget {
         : (accent ? const Color(0xFF0DB2E2) : Colors.white.withAlpha(180));
     final bg = disabled
         ? Colors.white.withAlpha(10)
-        : (accent ? const Color(0xFF0DB2E2).withAlpha(30) : Colors.white.withAlpha(10));
+        : (accent
+              ? const Color(0xFF0DB2E2).withAlpha(30)
+              : Colors.white.withAlpha(10));
     final border = disabled
         ? Colors.white.withAlpha(20)
-        : (accent ? const Color(0xFF0DB2E2).withAlpha(80) : Colors.white.withAlpha(30));
+        : (accent
+              ? const Color(0xFF0DB2E2).withAlpha(80)
+              : Colors.white.withAlpha(30));
 
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-        decoration: BoxDecoration(
-          color: bg,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: border),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, color: fg, size: 18),
-            const SizedBox(width: 10),
-            Text(
-              label,
-              style: TextStyle(
-                color: fg,
-                fontSize: t.fontBody,
-                fontWeight: FontWeight.w600,
-              ),
+    return WarpDpadButton(
+      tokens: t,
+      enabled: !disabled,
+      onSelect: onTap ?? () {},
+      backgroundColor: bg,
+      borderColor: border,
+      focusBackgroundColor: accent
+          ? const Color(0xFF0DB2E2).withAlpha(45)
+          : Colors.white.withAlpha(18),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: fg, size: 18),
+          const SizedBox(width: 10),
+          Text(
+            label,
+            style: TextStyle(
+              color: fg,
+              fontSize: t.fontBody,
+              fontWeight: FontWeight.w600,
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -2017,8 +2450,17 @@ class _InfoRow extends StatelessWidget {
       padding: const EdgeInsets.only(top: 6),
       child: Row(
         children: [
-          SizedBox(width: 80, child: Text(label, style: TextStyle(color: Colors.white38, fontSize: t.fontSubtitle))),
-          Text(value, style: TextStyle(color: Colors.white70, fontSize: t.fontSubtitle)),
+          SizedBox(
+            width: 80,
+            child: Text(
+              label,
+              style: TextStyle(color: Colors.white38, fontSize: t.fontSubtitle),
+            ),
+          ),
+          Text(
+            value,
+            style: TextStyle(color: Colors.white70, fontSize: t.fontSubtitle),
+          ),
         ],
       ),
     );

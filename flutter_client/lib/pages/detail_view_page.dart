@@ -1896,7 +1896,7 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
   @override
   void dispose() {
     _seasonScroll.dispose();
-    for (final fn in _pillFocusNodes) { fn.dispose(); }
+    for (var i = 1; i < _pillFocusNodes.length; i++) { _pillFocusNodes[i].dispose(); }
     for (final fn in _episodeFocusNodes) { fn.dispose(); }
     super.dispose();
   }

@@ -1,3 +1,4 @@
+import 'package:dpad/dpad.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -10,6 +11,7 @@ import '../theme/warp_tokens.dart';
 import '../widgets/cards/poster_card.dart';
 import '../widgets/layout/backdrop_layer.dart';
 import '../widgets/media/scan_dialog.dart';
+import '../widgets/shared/dpad_controls.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared enums / helpers
@@ -102,6 +104,7 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
             selected: _tab,
             onSelect: (v) => setState(() => _tab = v),
             screenSize: size,
+            t: t,
           ),
 
           // marginBottom: 10px on the subtab nav in Tauri's LibraryPage.tsx
@@ -157,11 +160,13 @@ class _SubTabNav extends StatelessWidget {
   final _LibTab selected;
   final void Function(_LibTab) onSelect;
   final Size screenSize;
+  final WarpTokens t;
 
   const _SubTabNav({
     required this.selected,
     required this.onSelect,
     required this.screenSize,
+    required this.t,
   });
 
   static const _tabs = [
@@ -182,22 +187,28 @@ class _SubTabNav extends StatelessWidget {
     return Padding(
       padding: EdgeInsets.symmetric(vertical: padV),
       child: Center(
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (int i = 0; i < _tabs.length; i++) ...[
-              if (i > 0) SizedBox(width: gap),
-              _Pill(
-                icon: _tabs[i].icon,
-                label: _tabs[i].label,
-                isActive: selected == _tabs[i].tab,
-                onTap: () => onSelect(_tabs[i].tab),
-                padV: (h * 0.007).clamp(7.0, 12.0),
-                padH: (w * 0.013).clamp(13.0, 22.0),
-                fontSize: fs,
-              ),
+        child: DpadRegion(
+          memoryKey: 'library-subtabs',
+          horizontalEdge: DpadEdgeBehavior.stop,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (int i = 0; i < _tabs.length; i++) ...[
+                if (i > 0) SizedBox(width: gap),
+                _Pill(
+                  icon: _tabs[i].icon,
+                  label: _tabs[i].label,
+                  isActive: selected == _tabs[i].tab,
+                  onTap: () => onSelect(_tabs[i].tab),
+                  padV: (h * 0.007).clamp(7.0, 12.0),
+                  padH: (w * 0.013).clamp(13.0, 22.0),
+                  fontSize: fs,
+                  t: t,
+                  entry: i == 0,
+                ),
+              ],
             ],
-          ],
+          ),
         ),
       ),
     );
@@ -210,40 +221,39 @@ class _Pill extends StatelessWidget {
   final bool isActive;
   final VoidCallback onTap;
   final double padV, padH, fontSize;
+  final WarpTokens t;
+  final bool entry;
 
   const _Pill({
     required this.icon, required this.label, required this.isActive,
     required this.onTap, required this.padV, required this.padH,
-    required this.fontSize,
+    required this.fontSize, required this.t, this.entry = false,
   });
 
   @override
-  Widget build(BuildContext context) => GestureDetector(
-    onTap: onTap,
-    child: AnimatedContainer(
-      duration: const Duration(milliseconds: 200),
-      padding: EdgeInsets.symmetric(horizontal: padH, vertical: padV),
-      decoration: BoxDecoration(
-        color: isActive ? const Color(0x26FFFFFF) : Colors.transparent,
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: isActive ? const Color(0x33FFFFFF) : Colors.transparent),
-        boxShadow: isActive ? [const BoxShadow(color: Color(0x14FFFFFF), blurRadius: 12)] : null,
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 15, color: isActive ? Colors.white : Colors.white60),
-          const SizedBox(width: 6),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: fontSize,
-              fontWeight: FontWeight.w500,
-              color: isActive ? Colors.white : Colors.white60,
-            ),
+  Widget build(BuildContext context) => WarpDpadButton(
+    tokens: t,
+    entry: entry,
+    onSelect: onTap,
+    padding: EdgeInsets.symmetric(horizontal: padH, vertical: padV),
+    backgroundColor: isActive ? const Color(0x26FFFFFF) : Colors.transparent,
+    borderColor: isActive ? const Color(0x33FFFFFF) : Colors.transparent,
+    focusBackgroundColor: const Color(0x26FFFFFF),
+    borderRadius: 999,
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 15, color: isActive ? Colors.white : Colors.white60),
+        const SizedBox(width: 6),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: fontSize,
+            fontWeight: FontWeight.w500,
+            color: isActive ? Colors.white : Colors.white60,
           ),
-        ],
-      ),
+        ),
+      ],
     ),
   );
 }
@@ -255,8 +265,9 @@ class _Pill extends StatelessWidget {
 class _TypeToggle extends StatelessWidget {
   final _MediaTypeF value;
   final void Function(_MediaTypeF) onChange;
+  final WarpTokens t;
 
-  const _TypeToggle({required this.value, required this.onChange});
+  const _TypeToggle({required this.value, required this.onChange, required this.t});
 
   @override
   Widget build(BuildContext context) {
@@ -265,33 +276,32 @@ class _TypeToggle extends StatelessWidget {
     final padV = (w * 0.0045).clamp(6.0, 10.0);
     final padH = (w * 0.011).clamp(14.0, 22.0);
 
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        for (final t in _MediaTypeF.values)
-          GestureDetector(
-            onTap: () => onChange(t),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
+    return DpadRegion(
+      memoryKey: 'library-type-toggle',
+      horizontalEdge: DpadEdgeBehavior.stop,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final option in _MediaTypeF.values)
+            WarpDpadButton(
+              tokens: t,
+              onSelect: () => onChange(option),
               padding: EdgeInsets.symmetric(horizontal: padH, vertical: padV),
-              decoration: BoxDecoration(
-                color: value == t ? const Color(0x26FFFFFF) : Colors.transparent,
-                borderRadius: BorderRadius.circular(999),
-                border: Border.all(
-                  color: value == t ? const Color(0x33FFFFFF) : Colors.transparent,
-                ),
-              ),
+              backgroundColor: value == option ? const Color(0x26FFFFFF) : Colors.transparent,
+              borderColor: value == option ? const Color(0x33FFFFFF) : Colors.transparent,
+              focusBackgroundColor: const Color(0x26FFFFFF),
+              borderRadius: 999,
               child: Text(
-                t == _MediaTypeF.movie ? 'Movies' : 'Shows',
+                option == _MediaTypeF.movie ? 'Movies' : 'Shows',
                 style: TextStyle(
                   fontSize: fs,
                   fontWeight: FontWeight.w500,
-                  color: value == t ? Colors.white : Colors.white60,
+                  color: value == option ? Colors.white : Colors.white60,
                 ),
               ),
             ),
-          ),
-      ],
+        ],
+      ),
     );
   }
 }
@@ -303,8 +313,9 @@ class _TypeToggle extends StatelessWidget {
 class _SortButton extends StatelessWidget {
   final String sortValue;
   final void Function(String) onSort;
+  final WarpTokens t;
 
-  const _SortButton({required this.sortValue, required this.onSort});
+  const _SortButton({required this.sortValue, required this.onSort, required this.t});
 
   @override
   Widget build(BuildContext context) {
@@ -317,58 +328,89 @@ class _SortButton extends StatelessWidget {
       children: [
         Text('Sort:', style: TextStyle(fontSize: fs, color: Colors.white38)),
         const SizedBox(width: 8),
-        GestureDetector(
-          onTap: () async {
-            final box = context.findRenderObject() as RenderBox;
-            final pos = box.localToGlobal(Offset.zero);
-            final result = await showMenu<String>(
+        WarpDpadButton(
+          tokens: t,
+          padding: EdgeInsets.symmetric(
+            horizontal: (w * 0.008).clamp(10.0, 14.0),
+            vertical: (w * 0.004).clamp(5.0, 8.0),
+          ),
+          backgroundColor: Colors.white.withAlpha(13),
+          borderColor: Colors.white.withAlpha(25),
+          onSelect: () async {
+            final result = await showDialog<String>(
               context: context,
-              position: RelativeRect.fromLTRB(
-                pos.dx, pos.dy + box.size.height,
-                pos.dx + 200, pos.dy + box.size.height + 220,
-              ),
-              color: const Color(0xFF1C1C1C),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(10),
-                side: BorderSide(color: Colors.white.withAlpha(25)),
-              ),
-              items: _SortOpt.all.map((o) => PopupMenuItem<String>(
-                value: o.value,
-                child: Row(children: [
-                  SizedBox(
-                    width: 18,
-                    child: o.value == sortValue
-                        ? const Icon(Icons.check_circle, size: 14, color: Color(0xFF0DB2E2))
-                        : null,
-                  ),
-                  const SizedBox(width: 8),
-                  Text(o.label, style: TextStyle(color: Colors.white, fontSize: fs)),
-                ]),
-              )).toList(),
+              builder: (_) => _SortDialog(current: sortValue, t: t),
             );
             if (result != null) onSort(result);
           },
-          child: Container(
-            padding: EdgeInsets.symmetric(
-              horizontal: (w * 0.008).clamp(10.0, 14.0),
-              vertical: (w * 0.004).clamp(5.0, 8.0),
-            ),
-            decoration: BoxDecoration(
-              color: Colors.white.withAlpha(13),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.white.withAlpha(25)),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(current.label, style: TextStyle(fontSize: fs, color: Colors.white70)),
-                const SizedBox(width: 6),
-                const Icon(Icons.keyboard_arrow_down, size: 14, color: Colors.white38),
-              ],
-            ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(current.label, style: TextStyle(fontSize: fs, color: Colors.white70)),
+              const SizedBox(width: 6),
+              const Icon(Icons.keyboard_arrow_down, size: 14, color: Colors.white38),
+            ],
           ),
         ),
       ],
+    );
+  }
+}
+
+class _SortDialog extends StatelessWidget {
+  final String current;
+  final WarpTokens t;
+  const _SortDialog({required this.current, required this.t});
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      child: DpadRegion(
+        memoryKey: 'library-sort-dialog',
+        verticalEdge: DpadEdgeBehavior.stop,
+        child: Container(
+          width: 320,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1C1C1C),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.white.withAlpha(25)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (var i = 0; i < _SortOpt.all.length; i++)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: WarpDpadButton(
+                    tokens: t,
+                    autofocus: i == 0,
+                    entry: i == 0,
+                    onSelect: () => Navigator.of(context).pop(_SortOpt.all[i].value),
+                    backgroundColor: _SortOpt.all[i].value == current
+                        ? const Color(0x220DB2E2)
+                        : Colors.white.withAlpha(8),
+                    child: Row(
+                      children: [
+                        SizedBox(
+                          width: 20,
+                          child: _SortOpt.all[i].value == current
+                              ? const Icon(Icons.check_circle, size: 15, color: Color(0xFF0DB2E2))
+                              : null,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(_SortOpt.all[i].label, style: const TextStyle(color: Colors.white)),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -382,9 +424,10 @@ class _ControlsRow extends StatelessWidget {
   final String sortValue;
   final void Function(_MediaTypeF) onMediaType;
   final void Function(String) onSort;
+  final WarpTokens t;
 
   const _ControlsRow({
-    required this.mediaType, required this.sortValue,
+    required this.mediaType, required this.sortValue, required this.t,
     required this.onMediaType, required this.onSort,
   });
 
@@ -400,8 +443,8 @@ class _ControlsRow extends StatelessWidget {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              _TypeToggle(value: mediaType, onChange: onMediaType),
-              _SortButton(sortValue: sortValue, onSort: onSort),
+              _TypeToggle(value: mediaType, onChange: onMediaType, t: t),
+              _SortButton(sortValue: sortValue, onSort: onSort, t: t),
             ],
           ),
         ),
@@ -510,6 +553,7 @@ class _CollectionTabState extends ConsumerState<_CollectionTab> {
       children: [
         _ControlsRow(
           mediaType: widget.mediaType, sortValue: widget.sortValue,
+          t: t,
           onMediaType: widget.onMediaType, onSort: widget.onSort,
         ),
         Expanded(
@@ -574,20 +618,16 @@ class _CollectionTabState extends ConsumerState<_CollectionTab> {
             padding: const EdgeInsets.fromLTRB(0, 12, 0, 28),
             child: Center(
               child: hasMore
-                  ? GestureDetector(
-                      onTap: () => _fetch(reset: false),
-                      child: Container(
-                        width: 150, height: 40,
-                        decoration: BoxDecoration(
-                          color: Colors.white.withAlpha(13),
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: Colors.white.withAlpha(25)),
-                        ),
-                        alignment: Alignment.center,
-                        child: _isLoadingMore
-                            ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Color(0xFF0DB2E2), strokeWidth: 2))
-                            : const Text('Load More', style: TextStyle(color: Colors.white70, fontSize: 13)),
-                      ),
+                  ? WarpDpadButton(
+                      tokens: t,
+                      width: 150,
+                      height: 40,
+                      padding: EdgeInsets.zero,
+                      enabled: !_isLoadingMore,
+                      onSelect: () => _fetch(reset: false),
+                      child: _isLoadingMore
+                          ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Color(0xFF0DB2E2), strokeWidth: 2))
+                          : const Text('Load More', style: TextStyle(color: Colors.white70, fontSize: 13)),
                     )
                   : Text(
                       '$_total title${_total != 1 ? 's' : ''} total',
@@ -733,7 +773,8 @@ class _LibChevronBtnState extends State<_LibChevronBtn> {
 // "See More →" button for Discover ribbon headers
 class _DiscoverSeeMoreBtn extends StatefulWidget {
   final VoidCallback onTap;
-  const _DiscoverSeeMoreBtn({required this.onTap});
+  final WarpTokens t;
+  const _DiscoverSeeMoreBtn({required this.onTap, required this.t});
   @override
   State<_DiscoverSeeMoreBtn> createState() => _DiscoverSeeMoreBtnState();
 }
@@ -743,12 +784,15 @@ class _DiscoverSeeMoreBtnState extends State<_DiscoverSeeMoreBtn> {
 
   @override
   Widget build(BuildContext context) {
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit: (_) => setState(() => _hovered = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
+    return WarpDpadButton(
+      tokens: widget.t,
+      onSelect: widget.onTap,
+      backgroundColor: Colors.transparent,
+      borderColor: Colors.transparent,
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      child: MouseRegion(
+        onEnter: (_) => setState(() => _hovered = true),
+        onExit: (_) => setState(() => _hovered = false),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -808,7 +852,7 @@ class _DiscoverTab extends ConsumerWidget {
           padding: EdgeInsets.symmetric(
             vertical: (size.height * 0.012).clamp(12.0, 20.0),
           ),
-          child: Center(child: _TypeToggle(value: mediaType, onChange: onMediaType)),
+          child: Center(child: _TypeToggle(value: mediaType, onChange: onMediaType, t: t)),
         ),
         Container(height: 1, margin: EdgeInsets.symmetric(horizontal: hPad), color: Colors.white.withAlpha(20)),
 
@@ -882,6 +926,7 @@ class _DiscoverRibbon extends ConsumerWidget {
                     ),
                   ),
                   _DiscoverSeeMoreBtn(
+                    t: t,
                     onTap: () => context.push(
                       '/catalog/$provider/$category?type=$mediaType&title=${Uri.encodeComponent(label)}',
                     ),
@@ -985,33 +1030,31 @@ class _LocalTab extends ConsumerWidget {
                 ),
               ),
               const SizedBox(height: 20),
-              GestureDetector(
-                onTap: () => showDialog<void>(
+              WarpDpadButton(
+                tokens: t,
+                width: double.infinity,
+                backgroundColor: const Color(0xFF0DB2E2),
+                focusBackgroundColor: const Color(0xFF0DB2E2),
+                borderColor: const Color(0xFF0DB2E2),
+                focusBorderColor: Colors.white,
+                onSelect: () => showDialog<void>(
                   context: context,
                   builder: (_) => const ScanDialog(),
                 ),
-                child: Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 20),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF0DB2E2),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(Icons.document_scanner_outlined, color: Colors.black, size: 15),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Start Scanning',
-                        style: TextStyle(
-                          color: Colors.black,
-                          fontSize: (size.width * 0.0085).clamp(13.0, 15.0),
-                          fontWeight: FontWeight.w600,
-                        ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.document_scanner_outlined, color: Colors.black, size: 15),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Start Scanning',
+                      style: TextStyle(
+                        color: Colors.black,
+                        fontSize: (size.width * 0.0085).clamp(13.0, 15.0),
+                        fontWeight: FontWeight.w600,
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
             ],
@@ -1030,7 +1073,7 @@ class _LocalTab extends ConsumerWidget {
                 ),
                 child: Row(
                   children: [
-                    _TypeToggle(value: mediaType, onChange: onMediaType),
+                  _TypeToggle(value: mediaType, onChange: onMediaType, t: t),
                   ],
                 ),
               ),

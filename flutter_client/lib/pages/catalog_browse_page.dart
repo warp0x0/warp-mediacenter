@@ -8,6 +8,7 @@ import '../models/media.dart';
 import '../theme/warp_tokens.dart';
 import '../widgets/cards/poster_card.dart';
 import '../widgets/layout/backdrop_layer.dart';
+import '../widgets/shared/dpad_controls.dart';
 
 const _kPageSize = 20;
 
@@ -337,46 +338,31 @@ class _BackBtn extends StatefulWidget {
 }
 
 class _BackBtnState extends State<_BackBtn> {
-  bool _hovered = false;
-
   @override
   Widget build(BuildContext context) {
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit: (_) => setState(() => _hovered = false),
-      child: GestureDetector(
-        onTap: () => context.pop(),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
-          width: 100,
-          height: 40,
-          decoration: BoxDecoration(
-            color: Colors.white.withAlpha(_hovered ? 26 : 15),
-            borderRadius: BorderRadius.circular(widget.t.radiusBtn),
-            border: Border.all(
-              color: _hovered
-                  ? const Color(0xFF0DB2E2).withAlpha(128)
-                  : Colors.white.withAlpha(26),
-              width: 1,
+    return WarpDpadButton(
+      width: 100,
+      height: 40,
+      padding: EdgeInsets.zero,
+      tokens: widget.t,
+      onSelect: () => context.pop(),
+      backgroundColor: Colors.white.withAlpha(15),
+      focusBackgroundColor: Colors.white.withAlpha(26),
+      borderColor: Colors.white.withAlpha(26),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(Icons.arrow_back, size: 16, color: Colors.white),
+          const SizedBox(width: 6),
+          Text(
+            'Back',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: (MediaQuery.sizeOf(context).width * 0.009).clamp(13.0, 16.0),
+              fontWeight: FontWeight.w500,
             ),
           ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(Icons.arrow_back, size: 16, color: Colors.white),
-              const SizedBox(width: 6),
-              Text(
-                'Back',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: (MediaQuery.sizeOf(context).width * 0.009).clamp(13.0, 16.0),
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ],
-          ),
-        ),
+        ],
       ),
     );
   }
@@ -406,33 +392,18 @@ class _SecondaryBtn extends StatefulWidget {
 }
 
 class _SecondaryBtnState extends State<_SecondaryBtn> {
-  bool _hovered = false;
-
   @override
   Widget build(BuildContext context) {
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit: (_) => setState(() => _hovered = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
-          width: widget.width,
-          height: widget.height,
-          decoration: BoxDecoration(
-            color: Colors.white.withAlpha(_hovered ? 26 : 15),
-            borderRadius: BorderRadius.circular(widget.t.radiusBtn),
-            border: Border.all(
-              color: _hovered
-                  ? const Color(0xFF0DB2E2).withAlpha(128)
-                  : Colors.white.withAlpha(26),
-              width: 1,
-            ),
-          ),
-          child: Center(child: widget.child),
-        ),
-      ),
+    return WarpDpadButton(
+      width: widget.width,
+      height: widget.height,
+      padding: EdgeInsets.zero,
+      tokens: widget.t,
+      onSelect: widget.onTap,
+      backgroundColor: Colors.white.withAlpha(15),
+      focusBackgroundColor: Colors.white.withAlpha(26),
+      borderColor: Colors.white.withAlpha(26),
+      child: widget.child,
     );
   }
 }

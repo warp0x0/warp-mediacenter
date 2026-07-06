@@ -18,6 +18,7 @@ class WidgetRibbonCard extends ConsumerStatefulWidget {
   final FocusNode? focusNode;
   final WarpTokens tokens;
   final DpadDirectionCallback? onDirection;
+  final bool entry;
 
   const WidgetRibbonCard({
     super.key,
@@ -28,6 +29,7 @@ class WidgetRibbonCard extends ConsumerStatefulWidget {
     required this.tokens,
     this.focusNode,
     this.onDirection,
+    this.entry = false,
   });
 
   @override
@@ -53,7 +55,7 @@ class _WidgetRibbonCardState extends ConsumerState<WidgetRibbonCard> {
     final t = widget.tokens;
     final imgW = t.ribbonPosterWidth;
     final imgH = t.ribbonPosterHeight;
-    final showRing = widget.isSelected || _focused;
+    final showRing = _focused;
 
     final tmdbId = widget.item.tmdbId;
     final liked = tmdbId != null && tmdbId.isNotEmpty
@@ -71,10 +73,27 @@ class _WidgetRibbonCardState extends ConsumerState<WidgetRibbonCard> {
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
       child: DpadFocusable(
+        effects: const [],
         focusNode: widget.focusNode,
+        entry: widget.entry,
+        // The ribbon's own horizontal position is already managed manually
+        // (WidgetSection._centerCard), and the vertical row-to-row position
+        // is fully owned by _focusRowByDpad's explicit PageView.animateToPage
+        // — dpad's built-in ensureVisible walks *every* scrollable ancestor
+        // (including that vertical PageView) and was fighting both of them:
+        // the ribbon sits closer than dpad's default 48px scrollPadding to
+        // the bottom of the page, so it nudged the PageView on every card
+        // focus (visible as the whole hero+ribbon jumping), and it could
+        // also overshoot back toward the previous row right after a
+        // deliberate row jump landed.
+        autoScroll: false,
         onFocusChange: (v) => setState(() => _focused = v),
         onDirection: widget.onDirection,
-        onSelect: widget.onTap,
+        // D-pad Select navigates to the detail page — arrow-key focus
+        // already drives the hero preview (WidgetSection's focus listener
+        // calls onTap/_selectItem on every focus change), so Select's own
+        // job is to commit, matching mouse's double-tap-to-navigate.
+        onSelect: widget.onDoubleTap,
         tapToSelect: false,
         child: GestureDetector(
           onTap: () {
@@ -92,7 +111,7 @@ class _WidgetRibbonCardState extends ConsumerState<WidgetRibbonCard> {
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(t.cardRadius),
               border: showRing
-                  ? Border.all(color: const Color(0xFF0DB2E2), width: t.focusRingWidth)
+                  ? Border.all(color: const Color(0xFF0DB2E2), width: t.cardFocusRingWidth)
                   : null,
               boxShadow: showRing
                   ? [const BoxShadow(color: Color(0x470DB2E2), blurRadius: 20, spreadRadius: 1)]
@@ -102,7 +121,7 @@ class _WidgetRibbonCardState extends ConsumerState<WidgetRibbonCard> {
             ),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(
-                (t.cardRadius - (showRing ? t.focusRingWidth : 0)).clamp(0.0, t.cardRadius),
+                (t.cardRadius - (showRing ? t.cardFocusRingWidth : 0)).clamp(0.0, t.cardRadius),
               ),
               child: Stack(
                 fit: StackFit.expand,
@@ -116,6 +135,21 @@ class _WidgetRibbonCardState extends ConsumerState<WidgetRibbonCard> {
                     )
                   else
                     const _RibbonNoPoster(),
+
+                  // Subtle inner vignette — a dark rim between the poster
+                  // art and the outer cyan focus ring, so the ring stays
+                  // legible even against near-white/near-cyan poster edges.
+                  const Positioned.fill(
+                    child: IgnorePointer(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          border: Border.fromBorderSide(
+                            BorderSide(color: Color(0x59000000), width: 3.5),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
 
                   if (tmdbId != null && tmdbId.isNotEmpty)
                     Positioned(

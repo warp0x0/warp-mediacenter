@@ -8,6 +8,7 @@ import '../../api/api_client.dart';
 import '../../models/library.dart';
 import '../../providers/library_provider.dart';
 import '../../theme/warp_tokens.dart';
+import '../shared/dpad_controls.dart';
 import 'file_browser_modal.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -71,8 +72,16 @@ class _ScanDialogState extends ConsumerState<ScanDialog> {
 
     try {
       final client = ref.read(apiClientProvider);
-      await client.post<void>('/api/v1/settings/library/scan', body: {'paths': [folder]});
-      _pollTimer = Timer.periodic(const Duration(seconds: 1), (_) => _pollStatus());
+      await client.post<void>(
+        '/api/v1/settings/library/scan',
+        body: {
+          'paths': [folder],
+        },
+      );
+      _pollTimer = Timer.periodic(
+        const Duration(seconds: 1),
+        (_) => _pollStatus(),
+      );
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -86,7 +95,9 @@ class _ScanDialogState extends ConsumerState<ScanDialog> {
   Future<void> _pollStatus() async {
     try {
       final client = ref.read(apiClientProvider);
-      final raw = await client.get<Map<String, dynamic>>('/api/v1/settings/library/scan/status');
+      final raw = await client.get<Map<String, dynamic>>(
+        '/api/v1/settings/library/scan/status',
+      );
       final status = ScanStatusResponse.fromJson(raw);
 
       if (!mounted) return;
@@ -103,8 +114,7 @@ class _ScanDialogState extends ConsumerState<ScanDialog> {
 
       // Auto-scroll log to bottom
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (_logScroll.hasClients &&
-            _logScroll.position.maxScrollExtent > 0) {
+        if (_logScroll.hasClients && _logScroll.position.maxScrollExtent > 0) {
           _logScroll.jumpTo(_logScroll.position.maxScrollExtent);
         }
       });
@@ -145,179 +155,204 @@ class _ScanDialogState extends ConsumerState<ScanDialog> {
       backgroundColor: Colors.transparent,
       child: CallbackShortcuts(
         bindings: {
-          const SingleActivator(LogicalKeyboardKey.escape): () => Navigator.of(context).pop(),
+          const SingleActivator(LogicalKeyboardKey.escape): () =>
+              Navigator.of(context).pop(),
         },
         child: DpadRegion(
           memoryKey: 'modal-scan',
           horizontalEdge: DpadEdgeBehavior.stop,
           verticalEdge: DpadEdgeBehavior.stop,
           child: Center(
-        child: Container(
-          width: w,
-          padding: const EdgeInsets.all(24),
-          decoration: BoxDecoration(
-            color: const Color(0xFF1A1A2E),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: Colors.white.withAlpha(20)),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // ── Header ─────────────────────────────────────────────────────
-              Row(
-                children: [
-                  const Icon(Icons.manage_search, color: Color(0xFF0DB2E2), size: 22),
-                  const SizedBox(width: 10),
-                  Text(
-                    'Library Scan',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: t.fontHeading,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  const Spacer(),
-                  DpadFocusable(
-                    onSelect: () => Navigator.of(context).pop(),
-                    builder: (context, state, child) => Container(
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        boxShadow: state.focused
-                            ? [BoxShadow(color: const Color(0xFF0DB2E2).withAlpha(140), blurRadius: 18, spreadRadius: 2)]
-                            : null,
-                      ),
-                      child: GestureDetector(
-                        onTap: () => Navigator.of(context).pop(),
-                        child: const Icon(Icons.close, color: Colors.white54, size: 20),
-                      ),
-                    ),
-                    child: const SizedBox.shrink(),
-                  ),
-                ],
+            child: Container(
+              width: w,
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1A1A2E),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: Colors.white.withAlpha(20)),
               ),
-              const SizedBox(height: 20),
-
-              // ── Dual panels ─────────────────────────────────────────────────
-              IntrinsicHeight(
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Expanded(
-                      child: _PanelWidget(
-                        label: 'Movies',
-                        icon: Icons.movie_outlined,
-                        folder: _moviesFolder,
-                        isActive: _activePanel == _ScanPanel.movies && _scanning,
-                        canScan: _moviesFolder != null && !_scanning,
-                        onSelectFolder: () => _selectFolder(_ScanPanel.movies),
-                        onScan: () => _startScan(_ScanPanel.movies),
-                        autofocusFolder: true,
-                        t: t,
-                      ),
-                    ),
-                    Container(
-                      width: 1,
-                      margin: const EdgeInsets.symmetric(horizontal: 16),
-                      color: Colors.white.withAlpha(15),
-                    ),
-                    Expanded(
-                      child: _PanelWidget(
-                        label: 'Shows',
-                        icon: Icons.tv_outlined,
-                        folder: _showsFolder,
-                        isActive: _activePanel == _ScanPanel.shows && _scanning,
-                        canScan: _showsFolder != null && !_scanning,
-                        onSelectFolder: () => _selectFolder(_ScanPanel.shows),
-                        onScan: () => _startScan(_ScanPanel.shows),
-                        t: t,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-
-              // ── Progress + Logs ─────────────────────────────────────────────
-              if (_scanning || _status != null) ...[
-                const SizedBox(height: 20),
-                _ScanProgressArea(
-                  scanning: _scanning,
-                  status: _status,
-                  logs: _logs,
-                  logScroll: _logScroll,
-                  t: t,
-                ),
-              ],
-
-              // ── Error ────────────────────────────────────────────────────────
-              if (_error != null) ...[
-                const SizedBox(height: 12),
-                Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: Colors.redAccent.withAlpha(30),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.redAccent.withAlpha(80)),
-                  ),
-                  child: Text(
-                    _error!,
-                    style: TextStyle(color: Colors.redAccent, fontSize: t.fontSubtitle),
-                  ),
-                ),
-              ],
-
-              const SizedBox(height: 20),
-
-              // ── Footer ───────────────────────────────────────────────────────
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (_scanning)
-                    TextButton(
-                      onPressed: _cancelScan,
-                      child: const Text('Cancel Scan', style: TextStyle(color: Colors.redAccent)),
-                    ),
-                  if (isDone && _status?.result != null) ...[
-                    const SizedBox(width: 8),
-                    DpadFocusable(
-                      onSelect: _addToLibrary,
-                      builder: (context, state, child) => GestureDetector(
-                        onTap: _addToLibrary,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF0DB2E2).withAlpha(30),
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(
-                              color: const Color(0xFF0DB2E2).withAlpha(state.focused ? 220 : 80),
-                              width: state.focused ? 2 : 1,
-                            ),
-                          ),
-                          child: const Text(
-                            'Add to Library',
-                            style: TextStyle(color: Color(0xFF0DB2E2), fontWeight: FontWeight.w600),
-                          ),
+                  // ── Header ─────────────────────────────────────────────────────
+                  Row(
+                    children: [
+                      const Icon(
+                        Icons.manage_search,
+                        color: Color(0xFF0DB2E2),
+                        size: 22,
+                      ),
+                      const SizedBox(width: 10),
+                      Text(
+                        'Library Scan',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: t.fontHeading,
+                          fontWeight: FontWeight.w700,
                         ),
                       ),
-                      child: const SizedBox.shrink(),
+                      const Spacer(),
+                      WarpDpadButton(
+                        tokens: t,
+                        onSelect: () => Navigator.of(context).pop(),
+                        padding: const EdgeInsets.all(4),
+                        backgroundColor: Colors.transparent,
+                        borderColor: Colors.transparent,
+                        child: const Icon(
+                          Icons.close,
+                          color: Colors.white54,
+                          size: 20,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+
+                  // ── Dual panels ─────────────────────────────────────────────────
+                  IntrinsicHeight(
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Expanded(
+                          child: _PanelWidget(
+                            label: 'Movies',
+                            icon: Icons.movie_outlined,
+                            folder: _moviesFolder,
+                            isActive:
+                                _activePanel == _ScanPanel.movies && _scanning,
+                            canScan: _moviesFolder != null && !_scanning,
+                            onSelectFolder: () =>
+                                _selectFolder(_ScanPanel.movies),
+                            onScan: () => _startScan(_ScanPanel.movies),
+                            autofocusFolder: true,
+                            t: t,
+                          ),
+                        ),
+                        Container(
+                          width: 1,
+                          margin: const EdgeInsets.symmetric(horizontal: 16),
+                          color: Colors.white.withAlpha(15),
+                        ),
+                        Expanded(
+                          child: _PanelWidget(
+                            label: 'Shows',
+                            icon: Icons.tv_outlined,
+                            folder: _showsFolder,
+                            isActive:
+                                _activePanel == _ScanPanel.shows && _scanning,
+                            canScan: _showsFolder != null && !_scanning,
+                            onSelectFolder: () =>
+                                _selectFolder(_ScanPanel.shows),
+                            onScan: () => _startScan(_ScanPanel.shows),
+                            t: t,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // ── Progress + Logs ─────────────────────────────────────────────
+                  if (_scanning || _status != null) ...[
+                    const SizedBox(height: 20),
+                    _ScanProgressArea(
+                      scanning: _scanning,
+                      status: _status,
+                      logs: _logs,
+                      logScroll: _logScroll,
+                      t: t,
                     ),
                   ],
-                  const SizedBox(width: 8),
-                  TextButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    child: Text(
-                      _scanning ? 'Dismiss' : 'Close',
-                      style: const TextStyle(color: Colors.white54),
+
+                  // ── Error ────────────────────────────────────────────────────────
+                  if (_error != null) ...[
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.redAccent.withAlpha(30),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: Colors.redAccent.withAlpha(80),
+                        ),
+                      ),
+                      child: Text(
+                        _error!,
+                        style: TextStyle(
+                          color: Colors.redAccent,
+                          fontSize: t.fontSubtitle,
+                        ),
+                      ),
                     ),
+                  ],
+
+                  const SizedBox(height: 20),
+
+                  // ── Footer ───────────────────────────────────────────────────────
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      if (_scanning)
+                        WarpDpadButton(
+                          tokens: t,
+                          onSelect: _cancelScan,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 8,
+                          ),
+                          backgroundColor: Colors.redAccent.withAlpha(16),
+                          borderColor: Colors.redAccent.withAlpha(50),
+                          focusBorderColor: Colors.redAccent,
+                          child: const Text(
+                            'Cancel Scan',
+                            style: TextStyle(color: Colors.redAccent),
+                          ),
+                        ),
+                      if (isDone && _status?.result != null) ...[
+                        const SizedBox(width: 8),
+                        WarpDpadButton(
+                          tokens: t,
+                          onSelect: _addToLibrary,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 8,
+                          ),
+                          backgroundColor: const Color(
+                            0xFF0DB2E2,
+                          ).withAlpha(30),
+                          borderColor: const Color(0xFF0DB2E2).withAlpha(80),
+                          child: const Text(
+                            'Add to Library',
+                            style: TextStyle(
+                              color: Color(0xFF0DB2E2),
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                      const SizedBox(width: 8),
+                      WarpDpadButton(
+                        tokens: t,
+                        onSelect: () => Navigator.of(context).pop(),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 8,
+                        ),
+                        backgroundColor: Colors.transparent,
+                        borderColor: Colors.white.withAlpha(20),
+                        child: Text(
+                          _scanning ? 'Dismiss' : 'Close',
+                          style: const TextStyle(color: Colors.white54),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
-            ],
+            ),
           ),
         ),
       ),
-        ),
-        ),
     );
   }
 }
@@ -372,42 +407,36 @@ class _PanelWidget extends StatelessWidget {
         const SizedBox(height: 12),
 
         // Folder selector
-        DpadFocusable(
+        WarpDpadButton(
+          tokens: t,
           autofocus: autofocusFolder,
           entry: autofocusFolder,
           onSelect: onSelectFolder,
-          builder: (context, state, child) => GestureDetector(
-          onTap: onSelectFolder,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(
-              color: Colors.white.withAlpha(10),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(
-                color: state.focused ? const Color(0xFF0DB2E2) : Colors.white.withAlpha(25),
-                width: state.focused ? 2 : 1,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          backgroundColor: Colors.white.withAlpha(10),
+          borderColor: Colors.white.withAlpha(25),
+          borderRadius: 8,
+          child: Row(
+            children: [
+              const Icon(
+                Icons.folder_outlined,
+                color: Colors.white54,
+                size: 16,
               ),
-            ),
-            child: Row(
-              children: [
-                const Icon(Icons.folder_outlined, color: Colors.white54, size: 16),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    folder ?? 'Select folder…',
-                    style: TextStyle(
-                      color: folder != null ? Colors.white : Colors.white38,
-                      fontSize: t.fontSubtitle,
-                    ),
-                    overflow: TextOverflow.ellipsis,
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  folder ?? 'Select folder…',
+                  style: TextStyle(
+                    color: folder != null ? Colors.white : Colors.white38,
+                    fontSize: t.fontSubtitle,
                   ),
+                  overflow: TextOverflow.ellipsis,
                 ),
-                const Icon(Icons.chevron_right, color: Colors.white38, size: 16),
-              ],
-            ),
+              ),
+              const Icon(Icons.chevron_right, color: Colors.white38, size: 16),
+            ],
           ),
-          ),
-          child: const SizedBox.shrink(),
         ),
         const SizedBox(height: 12),
 
@@ -415,57 +444,48 @@ class _PanelWidget extends StatelessWidget {
         // default, reveals cyan fill only when focused.
         SizedBox(
           width: double.infinity,
-          child: DpadFocusable(
+          child: WarpDpadButton(
+            tokens: t,
             enabled: canScan,
-            onSelect: canScan ? onScan : () {},
-            builder: (context, state, child) {
-              final active = canScan && state.focused;
-              return GestureDetector(
-                onTap: canScan ? onScan : null,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(vertical: 10),
-                  decoration: BoxDecoration(
-                    color: active
-                        ? const Color(0xFF0DB2E2)
-                        : (canScan ? const Color(0xCC333232) : Colors.white.withAlpha(8)),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(
-                      color: canScan ? const Color(0xFF0DB2E2) : Colors.white.withAlpha(15),
+            onSelect: onScan,
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            backgroundColor: canScan
+                ? const Color(0xCC333232)
+                : Colors.white.withAlpha(8),
+            focusBackgroundColor: const Color(0xFF0DB2E2),
+            borderColor: canScan
+                ? const Color(0xFF0DB2E2)
+                : Colors.white.withAlpha(15),
+            borderRadius: 8,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                if (isActive)
+                  const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 1.5,
+                      color: Colors.white,
                     ),
+                  )
+                else
+                  Icon(
+                    Icons.play_arrow,
+                    color: canScan ? Colors.white : Colors.white30,
+                    size: 16,
                   ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      if (isActive)
-                        const SizedBox(
-                          width: 14,
-                          height: 14,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 1.5,
-                            color: Colors.white,
-                          ),
-                        )
-                      else
-                        Icon(
-                          Icons.play_arrow,
-                          color: canScan ? Colors.white : Colors.white30,
-                          size: 16,
-                        ),
-                      const SizedBox(width: 8),
-                      Text(
-                        isActive ? 'Scanning…' : 'Scan Now',
-                        style: TextStyle(
-                          color: canScan ? Colors.white : Colors.white30,
-                          fontSize: t.fontSubtitle,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
+                const SizedBox(width: 8),
+                Text(
+                  isActive ? 'Scanning…' : 'Scan Now',
+                  style: TextStyle(
+                    color: canScan ? Colors.white : Colors.white30,
+                    fontSize: t.fontSubtitle,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
-              );
-            },
-            child: const SizedBox.shrink(),
+              ],
+            ),
           ),
         ),
       ],
@@ -514,18 +534,28 @@ class _ScanProgressArea extends StatelessWidget {
           Row(
             children: [
               if (isDone)
-                const Icon(Icons.check_circle_outline, color: Color(0xFF10B981), size: 16)
+                const Icon(
+                  Icons.check_circle_outline,
+                  color: Color(0xFF10B981),
+                  size: 16,
+                )
               else
                 const SizedBox(
                   width: 14,
                   height: 14,
-                  child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF0DB2E2)),
+                  child: CircularProgressIndicator(
+                    strokeWidth: 1.5,
+                    color: Color(0xFF0DB2E2),
+                  ),
                 ),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
                   isDone ? 'Scan complete' : (status?.message ?? 'Starting…'),
-                  style: TextStyle(color: Colors.white70, fontSize: t.fontSubtitle),
+                  style: TextStyle(
+                    color: Colors.white70,
+                    fontSize: t.fontSubtitle,
+                  ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -608,7 +638,10 @@ class _StatChip extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text('$label: ', style: TextStyle(color: Colors.white38, fontSize: t.fontSubtitle)),
+        Text(
+          '$label: ',
+          style: TextStyle(color: Colors.white38, fontSize: t.fontSubtitle),
+        ),
         Text(
           '$value',
           style: TextStyle(

@@ -41,6 +41,9 @@ class WidgetSection extends ConsumerStatefulWidget {
   // Page-owned registry (MoviesPage/ShowsPage/SearchPage each pass their own
   // instance) mapping rowIndex -> that row's first poster card FocusNode.
   final RowFirstCardRegistry rowRegistry;
+  final int rowCount;
+  final Future<void> Function(int rowIndex)? onRowFocusRequested;
+  final void Function(int rowIndex)? onFirstCardRegistered;
 
   const WidgetSection({
     super.key,
@@ -49,11 +52,14 @@ class WidgetSection extends ConsumerStatefulWidget {
     required this.rowIndex,
     required this.ownRoute,
     required this.rowRegistry,
+    required this.rowCount,
     this.isLoading = false,
     this.mediaType = 'movie',
     this.provider,
     this.category,
     this.initialFocus = false,
+    this.onRowFocusRequested,
+    this.onFirstCardRegistered,
   });
 
   @override
@@ -64,7 +70,7 @@ class _WidgetSectionState extends ConsumerState<WidgetSection> {
   int _selectedIdx = 0;
   late final ScrollController _ribbonScroll;
   late final ScrollController _synopsisScroll;
-  late final List<FocusNode> _focusNodes;
+  late List<FocusNode> _focusNodes;
   Timer? _synopsisTimer;
 
   // Hero action-group focus nodes. Play Trailer is the hero group's entry
@@ -81,6 +87,9 @@ class _WidgetSectionState extends ConsumerState<WidgetSection> {
 
   FocusNode get _heroEntryFocusNode =>
       _hasTrailer ? _playTrailerFocusNode : _moreInfoFocusNode;
+
+  String get _regionPrefix =>
+      '${widget.ownRoute.replaceAll('/', '_')}-${widget.mediaType}-${widget.rowIndex}';
 
   @override
   void initState() {
@@ -105,7 +114,10 @@ class _WidgetSectionState extends ConsumerState<WidgetSection> {
 
   // ── D-pad navigation: shared onDirection callbacks ─────────────────────
   //
-  // Up from any ribbon card -> this row's own hero entry button (local).
+  // Up from any ribbon card -> this row's own hero entry button (local),
+  //   except the ribbon's last card, whose Up instead goes to See More
+  //   (when this row has one) — kept alongside the existing Right-arrow
+  //   path from More Info/Resume, not replacing it.
   // Down from any ribbon card -> next row's 1st poster card (registry).
   // Down from the hero group -> this row's own ribbon 1st card (local).
   // Up from the hero group -> row 0: this page's own tab pill; else:
@@ -113,18 +125,29 @@ class _WidgetSectionState extends ConsumerState<WidgetSection> {
   // Left/Right are never intercepted here — default dpad beam traversal
   // handles them (both within the ribbon and within the hero group).
 
-  bool _ribbonDirection(TraversalDirection d) {
+  bool get _hasSeeMore => widget.provider != null && widget.category != null;
+
+  bool _ribbonDirection(int cardIdx, TraversalDirection d) {
     if (d == TraversalDirection.up) {
-      Dpad.of(context).requestFocus(_heroEntryFocusNode);
+      if (_hasSeeMore && cardIdx == widget.items.length - 1) {
+        Dpad.of(context).requestFocus(_seeMoreFocusNode);
+      } else {
+        Dpad.of(context).requestFocus(_heroEntryFocusNode);
+      }
       return true;
     }
     if (d == TraversalDirection.down) {
-      final next = widget.rowRegistry.entryFor(widget.rowIndex + 1);
-      if (next != null) {
-        Dpad.of(context).requestFocus(next);
+      final target = widget.rowIndex + 1;
+      if (target >= widget.rowCount) return true;
+      if (widget.onRowFocusRequested != null) {
+        unawaited(widget.onRowFocusRequested!(target));
         return true;
       }
-      return false;
+      final next = widget.rowRegistry.entryFor(target);
+      if (next != null) {
+        Dpad.of(context).requestFocus(next);
+      }
+      return true;
     }
     return false;
   }
@@ -132,7 +155,12 @@ class _WidgetSectionState extends ConsumerState<WidgetSection> {
   bool _heroDirection(TraversalDirection d) {
     if (d == TraversalDirection.down) {
       if (_focusNodes.isNotEmpty) {
-        Dpad.of(context).requestFocus(_focusNodes[0]);
+        // Return to whichever card was last focused in this row's ribbon
+        // (already tracked by _selectItem via the per-card focus listener),
+        // not always the 1st card — otherwise Down after Up-from-a-scrolled
+        // -away card silently re-targeted an off-screen node.
+        final idx = _selectedIdx.clamp(0, _focusNodes.length - 1);
+        Dpad.of(context).requestFocus(_focusNodes[idx]);
         return true;
       }
       return false;
@@ -146,7 +174,17 @@ class _WidgetSectionState extends ConsumerState<WidgetSection> {
         }
         return false;
       }
-      final prev = widget.rowRegistry.entryFor(widget.rowIndex - 1);
+      final target = widget.rowIndex - 1;
+      // Route through the same page-scroll-then-focus path Down uses —
+      // the previous row's page may have scrolled off and been disposed
+      // (PageView.builder tears down far-off pages), so a bare registry
+      // lookup can silently miss; onRowFocusRequested re-scrolls the
+      // PageView there first and retries focus once it re-registers.
+      if (widget.onRowFocusRequested != null) {
+        unawaited(widget.onRowFocusRequested!(target));
+        return true;
+      }
+      final prev = widget.rowRegistry.entryFor(target);
       if (prev != null) {
         Dpad.of(context).requestFocus(prev);
         return true;
@@ -176,8 +214,12 @@ class _WidgetSectionState extends ConsumerState<WidgetSection> {
   }
 
   void _registerFirstCard() {
-    if (!mounted || _focusNodes.isEmpty) return;
+    if (!mounted || _focusNodes.isEmpty) {
+      widget.rowRegistry.unregister(widget.rowIndex);
+      return;
+    }
     widget.rowRegistry.register(widget.rowIndex, _focusNodes[0]);
+    widget.onFirstCardRegistered?.call(widget.rowIndex);
   }
 
   // Reset synopsis scroll and start the 3-second auto-scroll timer.
@@ -210,6 +252,7 @@ class _WidgetSectionState extends ConsumerState<WidgetSection> {
     super.didUpdateWidget(old);
     if (old.items.length != widget.items.length) {
       for (final fn in _focusNodes) { fn.dispose(); }
+      _selectedIdx = 0;
       _rebuildFocusNodes();
       _registerFirstCard();
     }
@@ -301,7 +344,8 @@ class _WidgetSectionState extends ConsumerState<WidgetSection> {
                   // onDirection callback (down -> own ribbon; up -> row 0's
                   // tab pill, or the previous row's 1st card).
                   DpadRegion(
-                    memoryKey: 'row-${widget.rowIndex}-hero',
+                    memoryKey: '$_regionPrefix-hero',
+                    verticalEdge: DpadEdgeBehavior.stop,
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisSize: MainAxisSize.min,
@@ -352,8 +396,9 @@ class _WidgetSectionState extends ConsumerState<WidgetSection> {
                   // wrap/escape at first/last card), shared _ribbonDirection
                   // callback on every card for the up/down row-chain.
                   DpadRegion(
-                    memoryKey: 'row-${widget.rowIndex}-ribbon',
+                    memoryKey: '$_regionPrefix-ribbon',
                     horizontalEdge: DpadEdgeBehavior.stop,
+                    verticalEdge: DpadEdgeBehavior.stop,
                     child: _PosterRibbon(
                       items: widget.items,
                       selectedIdx: _selectedIdx,
@@ -735,7 +780,8 @@ class _SeeMoreBtnState extends State<_SeeMoreBtn> {
         onDirection: widget.onDirection,
         tapToSelect: false,
         builder: (context, state, child) {
-          final active = _hovered || state.focused;
+          final focused = state.focused;
+          final active = _hovered || focused;
           return GestureDetector(
             onTap: widget.onTap == null
                 ? null
@@ -743,15 +789,32 @@ class _SeeMoreBtnState extends State<_SeeMoreBtn> {
                     widget.focusNode.requestFocus();
                     widget.onTap!();
                   },
-            child: AnimatedDefaultTextStyle(
-              duration: const Duration(milliseconds: 150),
-              style: TextStyle(
-                fontSize: widget.t.fontSubtitle,
-                fontWeight: FontWeight.w700,
-                color: active ? Colors.white : Colors.white70,
-                letterSpacing: 1.5,
+            child: Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(8),
+                boxShadow: focused
+                    ? [
+                        BoxShadow(
+                          color: WarpColors.accent.withAlpha(140),
+                          blurRadius: 28,
+                          spreadRadius: 4,
+                        ),
+                      ]
+                    : null,
               ),
-              child: const Text('See More →'),
+              child: AnimatedDefaultTextStyle(
+                duration: const Duration(milliseconds: 150),
+                style: TextStyle(
+                  fontSize: widget.t.fontSubtitle,
+                  fontWeight: FontWeight.w700,
+                  color: focused
+                      ? WarpColors.danger
+                      : (active ? Colors.white : Colors.white70),
+                  letterSpacing: 1.5,
+                ),
+                child: const Text('See More →'),
+              ),
             ),
           );
         },
@@ -775,7 +838,7 @@ class _PosterRibbon extends StatefulWidget {
   final WarpTokens tokens;
   final void Function(int idx) onSelect;
   final void Function(MediaItem item) onNavigate;
-  final DpadDirectionCallback onDirection;
+  final bool Function(int cardIdx, TraversalDirection d) onDirection;
 
   const _PosterRibbon({
     required this.items,
@@ -846,7 +909,8 @@ class _PosterRibbonState extends State<_PosterRibbon> {
                     isSelected: widget.selectedIdx == i,
                     tokens: widget.tokens,
                     focusNode: i < widget.focusNodes.length ? widget.focusNodes[i] : null,
-                    onDirection: widget.onDirection,
+                    entry: i == 0,
+                    onDirection: (d) => widget.onDirection(i, d),
                     onTap: () => widget.onSelect(i),
                     onDoubleTap: () => widget.onNavigate(widget.items[i]),
                   ),

@@ -1,10 +1,12 @@
 import 'package:dpad/dpad.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../api/api_client.dart';
 import '../models/media.dart';
+import '../navigation/last_tab_route.dart';
 import '../navigation/row_first_card_registry.dart';
 import '../navigation/tab_bar_focus_registry.dart';
 import '../theme/warp_theme.dart';
@@ -38,6 +40,16 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   // however many of Movies(TMDb)/Shows(TMDb)/Trakt are actually non-empty).
   final _rowRegistry = RowFirstCardRegistry();
   List<FocusNode> _historyRowFocusNodes = [];
+  // "X" delete-button nodes, parallel to _historyRowFocusNodes — owned here
+  // (rather than internally by each _HistoryItem) so a deletion can move
+  // focus to the next row's "X" button by index.
+  List<FocusNode> _historyXFocusNodes = [];
+  // The floating tab bar overlays the top of this scrollable body, so
+  // dpad's own generic ensureVisible (48px padding) isn't always tall
+  // enough to clear it. Explicitly scroll to 0 whenever D-pad navigation
+  // deliberately returns focus to the search bar, rather than relying on
+  // that heuristic.
+  final _pageScroll = ScrollController();
 
   List<String> _history = [];
   bool _historyLoading = true;
@@ -59,53 +71,170 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     });
     // Rebuild when text changes so Search button enabled state stays in sync
     _ctrl.addListener(() => setState(() {}));
+    // Rebuild on edit-mode transitions so the wrapper's `enabled`/onDirection
+    // gating (below) stays in sync with whether the raw TextField currently
+    // holds real focus.
+    _focus.addListener(_onEditFocusChange);
     _loadHistory();
+  }
+
+  void _onEditFocusChange() {
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
     _ctrl.dispose();
+    _focus.removeListener(_onEditFocusChange);
     _focus.dispose();
     _searchBarNode.dispose();
     _searchBtnFocusNode.dispose();
+    _pageScroll.dispose();
     for (final fn in _historyRowFocusNodes) { fn.dispose(); }
+    for (final fn in _historyXFocusNodes) { fn.dispose(); }
     super.dispose();
+  }
+
+  // Focuses the search bar and reliably scrolls the page back to the top —
+  // used by every D-pad path that returns focus to the search bar, since
+  // dpad's own generic ensureVisible padding isn't tall enough to clear the
+  // floating tab bar overlaying this scrollable body.
+  void _focusSearchBar() {
+    Dpad.of(context).requestFocus(_searchBarNode);
+    if (_pageScroll.hasClients) {
+      _pageScroll.animateTo(
+        0,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOutCubic,
+      );
+    }
+  }
+
+  // Entering edit mode via Select. TextField's default behavior when a
+  // FocusNode gains focus through a direct requestFocus() (rather than a
+  // tap at a specific position) selects all existing text — fine the
+  // first time (empty field), but a bad surprise on every re-entry after
+  // that: any further typing wipes out whatever was already there. Forcing
+  // a collapsed selection at the end (after the frame, so it applies
+  // after that default behavior has already run) keeps the cursor
+  // blinking after the last character instead, so the user can keep
+  // editing rather than being forced to retype everything.
+  void _enterEditMode() {
+    _focus.requestFocus();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _ctrl.selection = TextSelection.collapsed(offset: _ctrl.text.length);
+      }
+    });
   }
 
   void _syncHistoryFocusNodes() {
     for (final fn in _historyRowFocusNodes) { fn.dispose(); }
+    for (final fn in _historyXFocusNodes) { fn.dispose(); }
     _historyRowFocusNodes = List.generate(_history.length, (_) => FocusNode());
+    _historyXFocusNodes = List.generate(_history.length, (_) => FocusNode());
   }
 
   // ── D-pad navigation ────────────────────────────────────────────────────
   //
-  // Up from the search bar (always) -> this page's own tab pill.
+  // Up from the search bar (always) -> this page's own tab pill. This is
+  // the ONLY path that reaches the tab — Recent Search rows' Up goes back
+  // to the search bar itself (_historyRowUp), not straight to the tab.
   // Down from the search bar (or Search button) -> 1st result card if a
   // search has run, else the 1st Recent Search row, else no-op.
+  // Up/Down always fully consume the press (return true unconditionally,
+  // even with no target) so they never fall through to dpad's default
+  // geometric beam traversal, which is unreliable across this page (that's
+  // what was sending Right-from-search-bar to the 1st history row's X
+  // button instead of the Search button).
 
   bool _searchBarDirection(TraversalDirection d) {
     if (d == TraversalDirection.up) {
       final tab = ref.read(tabBarFocusRegistryProvider).forRoute('/search');
       if (tab != null) {
         Dpad.of(context).requestFocus(tab);
-        return true;
       }
-      return false;
+      return true;
     }
     if (d == TraversalDirection.down) {
       if (_hasResults) {
         final first = _rowRegistry.entryFor(0);
         if (first != null) {
           Dpad.of(context).requestFocus(first);
-          return true;
         }
-        return false;
+        return true;
       }
       if (_historyRowFocusNodes.isNotEmpty) {
         Dpad.of(context).requestFocus(_historyRowFocusNodes[0]);
+      }
+      return true;
+    }
+    return false;
+  }
+
+  // The search bar wrapper and Search button share _searchBarDirection's
+  // up/down behavior, but each needs its own explicit left/right target —
+  // default beam traversal was picking the 1st Recent Search row's "X"
+  // button instead of the Search button, so this is spelled out rather
+  // than left to geometry.
+  //
+  // The wrapper's Focus node stays in the key-bubbling chain even once the
+  // bare TextField below it (excludeChildFocus: false) takes real focus —
+  // dpad dispatches onDirection from there on *every* Right/Left press
+  // regardless of caret position, since real caret movement happens via a
+  // separate channel (the text input connection) that doesn't consume the
+  // key from dpad's point of view. onDirection always sees the pre-move
+  // caret offset (verified empirically), so checking the boundary here
+  // reliably distinguishes "still moving through the text" (return false,
+  // let it through) from "already at the edge, nowhere left to move"
+  // (return true, escape) — without this, either every press would jump
+  // away (if unconditional) or none would (if always deferred).
+  bool _searchBarWrapperDirection(TraversalDirection d) {
+    if (d == TraversalDirection.right) {
+      if (!_focus.hasFocus) {
+        // Wrapper mode (not editing): always jump straight to the button.
+        Dpad.of(context).requestFocus(_searchBtnFocusNode);
+        return true;
+      }
+      if (_ctrl.selection.end >= _ctrl.text.length) {
+        Dpad.of(context).requestFocus(_searchBtnFocusNode);
         return true;
       }
       return false;
+    }
+    if (d == TraversalDirection.left) {
+      // Nothing to the left of the search bar in either mode — strictly a
+      // no-op. Consuming it unconditionally (rather than only at the edit
+      // -mode boundary) matters in wrapper mode too: leaving it unhandled
+      // let it leak into dpad's own uncontrolled beam-traversal fallback,
+      // which was landing on whichever result card last had focus instead
+      // of doing nothing.
+      if (!_focus.hasFocus) return true;
+      return _ctrl.selection.start <= 0;
+    }
+    return _searchBarDirection(d);
+  }
+
+  bool _searchBtnDirection(TraversalDirection d) {
+    if (d == TraversalDirection.left) {
+      Dpad.of(context).requestFocus(_searchBarNode);
+      return true;
+    }
+    // Nothing to the right of the Search button — strictly a no-op.
+    // Leaving this unhandled let it leak into dpad's own uncontrolled
+    // beam-traversal fallback, which was landing on whichever result
+    // card last had focus instead of doing nothing.
+    if (d == TraversalDirection.right) return true;
+    return _searchBarDirection(d);
+  }
+
+  // Up from the 1st Recent Search row (either its text entry or its "X"
+  // button) -> the search bar specifically, never straight to the tab
+  // pill — only the search bar/Search button's own Up reaches the tab.
+  bool _historyRowUp(TraversalDirection d) {
+    if (d == TraversalDirection.up) {
+      _focusSearchBar();
+      return true;
     }
     return false;
   }
@@ -115,23 +244,21 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   bool _resultRibbonDirection(int rowIndex, TraversalDirection d) {
     if (d == TraversalDirection.up) {
       if (rowIndex == 0) {
-        Dpad.of(context).requestFocus(_searchBarNode);
+        _focusSearchBar();
         return true;
       }
       final prev = _rowRegistry.entryFor(rowIndex - 1);
       if (prev != null) {
         Dpad.of(context).requestFocus(prev);
-        return true;
       }
-      return false;
+      return true;
     }
     if (d == TraversalDirection.down) {
       final next = _rowRegistry.entryFor(rowIndex + 1);
       if (next != null) {
         Dpad.of(context).requestFocus(next);
-        return true;
       }
-      return false;
+      return true;
     }
     return false;
   }
@@ -141,11 +268,12 @@ class _SearchPageState extends ConsumerState<SearchPage> {
       final client = ref.read(apiClientProvider);
       final raw = await client.get<Map<String, dynamic>>('/api/v1/settings/search-history');
       if (mounted) {
+        final history = List<String>.from((raw['history'] as List?) ?? []);
         setState(() {
-          _history = List<String>.from((raw['history'] as List?) ?? []);
+          _history = history;
           _historyLoading = false;
+          _syncHistoryFocusNodes();
         });
-        _syncHistoryFocusNodes();
       }
     } catch (_) {
       if (mounted) setState(() => _historyLoading = false);
@@ -160,13 +288,18 @@ class _SearchPageState extends ConsumerState<SearchPage> {
         body: {'query': query},
       );
       if (mounted) {
-        setState(() => _history = List<String>.from((raw['history'] as List?) ?? []));
-        _syncHistoryFocusNodes();
+        final history = List<String>.from((raw['history'] as List?) ?? []);
+        setState(() {
+          _history = history;
+          _syncHistoryFocusNodes();
+        });
       }
     } catch (_) {}
   }
 
-  Future<void> _deleteHistory(String query) async {
+  Future<void> _deleteHistory(int index) async {
+    if (index < 0 || index >= _history.length) return;
+    final query = _history[index];
     try {
       final client = ref.read(apiClientProvider);
       await client.delete(
@@ -174,8 +307,24 @@ class _SearchPageState extends ConsumerState<SearchPage> {
         params: {'query': query},
       );
       if (!mounted) return;
-      setState(() => _history = _history.where((q) => q != query).toList());
-      _syncHistoryFocusNodes();
+      setState(() {
+        _history = _history.where((q) => q != query).toList();
+        _syncHistoryFocusNodes();
+      });
+      // Land focus on whichever row's "X" button now occupies this index
+      // (the row that was immediately after the deleted one), or the new
+      // last row if the deleted one was last, or the search bar if the
+      // list is now empty.
+      if (_historyXFocusNodes.isNotEmpty) {
+        final target = index.clamp(0, _historyXFocusNodes.length - 1);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) Dpad.of(context).requestFocus(_historyXFocusNodes[target]);
+        });
+      } else {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _focusSearchBar();
+        });
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Removed "$query" from history'),
@@ -336,6 +485,31 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     context.push('/detail/${item.type}/$id', extra: item);
   }
 
+  // Search is one of the shell's tab routes, switched via go() (which
+  // replaces the location rather than pushing), so there's no navigator
+  // back-stack to pop here. LastTabRoute remembers whichever tab was
+  // active before the user switched to Search, so Back/Backspace can
+  // return there directly.
+  void _exitToPreviousTab() => context.go(LastTabRoute.value);
+
+  // Escape/goBack/browserBack are a 2-level hierarchy on this page: while
+  // the search TextField is genuinely being edited, the first press only
+  // backs out of edit mode (to the wrapper) — it does NOT leave the page.
+  // Only once out of edit mode does the same key leave to the previous tab.
+  //
+  // Backspace is deliberately NOT part of this while editing — it needs to
+  // reach the TextField as a real character-delete. Outside edit mode
+  // (where there's no text to delete), it still means "back" like the
+  // others; see the bindings map below, which drops the Backspace entry
+  // entirely while _focus.hasFocus so it's never intercepted here.
+  void _handleBackKey() {
+    if (_focus.hasFocus) {
+      Dpad.of(context).requestFocus(_searchBarNode);
+    } else {
+      _exitToPreviousTab();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final t = WarpTokens.watch(context, ref);
@@ -347,8 +521,36 @@ class _SearchPageState extends ConsumerState<SearchPage> {
 
     return Scaffold(
       backgroundColor: const Color(0xFF181818),
-      body: LayoutBuilder(
+      // MaterialApp's WidgetsApp installs a default Escape -> DismissIntent
+      // shortcut, and EditableText's own DismissIntent handler explicitly
+      // passes through to the *next* ancestor Actions handling that intent
+      // whenever no selection toolbar is showing — independent of whichever
+      // Shortcuts widget actually captured the raw key. Overriding
+      // DismissIntent here catches that path directly, on top of the raw
+      // CallbackShortcuts binding below, so Escape can't slip past both.
+      body: Actions(
+        actions: {
+          DismissIntent: CallbackAction<DismissIntent>(
+            onInvoke: (_) {
+              _handleBackKey();
+              return null;
+            },
+          ),
+        },
+        child: CallbackShortcuts(
+        bindings: {
+          const SingleActivator(LogicalKeyboardKey.escape): _handleBackKey,
+          const SingleActivator(LogicalKeyboardKey.goBack): _handleBackKey,
+          const SingleActivator(LogicalKeyboardKey.browserBack): _handleBackKey,
+          // Only bound while NOT editing — while editing, Backspace must
+          // fall through entirely so it reaches the TextField as a real
+          // character delete instead of being caught here.
+          if (!_focus.hasFocus)
+            const SingleActivator(LogicalKeyboardKey.backspace): _exitToPreviousTab,
+        },
+        child: LayoutBuilder(
         builder: (context, constraints) => SingleChildScrollView(
+          controller: _pageScroll,
           child: ConstrainedBox(
             constraints: BoxConstraints(minWidth: constraints.maxWidth),
             child: Column(
@@ -372,8 +574,22 @@ class _SearchPageState extends ConsumerState<SearchPage> {
                       // over (caret movement / navigate-away at boundaries).
                       child: DpadFocusable(
                         focusNode: _searchBarNode,
-                        onSelect: () => _focus.requestFocus(),
-                        onDirection: _searchBarDirection,
+                        autofocus: true,
+                        // _focusSearchBar() already scrolls the page to
+                        // exactly 0 whenever this gains focus via D-pad —
+                        // dpad's own generic ensureVisible (48px padding)
+                        // under-scrolls relative to the floating tab bar's
+                        // actual height and would fight that a frame later.
+                        autoScroll: false,
+                        // dpad treats Space as a Select key by default, and
+                        // this wrapper's Select handling still runs even
+                        // once the TextField below has real focus (see
+                        // _searchBarWrapperDirection) — disabling while
+                        // editing stops it from swallowing every Space the
+                        // user types before it can reach the text field.
+                        enabled: !_focus.hasFocus,
+                        onSelect: _enterEditMode,
+                        onDirection: _searchBarWrapperDirection,
                         excludeChildFocus: false,
                         builder: (context, state, child) => AnimatedContainer(
                           duration: const Duration(milliseconds: 150),
@@ -421,12 +637,12 @@ class _SearchPageState extends ConsumerState<SearchPage> {
                     const SizedBox(width: 12),
                     _SearchBtn(
                       isLoading: _searching,
-                      enabled: !_searching && _ctrl.text.trim().isNotEmpty,
+                      hasQuery: _ctrl.text.trim().isNotEmpty,
                       onTap: () => _doSearch(_ctrl.text),
                       t: t,
                       height: (size.height * 0.05).clamp(44.0, 56.0),
                       focusNode: _searchBtnFocusNode,
-                      onDirection: _searchBarDirection,
+                      onDirection: _searchBtnDirection,
                     ),
                   ],
                 ),
@@ -538,20 +754,23 @@ class _SearchPageState extends ConsumerState<SearchPage> {
                                   ),
                                 ),
                                 SizedBox(height: (size.height * 0.01).clamp(8.0, 14.0)),
-                                for (var i = 0; i < _history.length; i++)
+                                for (var i = 0;
+                                    i < _history.length &&
+                                        i < _historyRowFocusNodes.length &&
+                                        i < _historyXFocusNodes.length;
+                                    i++)
                                   _HistoryItem(
                                     query: _history[i],
                                     t: t,
-                                    rowFocusNode: i < _historyRowFocusNodes.length
-                                        ? _historyRowFocusNodes[i]
-                                        : FocusNode(),
+                                    rowFocusNode: _historyRowFocusNodes[i],
+                                    xFocusNode: _historyXFocusNodes[i],
                                     isFirst: i == 0,
-                                    onRowUp: _searchBarDirection,
+                                    onRowUp: _historyRowUp,
                                     onTap: () {
                                       _ctrl.text = _history[i];
                                       _doSearch(_history[i]);
                                     },
-                                    onDelete: () => _deleteHistory(_history[i]),
+                                    onDelete: () => _deleteHistory(i),
                                   ),
                               ],
                             ),
@@ -570,6 +789,8 @@ class _SearchPageState extends ConsumerState<SearchPage> {
           ),
         ),
       ),
+      ),
+      ),
     );
   }
 }
@@ -581,7 +802,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
 class _SearchBtn extends StatefulWidget {
   const _SearchBtn({
     required this.isLoading,
-    required this.enabled,
+    required this.hasQuery,
     required this.onTap,
     required this.t,
     required this.height,
@@ -590,7 +811,13 @@ class _SearchBtn extends StatefulWidget {
   });
 
   final bool isLoading;
-  final bool enabled;
+  // Purely visual now (dims the button when there's no query yet) — it no
+  // longer gates focusability or taps. A disabled DpadFocusable can never
+  // be focused at all, which made Right-from-the-search-bar a silent
+  // no-op whenever the query was empty; _doSearch already no-ops on an
+  // empty query on its own, so gating reachability here added no safety,
+  // only a D-pad dead end.
+  final bool hasQuery;
   final VoidCallback onTap;
   final WarpTokens t;
   final double height;
@@ -609,14 +836,17 @@ class _SearchBtnState extends State<_SearchBtn> {
 
   @override
   Widget build(BuildContext context) {
-    final active = widget.enabled && !widget.isLoading;
+    // The only state that legitimately makes this button non-interactive
+    // is an in-flight search — an empty query is still fully focusable
+    // and tappable, just visually muted until there's something to search.
+    final focusable = !widget.isLoading;
     return MouseRegion(
-      cursor: active ? SystemMouseCursors.click : SystemMouseCursors.basic,
+      cursor: focusable ? SystemMouseCursors.click : SystemMouseCursors.basic,
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
       child: DpadFocusable(
         focusNode: widget.focusNode,
-        enabled: active,
+        enabled: focusable,
         onDirection: widget.onDirection,
         onSelect: widget.onTap,
         tapToSelect: false,
@@ -626,7 +856,7 @@ class _SearchBtnState extends State<_SearchBtn> {
           // default, filled cyan only when focused.
           final showAccent = focused || _hovered;
           return GestureDetector(
-            onTap: active
+            onTap: focusable
                 ? () {
                     widget.focusNode.requestFocus();
                     widget.onTap();
@@ -639,10 +869,12 @@ class _SearchBtnState extends State<_SearchBtn> {
                 horizontal: (MediaQuery.sizeOf(context).width * 0.015).clamp(16.0, 28.0),
               ),
               decoration: BoxDecoration(
-                color: showAccent && active ? WarpColors.accent : _darkBg,
+                color: showAccent ? WarpColors.accent : _darkBg,
                 borderRadius: BorderRadius.circular(widget.t.radiusBtn),
                 border: Border.all(
-                  color: showAccent && active ? WarpColors.accent : _cyanBorder,
+                  color: showAccent
+                      ? WarpColors.accent
+                      : _cyanBorder.withAlpha(widget.hasQuery ? 255 : 130),
                   width: 1,
                 ),
               ),
@@ -697,6 +929,7 @@ class _HistoryItem extends StatefulWidget {
     required this.onTap,
     required this.onDelete,
     required this.rowFocusNode,
+    required this.xFocusNode,
     required this.isFirst,
     required this.onRowUp,
   });
@@ -705,6 +938,9 @@ class _HistoryItem extends StatefulWidget {
   final VoidCallback onTap;
   final VoidCallback onDelete;
   final FocusNode rowFocusNode;
+  // Owned by SearchPage (not internally) so a deletion can move focus to
+  // the next row's "X" button by index.
+  final FocusNode xFocusNode;
   final bool isFirst;
   final DpadDirectionCallback onRowUp;
 
@@ -713,21 +949,14 @@ class _HistoryItem extends StatefulWidget {
 }
 
 class _HistoryItemState extends State<_HistoryItem> {
-  final _xFocus = FocusNode();
-
   bool _rowHovered = false;
   bool _xHovered   = false;
 
   // Row bg lights up when either element is active
-  bool get _rowActive => _rowHovered || widget.rowFocusNode.hasFocus || _xHovered || _xFocus.hasFocus;
+  bool get _rowActive =>
+      _rowHovered || widget.rowFocusNode.hasFocus || _xHovered || widget.xFocusNode.hasFocus;
   // X button visible when either element is active
   bool get _xVisible  => _rowActive;
-
-  @override
-  void dispose() {
-    _xFocus.dispose();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -794,8 +1023,9 @@ class _HistoryItemState extends State<_HistoryItem> {
 
         // ── X delete button — separate focus target ───────────────────────
         DpadFocusable(
-          focusNode: _xFocus,
+          focusNode: widget.xFocusNode,
           onFocusChange: (_) => setState(() {}),
+          onDirection: widget.isFirst ? widget.onRowUp : null,
           onSelect: widget.onDelete,
           tapToSelect: false,
           builder: (context, state, child) => AnimatedOpacity(
@@ -807,7 +1037,7 @@ class _HistoryItemState extends State<_HistoryItem> {
               onExit:  (_) => setState(() => _xHovered = false),
               child: GestureDetector(
                 onTap: () {
-                  _xFocus.requestFocus();
+                  widget.xFocusNode.requestFocus();
                   widget.onDelete();
                 },
                 behavior: HitTestBehavior.opaque,
@@ -886,25 +1116,106 @@ class _ResultRibbonState extends State<_ResultRibbon> {
   @override
   void initState() {
     super.initState();
-    _focusNodes = List.generate(widget.items.length, (_) => FocusNode());
+    _rebuildFocusNodes();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || _focusNodes.isEmpty) return;
       widget.rowRegistry.register(widget.rowIndex, _focusNodes[0]);
       // A fresh mount of the 1st ribbon only ever happens right after a
       // search just produced results (ribbons are conditionally rendered,
       // torn down between searches) — auto-jump focus there.
-      if (widget.rowIndex == 0) _focusNodes[0].requestFocus();
+      if (widget.rowIndex == 0) Dpad.of(context).requestFocus(_focusNodes[0]);
     });
+  }
+
+  // Every card's focus listener re-registers itself as this row's entry
+  // point, so Up/Down from an adjacent row (or the search bar, for row 0)
+  // returns to whichever card last had focus — matching WidgetSection's
+  // pattern. Always registering card 0 instead broke once it scrolled out
+  // of the horizontal viewport: ListView lazily unmounts off-screen cards,
+  // so requesting focus on an unattached node silently no-ops.
+  void _rebuildFocusNodes() {
+    _focusNodes = List.generate(widget.items.length, (_) => FocusNode());
+    for (var i = 0; i < _focusNodes.length; i++) {
+      final idx = i;
+      _focusNodes[idx].addListener(() {
+        if (_focusNodes[idx].hasFocus) {
+          widget.rowRegistry.register(widget.rowIndex, _focusNodes[idx]);
+          _centerFocusedCard(_focusNodes[idx]);
+        }
+      });
+    }
+  }
+
+  // dpad's own focus-gain auto-scroll (disabled on these cards, see
+  // PosterCard.autoScroll above) only nudges the page enough to satisfy a
+  // fixed padding — if a row was already mostly visible it did nothing at
+  // all, leaving the newly-focused card off-center. This always scrolls
+  // the page so the card sits at the vertical center of the viewport,
+  // clamped to the scroll extents when centering isn't possible (near the
+  // very top/bottom of the page).
+  void _centerFocusedCard(FocusNode node) {
+    final cardContext = node.context;
+    if (cardContext == null) return;
+    final renderBox = cardContext.findRenderObject();
+    if (renderBox is! RenderBox || !renderBox.hasSize) return;
+
+    // Horizontal: this row's own ribbon — the nearest Scrollable ancestor.
+    // Disabling PosterCard's autoScroll also removed dpad's own horizontal
+    // scroll-into-view for it, so this needs to be handled explicitly too,
+    // not just the vertical page centering below.
+    final ribbon = Scrollable.maybeOf(cardContext, axis: Axis.horizontal);
+    if (ribbon != null) _centerInScrollable(renderBox, ribbon);
+
+    // Vertical: the page itself. Its own Scrollable isn't the nearest one
+    // (the ribbon above is), so this asks specifically for the nearest
+    // *vertical* ancestor — the same "rows nested inside vertically
+    // scrolling pages" case DpadScroll.ensureVisible handles internally.
+    final page = Scrollable.maybeOf(cardContext, axis: Axis.vertical);
+    if (page != null) _centerInScrollable(renderBox, page);
+  }
+
+  // Scrolls `scrollable` so `target` sits at the center of its viewport
+  // along whichever axis it scrolls, clamped to the scroll extents when
+  // perfect centering isn't possible (near either end of the content).
+  void _centerInScrollable(RenderBox target, ScrollableState scrollable) {
+    final viewport = scrollable.context.findRenderObject();
+    if (viewport is! RenderBox || !viewport.hasSize) return;
+    final position = scrollable.position;
+    if (!position.hasPixels || !position.hasContentDimensions) return;
+
+    final bounds = MatrixUtils.transformRect(
+      target.getTransformTo(viewport),
+      Offset.zero & target.size,
+    );
+    final horizontal = axisDirectionToAxis(scrollable.axisDirection) == Axis.horizontal;
+    final targetCenter = horizontal ? (bounds.left + bounds.right) / 2 : (bounds.top + bounds.bottom) / 2;
+    final viewportExtent = horizontal ? viewport.size.width : viewport.size.height;
+    final delta = targetCenter - viewportExtent / 2;
+    final offset = (position.pixels + delta).clamp(
+      position.minScrollExtent,
+      position.maxScrollExtent,
+    );
+    if ((offset - position.pixels).abs() < 0.5) return;
+    position.animateTo(
+      offset,
+      duration: const Duration(milliseconds: 250),
+      curve: Curves.easeOutCubic,
+    );
   }
 
   @override
   void didUpdateWidget(_ResultRibbon old) {
     super.didUpdateWidget(old);
     if (old.items.length != widget.items.length || old.rowIndex != widget.rowIndex) {
+      if (old.rowIndex != widget.rowIndex) {
+        widget.rowRegistry.unregister(old.rowIndex);
+      }
       for (final fn in _focusNodes) { fn.dispose(); }
-      _focusNodes = List.generate(widget.items.length, (_) => FocusNode());
+      _rebuildFocusNodes();
       if (_focusNodes.isNotEmpty) {
         widget.rowRegistry.register(widget.rowIndex, _focusNodes[0]);
+      } else {
+        widget.rowRegistry.unregister(widget.rowIndex);
       }
     }
   }
@@ -974,32 +1285,46 @@ class _ResultRibbonState extends State<_ResultRibbon> {
               child: Stack(
                 clipBehavior: Clip.none,
                 children: [
-                  // Cards — full width of Stack
+                  // Cards — full width of Stack. DpadRegion stops horizontal
+                  // edges so Left/Right at the 1st/last card never leaks
+                  // into default beam traversal and jumps into an adjacent
+                  // ribbon row — Up/Down between rows is handled explicitly
+                  // by widget.onDirection instead.
                   Positioned.fill(
-                    child: ListView.separated(
-                      controller: _scrollCtrl,
-                      scrollDirection: Axis.horizontal,
-                      padding: EdgeInsets.only(
-                        left: hPad,
-                        right: hPad,
-                        top: 4,
-                        bottom: 8,
+                    child: DpadRegion(
+                      memoryKey: 'search-ribbon-${widget.rowIndex}',
+                      horizontalEdge: DpadEdgeBehavior.stop,
+                      verticalEdge: DpadEdgeBehavior.stop,
+                      child: ListView.separated(
+                        controller: _scrollCtrl,
+                        scrollDirection: Axis.horizontal,
+                        padding: EdgeInsets.only(
+                          left: hPad,
+                          right: hPad,
+                          top: 4,
+                          bottom: 8,
+                        ),
+                        separatorBuilder: (_, _) => SizedBox(width: t.cardGap),
+                        itemCount: widget.items.length,
+                        itemBuilder: (ctx, i) {
+                          final item = widget.items[i];
+                          return PosterCard(
+                            key: ValueKey(item.id),
+                            item: item,
+                            isSelected: false,
+                            tokens: t,
+                            focusNode: i < _focusNodes.length ? _focusNodes[i] : null,
+                            entry: i == 0,
+                            // dpad's default only nudges the page enough to
+                            // satisfy a fixed padding — _centerFocusedCard
+                            // below always centers the row instead.
+                            autoScroll: false,
+                            onDirection: (d) => widget.onDirection(widget.rowIndex, d),
+                            onTap: () => widget.onTap(item),
+                            onDoubleTap: () => widget.onTap(item),
+                          );
+                        },
                       ),
-                      separatorBuilder: (_, _) => SizedBox(width: t.cardGap),
-                      itemCount: widget.items.length,
-                      itemBuilder: (ctx, i) {
-                        final item = widget.items[i];
-                        return PosterCard(
-                          key: ValueKey(item.id),
-                          item: item,
-                          isSelected: false,
-                          tokens: t,
-                          focusNode: i < _focusNodes.length ? _focusNodes[i] : null,
-                          onDirection: (d) => widget.onDirection(widget.rowIndex, d),
-                          onTap: () => widget.onTap(item),
-                          onDoubleTap: () => widget.onTap(item),
-                        );
-                      },
                     ),
                   ),
 
@@ -1073,3 +1398,4 @@ class _ChevronBtnState extends State<_ChevronBtn> {
     );
   }
 }
+

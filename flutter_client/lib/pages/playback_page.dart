@@ -69,6 +69,18 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
   double _audioAmplification = 100;
   Timer? _hideTimer;
 
+  bool get _overlayHasFocus => [
+    _seekBarFocus,
+    _menuFocus,
+    _subtitlesFocus,
+    _audioTracksFocus,
+    _playPauseRowFocus,
+    _fullscreenFocus,
+    _stopFocus,
+    _centerPlayFocus,
+    _volumeBarFocus,
+  ].any((node) => node.hasFocus);
+
   @override
   void initState() {
     super.initState();
@@ -135,7 +147,12 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
     _hideTimer?.cancel();
     if (!_showControls) setState(() => _showControls = true);
     _hideTimer = Timer(const Duration(seconds: 4), () {
-      if (mounted && _player.state.playing) {
+      if (!mounted || !_player.state.playing) return;
+      if (_overlayHasFocus) {
+        _resetHideTimer();
+        return;
+      }
+      if (mounted) {
         setState(() => _showControls = false);
       }
     });
@@ -281,8 +298,17 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
             const SingleActivator(LogicalKeyboardKey.escape): _handleEscape,
             const SingleActivator(LogicalKeyboardKey.backspace): _exitPlayback,
             const SingleActivator(LogicalKeyboardKey.goBack): _exitPlayback,
-            const SingleActivator(LogicalKeyboardKey.browserBack): _exitPlayback,
+            const SingleActivator(LogicalKeyboardKey.browserBack):
+                _exitPlayback,
             const SingleActivator(LogicalKeyboardKey.mediaStop): _exitPlayback,
+            const SingleActivator(LogicalKeyboardKey.mediaPlayPause):
+                _togglePlay,
+            const SingleActivator(LogicalKeyboardKey.mediaPlay): _play,
+            const SingleActivator(LogicalKeyboardKey.mediaPause): _pause,
+            const SingleActivator(LogicalKeyboardKey.mediaRewind): () =>
+                _seek(-10),
+            const SingleActivator(LogicalKeyboardKey.mediaFastForward): () =>
+                _seek(10),
           },
           child: MouseRegion(
             onEnter: (_) => _resetHideTimer(),
@@ -363,8 +389,14 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
 
   bool _seekBarDirection(TraversalDirection d) {
     _resetHideTimer();
-    if (d == TraversalDirection.left) { _seek(-10); return true; }
-    if (d == TraversalDirection.right) { _seek(10); return true; }
+    if (d == TraversalDirection.left) {
+      _seek(-10);
+      return true;
+    }
+    if (d == TraversalDirection.right) {
+      _seek(10);
+      return true;
+    }
     if (d == TraversalDirection.up) {
       Dpad.of(context).requestFocus(_menuFocus);
       return true;
@@ -409,8 +441,14 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
   bool _volumeBarDirection(TraversalDirection d) {
     _resetHideTimer();
     if (_adjustingVolume) {
-      if (d == TraversalDirection.up) { _adjustVolume(0.1); return true; }
-      if (d == TraversalDirection.down) { _adjustVolume(-0.1); return true; }
+      if (d == TraversalDirection.up) {
+        _adjustVolume(0.1);
+        return true;
+      }
+      if (d == TraversalDirection.down) {
+        _adjustVolume(-0.1);
+        return true;
+      }
       return true; // swallow left/right too — the pill has focus while adjusting
     }
     if (d == TraversalDirection.left) {
@@ -424,14 +462,29 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
     return false;
   }
 
-  void _toggleVolumeAdjustMode() => setState(() => _adjustingVolume = !_adjustingVolume);
+  void _toggleVolumeAdjustMode() =>
+      setState(() => _adjustingVolume = !_adjustingVolume);
 
   void _togglePlay() {
+    _resetHideTimer();
     _player.state.playing ? _player.pause() : _player.play();
     setState(() {});
   }
 
+  void _play() {
+    _resetHideTimer();
+    _player.play();
+    setState(() {});
+  }
+
+  void _pause() {
+    _resetHideTimer();
+    _player.pause();
+    setState(() {});
+  }
+
   void _seek(int seconds) {
+    _resetHideTimer();
     final pos = _player.state.position + Duration(seconds: seconds);
     _player.seek(pos.isNegative ? Duration.zero : pos);
   }
@@ -1096,9 +1149,17 @@ class _OverlayIconButton extends StatelessWidget {
                 // Icon-category focus indicator: prominent cyan halo.
                 boxShadow: [
                   if (state.focused)
-                    BoxShadow(color: _uoscAccent.withAlpha(160), blurRadius: 22, spreadRadius: 3)
+                    BoxShadow(
+                      color: _uoscAccent.withAlpha(160),
+                      blurRadius: 22,
+                      spreadRadius: 3,
+                    )
                   else
-                    const BoxShadow(color: Colors.black54, blurRadius: 18, offset: Offset(0, 8)),
+                    const BoxShadow(
+                      color: Colors.black54,
+                      blurRadius: 18,
+                      offset: Offset(0, 8),
+                    ),
                 ],
               ),
               child: _GradientIcon(icon: icon, size: 24),
@@ -1170,7 +1231,10 @@ class _CenterPlayButton extends StatelessWidget {
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               gradient: RadialGradient(
-                colors: [_uoscAccent.withAlpha(48), Colors.black.withAlpha(120)],
+                colors: [
+                  _uoscAccent.withAlpha(48),
+                  Colors.black.withAlpha(120),
+                ],
               ),
               border: Border.all(color: Colors.white.withAlpha(38)),
               boxShadow: [
@@ -1231,105 +1295,118 @@ class _VerticalVolumeBar extends StatelessWidget {
           }
 
           return DpadFocusable(
-          focusNode: focusNode,
-          onDirection: onDirection,
-          onSelect: onToggleAdjust ?? () {},
-          tapToSelect: false,
-          builder: (context, state, child) => GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTapDown: (details) => update(details.localPosition.dy),
-            onVerticalDragUpdate: (details) => update(details.localPosition.dy),
-            child: ClipRRect(
-              borderRadius: const BorderRadius.horizontal(
-                left: Radius.circular(24),
-              ),
-              child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-                child: Container(
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [Color(0xC90A0F16), Color(0x8A082331)],
-                    ),
-                    border: Border(
-                      left: BorderSide(
-                        color: (state.focused || adjusting) ? _uoscAccentLight : _uoscAccent.withAlpha(70),
-                        width: (state.focused || adjusting) ? 2 : 1,
+            focusNode: focusNode,
+            onDirection: onDirection,
+            onSelect: onToggleAdjust ?? () {},
+            tapToSelect: false,
+            builder: (context, state, child) => GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTapDown: (details) => update(details.localPosition.dy),
+              onVerticalDragUpdate: (details) =>
+                  update(details.localPosition.dy),
+              child: ClipRRect(
+                borderRadius: const BorderRadius.horizontal(
+                  left: Radius.circular(24),
+                ),
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [Color(0xC90A0F16), Color(0x8A082331)],
                       ),
-                      top: BorderSide(color: Colors.white.withAlpha(18)),
-                      bottom: BorderSide(color: Colors.white.withAlpha(18)),
-                    ),
-                  ),
-                  child: Column(
-                    children: [
-                      const SizedBox(height: 16),
-                      _GradientIcon(
-                        icon: v == 0
-                            ? Icons.volume_off
-                            : v < 0.5
-                            ? Icons.volume_down
-                            : Icons.volume_up,
-                        size: 22,
+                      border: Border(
+                        left: BorderSide(
+                          color: (state.focused || adjusting)
+                              ? _uoscAccentLight
+                              : _uoscAccent.withAlpha(70),
+                          width: (state.focused || adjusting) ? 2 : 1,
+                        ),
+                        top: BorderSide(color: Colors.white.withAlpha(18)),
+                        bottom: BorderSide(color: Colors.white.withAlpha(18)),
                       ),
-                      const SizedBox(height: 12),
-                      Expanded(
-                        child: Center(
-                          child: Container(
-                            width: 5,
-                            margin: const EdgeInsets.only(bottom: 18),
-                            decoration: BoxDecoration(
-                              color: Colors.white.withAlpha(35),
-                              borderRadius: BorderRadius.circular(999),
-                              // "Volume level pill" activatable highlight —
-                              // Select enters adjust mode, Up/Down changes
-                              // the value directly while this glow is shown.
-                              boxShadow: adjusting
-                                  ? [BoxShadow(color: _uoscAccentLight.withAlpha(180), blurRadius: 16, spreadRadius: 2)]
-                                  : null,
-                            ),
-                            child: Align(
-                              alignment: Alignment.bottomCenter,
-                              child: FractionallySizedBox(
-                                heightFactor: v,
-                                child: Container(
-                                  decoration: BoxDecoration(
-                                    gradient: const LinearGradient(
-                                      begin: Alignment.bottomCenter,
-                                      end: Alignment.topCenter,
-                                      colors: [_uoscAccent, _uoscAccentLight],
-                                    ),
-                                    borderRadius: BorderRadius.circular(999),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: _uoscAccentLight.withAlpha(110),
-                                        blurRadius: 14,
+                    ),
+                    child: Column(
+                      children: [
+                        const SizedBox(height: 16),
+                        _GradientIcon(
+                          icon: v == 0
+                              ? Icons.volume_off
+                              : v < 0.5
+                              ? Icons.volume_down
+                              : Icons.volume_up,
+                          size: 22,
+                        ),
+                        const SizedBox(height: 12),
+                        Expanded(
+                          child: Center(
+                            child: Container(
+                              width: 5,
+                              margin: const EdgeInsets.only(bottom: 18),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withAlpha(35),
+                                borderRadius: BorderRadius.circular(999),
+                                // "Volume level pill" activatable highlight —
+                                // Select enters adjust mode, Up/Down changes
+                                // the value directly while this glow is shown.
+                                boxShadow: adjusting
+                                    ? [
+                                        BoxShadow(
+                                          color: _uoscAccentLight.withAlpha(
+                                            180,
+                                          ),
+                                          blurRadius: 16,
+                                          spreadRadius: 2,
+                                        ),
+                                      ]
+                                    : null,
+                              ),
+                              child: Align(
+                                alignment: Alignment.bottomCenter,
+                                child: FractionallySizedBox(
+                                  heightFactor: v,
+                                  child: Container(
+                                    decoration: BoxDecoration(
+                                      gradient: const LinearGradient(
+                                        begin: Alignment.bottomCenter,
+                                        end: Alignment.topCenter,
+                                        colors: [_uoscAccent, _uoscAccentLight],
                                       ),
-                                    ],
+                                      borderRadius: BorderRadius.circular(999),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: _uoscAccentLight.withAlpha(
+                                            110,
+                                          ),
+                                          blurRadius: 14,
+                                        ),
+                                      ],
+                                    ),
                                   ),
                                 ),
                               ),
                             ),
                           ),
                         ),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 15),
-                        child: Text(
-                          '${(v * 100).round()}',
-                          style: const TextStyle(
-                            color: Colors.white70,
-                            fontSize: 11,
-                            fontFeatures: [FontFeature.tabularFigures()],
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 15),
+                          child: Text(
+                            '${(v * 100).round()}',
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 11,
+                              fontFeatures: [FontFeature.tabularFigures()],
+                            ),
                           ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
             child: const SizedBox.shrink(),
           );
         },
@@ -1352,59 +1429,60 @@ class _PlayerMenuDialog extends StatelessWidget {
     color: Colors.transparent,
     child: CallbackShortcuts(
       bindings: {
-        const SingleActivator(LogicalKeyboardKey.escape): () => Navigator.of(context).pop(),
+        const SingleActivator(LogicalKeyboardKey.escape): () =>
+            Navigator.of(context).pop(),
       },
       child: DpadRegion(
         memoryKey: 'player-menu',
         horizontalEdge: DpadEdgeBehavior.stop,
         verticalEdge: DpadEdgeBehavior.stop,
         child: SafeArea(
-      child: Align(
-        alignment: Alignment.bottomLeft,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(28, 0, 0, 124),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(22),
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-              child: Container(
-                width: 300,
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: _uoscGlass,
-                  borderRadius: BorderRadius.circular(22),
-                  border: Border.all(color: _uoscAccent.withAlpha(72)),
-                  boxShadow: const [
-                    BoxShadow(
-                      color: Colors.black87,
-                      blurRadius: 28,
-                      offset: Offset(0, 16),
+          child: Align(
+            alignment: Alignment.bottomLeft,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(28, 0, 0, 124),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(22),
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+                  child: Container(
+                    width: 300,
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: _uoscGlass,
+                      borderRadius: BorderRadius.circular(22),
+                      border: Border.all(color: _uoscAccent.withAlpha(72)),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Colors.black87,
+                          blurRadius: 28,
+                          offset: Offset(0, 16),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _MenuTile(
-                      icon: Icons.subtitles,
-                      title: 'Subtitle Settings',
-                      subtitle: 'Delay or hasten subtitle timing',
-                      onTap: onSubtitleSettings,
-                      autofocus: true,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _MenuTile(
+                          icon: Icons.subtitles,
+                          title: 'Subtitle Settings',
+                          subtitle: 'Delay or hasten subtitle timing',
+                          onTap: onSubtitleSettings,
+                          autofocus: true,
+                        ),
+                        _MenuTile(
+                          icon: Icons.volume_up,
+                          title: 'Audio Settings',
+                          subtitle: 'Amplification, passthrough, Dolby',
+                          onTap: onAudioSettings,
+                        ),
+                      ],
                     ),
-                    _MenuTile(
-                      icon: Icons.volume_up,
-                      title: 'Audio Settings',
-                      subtitle: 'Amplification, passthrough, Dolby',
-                      onTap: onAudioSettings,
-                    ),
-                  ],
+                  ),
                 ),
               ),
             ),
           ),
-        ),
-      ),
         ),
       ),
     ),
@@ -1432,63 +1510,63 @@ class _MenuTile extends StatelessWidget {
     entry: autofocus,
     onSelect: onTap,
     builder: (context, state, child) => InkWell(
-    borderRadius: BorderRadius.circular(16),
-    onTap: onTap,
-    child: Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: state.focused ? _uoscAccentLight : Colors.transparent,
-          width: 2,
+      borderRadius: BorderRadius.circular(16),
+      onTap: onTap,
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: state.focused ? _uoscAccentLight : Colors.transparent,
+            width: 2,
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+          child: Row(
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: _uoscAccent.withAlpha(28),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: _uoscAccent.withAlpha(54)),
+                ),
+                child: Center(child: _GradientIcon(icon: icon, size: 22)),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        color: Colors.white.withAlpha(145),
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(
+                Icons.chevron_right,
+                color: Colors.white.withAlpha(130),
+                size: 20,
+              ),
+            ],
+          ),
         ),
       ),
-      child: Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
-      child: Row(
-        children: [
-          Container(
-            width: 42,
-            height: 42,
-            decoration: BoxDecoration(
-              color: _uoscAccent.withAlpha(28),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: _uoscAccent.withAlpha(54)),
-            ),
-            child: Center(child: _GradientIcon(icon: icon, size: 22)),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 14,
-                  ),
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  subtitle,
-                  style: TextStyle(
-                    color: Colors.white.withAlpha(145),
-                    fontSize: 12,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Icon(
-            Icons.chevron_right,
-            color: Colors.white.withAlpha(130),
-            size: 20,
-          ),
-        ],
-      ),
-      ),
-    ),
     ),
     child: const SizedBox.shrink(),
   );
@@ -1511,90 +1589,104 @@ class _SettingsDialogFrame extends StatelessWidget {
     insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
     child: CallbackShortcuts(
       bindings: {
-        const SingleActivator(LogicalKeyboardKey.escape): () => Navigator.of(context).pop(),
+        const SingleActivator(LogicalKeyboardKey.escape): () =>
+            Navigator.of(context).pop(),
       },
       child: DpadRegion(
         memoryKey: 'player-settings-dialog',
         horizontalEdge: DpadEdgeBehavior.stop,
         verticalEdge: DpadEdgeBehavior.stop,
         child: ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 540),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(26),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
-          child: Container(
-            padding: const EdgeInsets.all(22),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [Color(0xF20A0E14), Color(0xE50A1A24)],
-              ),
-              borderRadius: BorderRadius.circular(26),
-              border: Border.all(color: _uoscAccent.withAlpha(76)),
-              boxShadow: const [
-                BoxShadow(
-                  color: Colors.black87,
-                  blurRadius: 36,
-                  offset: Offset(0, 18),
-                ),
-              ],
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Container(
-                      width: 44,
-                      height: 44,
-                      decoration: BoxDecoration(
-                        color: _uoscAccent.withAlpha(30),
-                        borderRadius: BorderRadius.circular(15),
-                        border: Border.all(color: _uoscAccent.withAlpha(60)),
-                      ),
-                      child: Center(child: _GradientIcon(icon: icon, size: 23)),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        title,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 20,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                    ),
-                    DpadFocusable(
-                      autofocus: true,
-                      entry: true,
-                      onSelect: () => Navigator.of(context).pop(),
-                      builder: (context, state, child) => Container(
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          boxShadow: state.focused
-                              ? [BoxShadow(color: _uoscAccent.withAlpha(160), blurRadius: 18, spreadRadius: 2)]
-                              : null,
-                        ),
-                        child: IconButton(
-                          onPressed: () => Navigator.of(context).pop(),
-                          icon: const Icon(Icons.close, color: Colors.white70),
-                        ),
-                      ),
-                      child: const SizedBox.shrink(),
+          constraints: const BoxConstraints(maxWidth: 540),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(26),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+              child: Container(
+                padding: const EdgeInsets.all(22),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [Color(0xF20A0E14), Color(0xE50A1A24)],
+                  ),
+                  borderRadius: BorderRadius.circular(26),
+                  border: Border.all(color: _uoscAccent.withAlpha(76)),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Colors.black87,
+                      blurRadius: 36,
+                      offset: Offset(0, 18),
                     ),
                   ],
                 ),
-                const SizedBox(height: 22),
-                child,
-              ],
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          width: 44,
+                          height: 44,
+                          decoration: BoxDecoration(
+                            color: _uoscAccent.withAlpha(30),
+                            borderRadius: BorderRadius.circular(15),
+                            border: Border.all(
+                              color: _uoscAccent.withAlpha(60),
+                            ),
+                          ),
+                          child: Center(
+                            child: _GradientIcon(icon: icon, size: 23),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            title,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 20,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                        DpadFocusable(
+                          autofocus: true,
+                          entry: true,
+                          onSelect: () => Navigator.of(context).pop(),
+                          builder: (context, state, child) => Container(
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              boxShadow: state.focused
+                                  ? [
+                                      BoxShadow(
+                                        color: _uoscAccent.withAlpha(160),
+                                        blurRadius: 18,
+                                        spreadRadius: 2,
+                                      ),
+                                    ]
+                                  : null,
+                            ),
+                            child: GestureDetector(
+                              onTap: () => Navigator.of(context).pop(),
+                              child: const Padding(
+                                padding: EdgeInsets.all(8),
+                                child: Icon(Icons.close, color: Colors.white70),
+                              ),
+                            ),
+                          ),
+                          child: const SizedBox.shrink(),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 22),
+                    child,
+                  ],
+                ),
+              ),
             ),
           ),
-        ),
-      ),
         ),
       ),
     ),
@@ -1714,9 +1806,17 @@ class _RoundIconAction extends StatelessWidget {
         decoration: BoxDecoration(
           color: Colors.white.withAlpha(18),
           shape: BoxShape.circle,
-          border: Border.all(color: state.focused ? _uoscAccentLight : _uoscAccent.withAlpha(58)),
+          border: Border.all(
+            color: state.focused ? _uoscAccentLight : _uoscAccent.withAlpha(58),
+          ),
           boxShadow: state.focused
-              ? [BoxShadow(color: _uoscAccent.withAlpha(140), blurRadius: 16, spreadRadius: 2)]
+              ? [
+                  BoxShadow(
+                    color: _uoscAccent.withAlpha(140),
+                    blurRadius: 16,
+                    spreadRadius: 2,
+                  ),
+                ]
               : null,
         ),
         child: Center(child: _GradientIcon(icon: icon, size: 20)),
@@ -1738,15 +1838,40 @@ class _DialogTextButton extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) => TextButton(
-    onPressed: onTap,
-    style: TextButton.styleFrom(
-      foregroundColor: filled ? Colors.black : Colors.white,
-      backgroundColor: filled ? _uoscAccentLight : Colors.white.withAlpha(16),
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+  Widget build(BuildContext context) => DpadFocusable(
+    onSelect: onTap,
+    builder: (context, state, child) => GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+        decoration: BoxDecoration(
+          color: filled ? _uoscAccentLight : Colors.white.withAlpha(16),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: state.focused ? Colors.white : Colors.transparent,
+            width: 2,
+          ),
+          boxShadow: state.focused
+              ? [
+                  BoxShadow(
+                    color: _uoscAccent.withAlpha(120),
+                    blurRadius: 16,
+                    spreadRadius: 2,
+                  ),
+                ]
+              : null,
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: filled ? Colors.black : Colors.white,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      ),
     ),
-    child: Text(label, style: const TextStyle(fontWeight: FontWeight.w800)),
+    child: const SizedBox.shrink(),
   );
 }
 
@@ -1880,66 +2005,68 @@ class _TrackTile extends StatelessWidget {
   Widget build(BuildContext context) => DpadFocusable(
     onSelect: onTap,
     builder: (context, state, child) => InkWell(
-    borderRadius: BorderRadius.circular(18),
-    onTap: onTap,
-    child: Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: selected
-            ? _uoscAccent.withAlpha(34)
-            : Colors.white.withAlpha(10),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: state.focused
-              ? _uoscAccentLight
-              : (selected ? _uoscAccentLight.withAlpha(120) : Colors.white.withAlpha(20)),
-          width: state.focused ? 2 : 1,
+      borderRadius: BorderRadius.circular(18),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: selected
+              ? _uoscAccent.withAlpha(34)
+              : Colors.white.withAlpha(10),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: state.focused
+                ? _uoscAccentLight
+                : (selected
+                      ? _uoscAccentLight.withAlpha(120)
+                      : Colors.white.withAlpha(20)),
+            width: state.focused ? 2 : 1,
+          ),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: selected
+                    ? _uoscAccent.withAlpha(46)
+                    : Colors.white.withAlpha(14),
+              ),
+              child: Center(
+                child: selected
+                    ? const Icon(Icons.check, color: _uoscAccentLight, size: 20)
+                    : _GradientIcon(icon: Icons.audiotrack, size: 20),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _audioTrackTitle(track),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 14,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    _audioTrackSubtitle(track),
+                    style: TextStyle(
+                      color: Colors.white.withAlpha(145),
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
-      child: Row(
-        children: [
-          Container(
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: selected
-                  ? _uoscAccent.withAlpha(46)
-                  : Colors.white.withAlpha(14),
-            ),
-            child: Center(
-              child: selected
-                  ? const Icon(Icons.check, color: _uoscAccentLight, size: 20)
-                  : _GradientIcon(icon: Icons.audiotrack, size: 20),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  _audioTrackTitle(track),
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w800,
-                    fontSize: 14,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  _audioTrackSubtitle(track),
-                  style: TextStyle(
-                    color: Colors.white.withAlpha(145),
-                    fontSize: 12,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    ),
     ),
     child: const SizedBox.shrink(),
   );

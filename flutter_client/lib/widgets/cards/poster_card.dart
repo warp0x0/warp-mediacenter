@@ -20,6 +20,12 @@ class PosterCard extends ConsumerStatefulWidget {
   final double? cardWidth;
   final double? cardHeight;
   final DpadDirectionCallback? onDirection;
+  final bool entry;
+  // dpad's own focus-gain auto-scroll only nudges enough to satisfy a
+  // fixed padding — callers that need deterministic centering (e.g.
+  // scrolling the whole row to the middle of the viewport) should disable
+  // this and do their own scrolling instead.
+  final bool autoScroll;
 
   const PosterCard({
     super.key,
@@ -32,6 +38,8 @@ class PosterCard extends ConsumerStatefulWidget {
     this.cardWidth,
     this.cardHeight,
     this.onDirection,
+    this.entry = false,
+    this.autoScroll = true,
   });
 
   @override
@@ -67,7 +75,7 @@ class _PosterCardState extends ConsumerState<PosterCard> {
     final t        = widget.tokens;
     final imgW     = widget.cardWidth  ?? t.posterWidth;
     final imgH     = widget.cardHeight ?? t.posterHeight;
-    final showRing = widget.isSelected || _focused;
+    final showRing = _focused;
     final title    = widget.item.title.isNotEmpty
         ? widget.item.title
         : (widget.item.media.title.isNotEmpty ? widget.item.media.title : widget.item.media.name);
@@ -111,7 +119,10 @@ class _PosterCardState extends ConsumerState<PosterCard> {
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
       child: DpadFocusable(
+        effects: const [],
         focusNode: widget.focusNode,
+        entry: widget.entry,
+        autoScroll: widget.autoScroll,
         onFocusChange: (v) => setState(() => _focused = v),
         onDirection: widget.onDirection,
         onSelect: widget.onTap,
@@ -138,7 +149,7 @@ class _PosterCardState extends ConsumerState<PosterCard> {
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(t.cardRadius),
                 border: showRing
-                    ? Border.all(color: const Color(0xFF0DB2E2), width: t.focusRingWidth)
+                    ? Border.all(color: const Color(0xFF0DB2E2), width: t.cardFocusRingWidth)
                     : null,
                 boxShadow: showRing
                     ? [const BoxShadow(color: Color(0x470DB2E2), blurRadius: 16, spreadRadius: 2)]
@@ -146,7 +157,7 @@ class _PosterCardState extends ConsumerState<PosterCard> {
               ),
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(
-                  (t.cardRadius - (showRing ? t.focusRingWidth : 0)).clamp(0, t.cardRadius),
+                  (t.cardRadius - (showRing ? t.cardFocusRingWidth : 0)).clamp(0, t.cardRadius),
                 ),
                 child: Stack(
                   fit: StackFit.expand,
@@ -161,6 +172,21 @@ class _PosterCardState extends ConsumerState<PosterCard> {
                       )
                     else
                       _NoPoster(t: t),
+
+                    // Subtle inner vignette — a dark rim between the poster
+                    // art and the outer cyan focus ring, so the ring stays
+                    // legible even against near-white/near-cyan poster edges.
+                    const Positioned.fill(
+                      child: IgnorePointer(
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            border: Border.fromBorderSide(
+                              BorderSide(color: Color(0x59000000), width: 3.5),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
 
                     // Rating badge — top right (mirrors Tauri: width:50px, height:25px)
                     if (rating != null && rating > 0)

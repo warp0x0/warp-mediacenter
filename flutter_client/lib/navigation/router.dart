@@ -15,7 +15,9 @@ import '../pages/catalog_browse_page.dart';
 import '../pages/power_page.dart';
 import '../pages/settings_page.dart';
 import '../pages/shows_page.dart';
+import '../theme/warp_theme.dart';
 import '../widgets/layout/backdrop_layer.dart';
+import 'last_tab_route.dart';
 import 'tab_bar_focus_registry.dart';
 
 part 'router.g.dart';
@@ -107,6 +109,7 @@ class AppShell extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final path = GoRouterState.of(context).uri.path;
     final selectedIndex = _routeIndex(path);
+    if (path != '/search') LastTabRoute.value = path;
 
     // No SafeArea — backdrop must fill the full window edge-to-edge,
     // matching React's h-screen w-screen overflow-hidden wrapper.
@@ -272,6 +275,12 @@ class _TabPillState extends ConsumerState<_TabPill> {
         onSelect: () => context.go(widget.tab.route),
         builder: (context, state, child) {
           final active = widget.isActive || state.focused || _hovered;
+          // The active-tab pill and a focused pill share the exact same
+          // "active" look, so landing focus back on the already-selected
+          // tab was otherwise invisible. Layer a cyan ring on top only for
+          // that specific overlap — never for focus-alone or active-alone,
+          // since those already read fine on their own.
+          final showFocusRing = widget.isActive && state.focused;
           return AnimatedContainer(
             duration: const Duration(milliseconds: 200),
             padding: EdgeInsets.symmetric(horizontal: padH, vertical: padV),
@@ -281,8 +290,10 @@ class _TabPillState extends ConsumerState<_TabPill> {
               borderRadius: BorderRadius.circular(999),
               // active: border border-white/20  inactive: no border
               border: Border.all(
-                color: active ? const Color(0x33FFFFFF) : Colors.transparent,
-                width: 1,
+                color: showFocusRing
+                    ? WarpColors.accent
+                    : (active ? const Color(0x33FFFFFF) : Colors.transparent),
+                width: showFocusRing ? 2 : 1,
               ),
             ),
             child: Row(

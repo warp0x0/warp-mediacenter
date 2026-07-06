@@ -162,6 +162,12 @@ class WarpTokens {
   double get focusRingWidth  => isTV ? 4.0 : 2.0;
   double get focusRingOffset => isTV ? 4.0 : 2.0;
 
+  // Wider ring specifically for poster/ribbon cards — poster art can be any
+  // color, including near-identical to the accent ring, so cards need extra
+  // width to stay visible where buttons/text fields (flat, known colors)
+  // don't.
+  double get cardFocusRingWidth => isTV ? 6.0 : 3.5;
+
   // ── Touch target minimum (Android TV guideline: 60dp) ────────────────────────
   double get minTouchTarget => isTV ? 60.0 : 44.0;
 
