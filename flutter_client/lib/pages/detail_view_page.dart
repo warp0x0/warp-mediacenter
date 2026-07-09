@@ -20,6 +20,7 @@ import '../theme/warp_tokens.dart';
 import '../widgets/layout/backdrop_layer.dart';
 import '../widgets/media/torrent_dialog.dart';
 import '../widgets/media/trailer_dialog.dart';
+import '../widgets/shared/warp_context_menu.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helper types
@@ -82,9 +83,15 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
   final _wishlistFocusNode = FocusNode(debugLabel: 'Wishlist');
   final _shareFocusNode = FocusNode(debugLabel: 'Share');
   final _likeFocusNode = FocusNode(debugLabel: 'Like');
-  final _episodesEntryFocusNode = FocusNode(debugLabel: 'EpisodesEntry'); // 1st season pill
-  final _whereToWatchEntryFocusNode = FocusNode(debugLabel: 'WhereToWatchEntry'); // 1st provider logo
-  final _localSourcesEntryFocusNode = FocusNode(debugLabel: 'LocalSourcesEntry'); // 1st source row
+  final _episodesEntryFocusNode = FocusNode(
+    debugLabel: 'EpisodesEntry',
+  ); // 1st season pill
+  final _whereToWatchEntryFocusNode = FocusNode(
+    debugLabel: 'WhereToWatchEntry',
+  ); // 1st provider logo
+  final _localSourcesEntryFocusNode = FocusNode(
+    debugLabel: 'LocalSourcesEntry',
+  ); // 1st source row
 
   bool _hasTrailer = false;
   bool _hasEpisodes = false;
@@ -92,13 +99,23 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
   bool _hasLocalSources = false;
   bool _initialFocusRequested = false;
 
-  FocusNode get _heroEntryNode => _hasTrailer ? _playTrailerFocusNode : _playResumeFocusNode;
+  FocusNode get _heroEntryNode =>
+      _hasTrailer ? _playTrailerFocusNode : _playResumeFocusNode;
 
   bool _heroDirection(TraversalDirection d) {
     if (d != TraversalDirection.down) return false;
-    if (_hasEpisodes) { Dpad.of(context).requestFocus(_episodesEntryFocusNode); return true; }
-    if (_hasWhereToWatch) { Dpad.of(context).requestFocus(_whereToWatchEntryFocusNode); return true; }
-    if (_hasLocalSources) { Dpad.of(context).requestFocus(_localSourcesEntryFocusNode); return true; }
+    if (_hasEpisodes) {
+      Dpad.of(context).requestFocus(_episodesEntryFocusNode);
+      return true;
+    }
+    if (_hasWhereToWatch) {
+      Dpad.of(context).requestFocus(_whereToWatchEntryFocusNode);
+      return true;
+    }
+    if (_hasLocalSources) {
+      Dpad.of(context).requestFocus(_localSourcesEntryFocusNode);
+      return true;
+    }
     return false;
   }
 
@@ -111,18 +128,29 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
   // Down from the last episode card -> whatever section comes next.
   bool _episodesLastDown(TraversalDirection d) {
     if (d != TraversalDirection.down) return false;
-    if (_hasWhereToWatch) { Dpad.of(context).requestFocus(_whereToWatchEntryFocusNode); return true; }
-    if (_hasLocalSources) { Dpad.of(context).requestFocus(_localSourcesEntryFocusNode); return true; }
+    if (_hasWhereToWatch) {
+      Dpad.of(context).requestFocus(_whereToWatchEntryFocusNode);
+      return true;
+    }
+    if (_hasLocalSources) {
+      Dpad.of(context).requestFocus(_localSourcesEntryFocusNode);
+      return true;
+    }
     return false;
   }
 
   bool _whereToWatchDirection(TraversalDirection d) {
     if (d == TraversalDirection.up) {
-      Dpad.of(context).requestFocus(_hasEpisodes ? _episodesEntryFocusNode : _heroEntryNode);
+      Dpad.of(
+        context,
+      ).requestFocus(_hasEpisodes ? _episodesEntryFocusNode : _heroEntryNode);
       return true;
     }
     if (d == TraversalDirection.down) {
-      if (_hasLocalSources) { Dpad.of(context).requestFocus(_localSourcesEntryFocusNode); return true; }
+      if (_hasLocalSources) {
+        Dpad.of(context).requestFocus(_localSourcesEntryFocusNode);
+        return true;
+      }
       return false;
     }
     return false;
@@ -132,8 +160,14 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
   // list, so intra-section Up/Down between rows is plain default beam nav.
   bool _localSourcesFirstUp(TraversalDirection d) {
     if (d != TraversalDirection.up) return false;
-    if (_hasWhereToWatch) { Dpad.of(context).requestFocus(_whereToWatchEntryFocusNode); return true; }
-    if (_hasEpisodes) { Dpad.of(context).requestFocus(_episodesEntryFocusNode); return true; }
+    if (_hasWhereToWatch) {
+      Dpad.of(context).requestFocus(_whereToWatchEntryFocusNode);
+      return true;
+    }
+    if (_hasEpisodes) {
+      Dpad.of(context).requestFocus(_episodesEntryFocusNode);
+      return true;
+    }
     Dpad.of(context).requestFocus(_heroEntryNode);
     return true;
   }
@@ -683,8 +717,10 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
     // Play/Resume if no trailer) the first time the hero row's real state
     // is known (this page loads its detail data asynchronously).
     _hasTrailer = trailerUrl != null;
-    _hasEpisodes = _isShow && (seasonsAsync?.asData?.value?.seasons.isNotEmpty ?? false);
-    _hasWhereToWatch = watchProviders != null &&
+    _hasEpisodes =
+        _isShow && (seasonsAsync?.asData?.value?.seasons.isNotEmpty ?? false);
+    _hasWhereToWatch =
+        watchProviders != null &&
         (watchProviders.streaming.isNotEmpty ||
             watchProviders.rent.isNotEmpty ||
             watchProviders.buy.isNotEmpty);
@@ -799,13 +835,15 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
                                   _PlayResumeButton(
                                     isShow: _isShow,
                                     showResumeInfo: showResumeInfo,
-                                    isMovieResumeAvailable: isMovieResumeAvailable,
+                                    isMovieResumeAvailable:
+                                        isMovieResumeAvailable,
                                     focusNode: _playResumeFocusNode,
                                     onDirection: _heroDirection,
                                     onTap: () => _handlePlay(
                                       isShow: _isShow,
                                       showResumeInfo: showResumeInfo,
-                                      isMovieResumeAvailable: isMovieResumeAvailable,
+                                      isMovieResumeAvailable:
+                                          isMovieResumeAvailable,
                                       movieResumeProgress: movieResumeProgress,
                                       localSource: localSource,
                                       sources: sources,
@@ -819,10 +857,13 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
                                     activeColor: const Color(0x40109B60),
                                     activeBorderColor: const Color(0x9910B97D),
                                     activeIconColor: const Color(0xFF34D399),
-                                    icon: wishlisted ? Icons.check_circle : Icons.add,
+                                    icon: wishlisted
+                                        ? Icons.check_circle
+                                        : Icons.add,
                                     focusNode: _wishlistFocusNode,
                                     onDirection: _heroDirection,
-                                    onTap: () => _toggleWishlist(wishlisted, item),
+                                    onTap: () =>
+                                        _toggleWishlist(wishlisted, item),
                                   ),
                                   const SizedBox(width: 8),
 
@@ -1375,14 +1416,22 @@ class _BackButtonState extends State<_BackButton> {
             width: 100,
             height: 40,
             decoration: BoxDecoration(
-              color: _hovered ? const Color(0xCC000000) : const Color(0xE6000000),
+              color: _hovered
+                  ? const Color(0xCC000000)
+                  : const Color(0xE6000000),
               borderRadius: BorderRadius.circular(8),
               border: Border.all(
                 color: _hovered ? Colors.white.withAlpha(76) : Colors.white,
               ),
               // Icon-category focus indicator: prominent cyan halo.
               boxShadow: state.focused
-                  ? [BoxShadow(color: WarpColors.accent.withAlpha(140), blurRadius: 18, spreadRadius: 2)]
+                  ? [
+                      BoxShadow(
+                        color: WarpColors.accent.withAlpha(140),
+                        blurRadius: 18,
+                        spreadRadius: 2,
+                      ),
+                    ]
                   : null,
             ),
             child: const Row(
@@ -1583,9 +1632,18 @@ class _PlayResumeButtonState extends State<_PlayResumeButton> {
                 decoration: BoxDecoration(
                   color: active ? _color : const Color(0xCC333232),
                   borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: active ? _color : WarpColors.accent, width: 1),
+                  border: Border.all(
+                    color: active ? _color : WarpColors.accent,
+                    width: 1,
+                  ),
                   boxShadow: active
-                      ? [BoxShadow(color: _shadow, blurRadius: 16, offset: const Offset(0, 4))]
+                      ? [
+                          BoxShadow(
+                            color: _shadow,
+                            blurRadius: 16,
+                            offset: const Offset(0, 4),
+                          ),
+                        ]
                       : null,
                 ),
                 child: Row(
@@ -1678,7 +1736,13 @@ class _CircleActionButtonState extends State<_CircleActionButton> {
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 boxShadow: state.focused
-                    ? [BoxShadow(color: WarpColors.accent.withAlpha(140), blurRadius: 18, spreadRadius: 2)]
+                    ? [
+                        BoxShadow(
+                          color: WarpColors.accent.withAlpha(140),
+                          blurRadius: 18,
+                          spreadRadius: 2,
+                        ),
+                      ]
                     : null,
               ),
               child: ClipOval(
@@ -1705,7 +1769,9 @@ class _CircleActionButtonState extends State<_CircleActionButton> {
                     ),
                     child: Icon(
                       widget.icon,
-                      color: widget.active ? widget.activeIconColor : Colors.white,
+                      color: widget.active
+                          ? widget.activeIconColor
+                          : Colors.white,
                       size: 20,
                     ),
                   ),
@@ -1896,8 +1962,12 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
   @override
   void dispose() {
     _seasonScroll.dispose();
-    for (var i = 1; i < _pillFocusNodes.length; i++) { _pillFocusNodes[i].dispose(); }
-    for (final fn in _episodeFocusNodes) { fn.dispose(); }
+    for (var i = 1; i < _pillFocusNodes.length; i++) {
+      _pillFocusNodes[i].dispose();
+    }
+    for (final fn in _episodeFocusNodes) {
+      fn.dispose();
+    }
     super.dispose();
   }
 
@@ -1905,13 +1975,20 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
   // pill 0 (external, so the hero row's Down target stays stable).
   void _syncPillFocusNodes(int count) {
     if (_pillFocusNodes.length == count) return;
-    for (var i = 1; i < _pillFocusNodes.length; i++) { _pillFocusNodes[i].dispose(); }
-    _pillFocusNodes = List.generate(count, (i) => i == 0 ? widget.entryFocusNode : FocusNode());
+    for (var i = 1; i < _pillFocusNodes.length; i++) {
+      _pillFocusNodes[i].dispose();
+    }
+    _pillFocusNodes = List.generate(
+      count,
+      (i) => i == 0 ? widget.entryFocusNode : FocusNode(),
+    );
   }
 
   void _syncEpisodeFocusNodes(int count) {
     if (_episodeFocusNodes.length == count) return;
-    for (final fn in _episodeFocusNodes) { fn.dispose(); }
+    for (final fn in _episodeFocusNodes) {
+      fn.dispose();
+    }
     _episodeFocusNodes = List.generate(count, (_) => FocusNode());
   }
 
@@ -2005,7 +2082,9 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
                         episodeCount: seasons[i].episodeCount,
                         active: i == widget.selectedIdx,
                         onTap: () => widget.onSeasonChange(i),
-                        focusNode: i < _pillFocusNodes.length ? _pillFocusNodes[i] : null,
+                        focusNode: i < _pillFocusNodes.length
+                            ? _pillFocusNodes[i]
+                            : null,
                         onDirection: _pillDirection,
                       ),
                     ),
@@ -2065,7 +2144,8 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
                 // default beam nav.
                 final bool isFirstEp = epIdx == 0;
                 final bool isLastEp = epIdx == episodes.length - 1;
-                final DpadDirectionCallback? epDirection = (isFirstEp || isLastEp)
+                final DpadDirectionCallback? epDirection =
+                    (isFirstEp || isLastEp)
                     ? (d) {
                         if (isFirstEp && d == TraversalDirection.up) {
                           Dpad.of(context).requestFocus(_pillFocusNodes[0]);
@@ -2090,7 +2170,9 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
                     epScrobblePct: epScrobblePct,
                     epLocalSrc: epLocalSrc,
                     isMarking: isMarking,
-                    focusNode: epIdx < _episodeFocusNodes.length ? _episodeFocusNodes[epIdx] : null,
+                    focusNode: epIdx < _episodeFocusNodes.length
+                        ? _episodeFocusNodes[epIdx]
+                        : null,
                     onDirection: epDirection,
                     onPlay: () =>
                         widget.onPlayEpisode(ep, seasonNum, epScrobblePct),
@@ -2099,6 +2181,7 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
                       ep.episodeNumber ?? epIdx + 1,
                       progressEp?.playbackId,
                     ),
+                    contextMenuBuilder: null,
                     size: size,
                   ),
                 );
@@ -2211,57 +2294,59 @@ class _SeasonPillState extends State<_SeasonPill> {
         onSelect: widget.onTap,
         tapToSelect: false,
         builder: (context, state, child) => GestureDetector(
-        onTap: () {
-          widget.focusNode?.requestFocus();
-          widget.onTap();
-        },
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 7),
-          decoration: BoxDecoration(
-            color: active
-                ? const Color(0xFF0DB2E2)
-                : (_hovered
-                      ? Colors.white.withAlpha(20)
-                      : Colors.white.withAlpha(15)),
-            borderRadius: BorderRadius.circular(99),
-            border: state.focused
-                ? Border.all(color: WarpColors.accent, width: 2)
-                : (active
-                    ? null
-                    : Border.all(color: Colors.white.withAlpha(_hovered ? 38 : 25))),
-            boxShadow: active
-                ? const [BoxShadow(color: Color(0x5901B4E4), blurRadius: 14)]
-                : null,
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                'S${widget.seasonNumber.toString().padLeft(2, '0')}',
-                style: TextStyle(
-                  color: active
-                      ? Colors.black
-                      : Colors.white.withAlpha(_hovered ? 180 : 140),
-                  fontWeight: FontWeight.w600,
-                  fontSize: 14,
-                ),
-              ),
-              if (widget.episodeCount != null) ...[
-                const SizedBox(width: 4),
+          onTap: () {
+            widget.focusNode?.requestFocus();
+            widget.onTap();
+          },
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 7),
+            decoration: BoxDecoration(
+              color: active
+                  ? const Color(0xFF0DB2E2)
+                  : (_hovered
+                        ? Colors.white.withAlpha(20)
+                        : Colors.white.withAlpha(15)),
+              borderRadius: BorderRadius.circular(99),
+              border: state.focused
+                  ? Border.all(color: WarpColors.accent, width: 2)
+                  : (active
+                        ? null
+                        : Border.all(
+                            color: Colors.white.withAlpha(_hovered ? 38 : 25),
+                          )),
+              boxShadow: active
+                  ? const [BoxShadow(color: Color(0x5901B4E4), blurRadius: 14)]
+                  : null,
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
                 Text(
-                  '· ${widget.episodeCount}ep',
+                  'S${widget.seasonNumber.toString().padLeft(2, '0')}',
                   style: TextStyle(
                     color: active
-                        ? Colors.black.withAlpha(160)
-                        : Colors.white.withAlpha(_hovered ? 130 : 100),
-                    fontSize: 11,
+                        ? Colors.black
+                        : Colors.white.withAlpha(_hovered ? 180 : 140),
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
                   ),
                 ),
+                if (widget.episodeCount != null) ...[
+                  const SizedBox(width: 4),
+                  Text(
+                    '· ${widget.episodeCount}ep',
+                    style: TextStyle(
+                      color: active
+                          ? Colors.black.withAlpha(160)
+                          : Colors.white.withAlpha(_hovered ? 130 : 100),
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
               ],
-            ],
+            ),
           ),
-        ),
         ),
         child: const SizedBox.shrink(),
       ),
@@ -2288,6 +2373,7 @@ class _EpisodeCard extends StatefulWidget {
   final Size size;
   final FocusNode? focusNode;
   final DpadDirectionCallback? onDirection;
+  final List<WarpContextMenuItem> Function()? contextMenuBuilder;
 
   const _EpisodeCard({
     required this.episode,
@@ -2304,6 +2390,7 @@ class _EpisodeCard extends StatefulWidget {
     required this.size,
     this.focusNode,
     this.onDirection,
+    this.contextMenuBuilder,
   });
 
   @override
@@ -2313,6 +2400,18 @@ class _EpisodeCard extends StatefulWidget {
 class _EpisodeCardState extends State<_EpisodeCard> {
   bool _hovered = false;
   bool _focused = false;
+
+  void _openContextMenu() {
+    final builder = widget.contextMenuBuilder;
+    if (builder == null) return;
+    final items = builder();
+    if (items.isEmpty) return;
+    showWarpContextMenu(
+      context,
+      items: items,
+      restoreFocusNode: widget.focusNode,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -2348,6 +2447,7 @@ class _EpisodeCardState extends State<_EpisodeCard> {
       onDirection: widget.onDirection,
       onFocusChange: (v) => setState(() => _focused = v),
       onSelect: widget.onPlay,
+      onLongSelect: widget.contextMenuBuilder == null ? null : _openContextMenu,
       tapToSelect: false,
       builder: (context, state, child) => MouseRegion(
         onEnter: (_) => setState(() => _hovered = true),
@@ -2357,6 +2457,12 @@ class _EpisodeCardState extends State<_EpisodeCard> {
             widget.focusNode?.requestFocus();
             widget.onPlay();
           },
+          onLongPress: widget.contextMenuBuilder == null
+              ? null
+              : _openContextMenu,
+          onSecondaryTap: widget.contextMenuBuilder == null
+              ? null
+              : _openContextMenu,
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 200),
             constraints: const BoxConstraints(minHeight: 110),
@@ -3099,7 +3205,9 @@ class _WatchProvidersSection extends StatelessWidget {
                 for (var i = 0; i < combined.length; i++)
                   _ProviderLogo(
                     provider: combined[i],
-                    focusNode: (!firstIsStreaming && i == 0) ? entryFocusNode : null,
+                    focusNode: (!firstIsStreaming && i == 0)
+                        ? entryFocusNode
+                        : null,
                     onDirection: onDirection,
                   ),
               ],
@@ -3115,7 +3223,11 @@ class _ProviderLogo extends StatefulWidget {
   final WatchProvider provider;
   final FocusNode? focusNode;
   final DpadDirectionCallback? onDirection;
-  const _ProviderLogo({required this.provider, this.focusNode, this.onDirection});
+  const _ProviderLogo({
+    required this.provider,
+    this.focusNode,
+    this.onDirection,
+  });
 
   @override
   State<_ProviderLogo> createState() => _ProviderLogoState();
@@ -3148,7 +3260,13 @@ class _ProviderLogoState extends State<_ProviderLogo> {
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(12),
             boxShadow: state.focused
-                ? [BoxShadow(color: WarpColors.accent.withAlpha(140), blurRadius: 18, spreadRadius: 2)]
+                ? [
+                    BoxShadow(
+                      color: WarpColors.accent.withAlpha(140),
+                      blurRadius: 18,
+                      spreadRadius: 2,
+                    ),
+                  ]
                 : null,
           ),
           child: AnimatedScale(
@@ -3296,86 +3414,89 @@ class _SourceRowState extends State<_SourceRow> {
         onSelect: widget.onPlay,
         tapToSelect: false,
         builder: (context, state, child) => GestureDetector(
-        onTap: () {
-          widget.focusNode?.requestFocus();
-          widget.onPlay();
-        },
-        child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        decoration: BoxDecoration(
-          color: Colors.white.withAlpha(_hovered ? 13 : 8),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-            color: state.focused
-                ? WarpColors.accent
-                : Colors.white.withAlpha(_hovered ? 35 : 20),
-            width: state.focused ? 2 : 1,
-          ),
-        ),
-        child: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: Colors.white.withAlpha(13),
-                borderRadius: BorderRadius.circular(5),
-              ),
-              child: Text(
-                (src.quality ?? src.sourceType).toUpperCase(),
-                style: const TextStyle(
-                  color: Color(0xB3FFFFFF),
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                ),
+          onTap: () {
+            widget.focusNode?.requestFocus();
+            widget.onPlay();
+          },
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              color: Colors.white.withAlpha(_hovered ? 13 : 8),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: state.focused
+                    ? WarpColors.accent
+                    : Colors.white.withAlpha(_hovered ? 35 : 20),
+                width: state.focused ? 2 : 1,
               ),
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                src.filePath ?? src.url,
-                style: const TextStyle(
-                  color: Color(0xE6FFFFFF),
-                  fontSize: 13,
-                  fontFamily: 'monospace',
-                ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            const SizedBox(width: 12),
-            GestureDetector(
-              onTap: widget.onPlay,
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 8,
-                ),
-                decoration: BoxDecoration(
-                  color: Colors.white.withAlpha(25),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.white.withAlpha(51)),
-                ),
-                child: const Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.play_arrow, color: Colors.white, size: 14),
-                    SizedBox(width: 6),
-                    Text(
-                      'Play',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                      ),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withAlpha(13),
+                    borderRadius: BorderRadius.circular(5),
+                  ),
+                  child: Text(
+                    (src.quality ?? src.sourceType).toUpperCase(),
+                    style: const TextStyle(
+                      color: Color(0xB3FFFFFF),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
                     ),
-                  ],
+                  ),
                 ),
-              ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    src.filePath ?? src.url,
+                    style: const TextStyle(
+                      color: Color(0xE6FFFFFF),
+                      fontSize: 13,
+                      fontFamily: 'monospace',
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                GestureDetector(
+                  onTap: widget.onPlay,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withAlpha(25),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.white.withAlpha(51)),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.play_arrow, color: Colors.white, size: 14),
+                        SizedBox(width: 6),
+                        Text(
+                          'Play',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
             ),
-          ],
-        ),
-        ),
+          ),
         ),
         child: const SizedBox.shrink(),
       ),

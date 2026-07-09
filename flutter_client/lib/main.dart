@@ -82,7 +82,12 @@ class WarpApp extends ConsumerWidget {
       debugShowCheckedModeBanner: false,
       theme: WarpTheme.build(tokens),
       routerConfig: router,
-      builder: Dpad.wrap(),
+      builder: Dpad.wrap(
+        // Page/dialog-level handlers own Back/Escape. The root dpad has no
+        // onBack callback, so mapping these keys here can preempt focused
+        // text fields and route-specific shortcuts.
+        keySet: const DpadKeySet(back: []),
+      ),
     );
   }
 }

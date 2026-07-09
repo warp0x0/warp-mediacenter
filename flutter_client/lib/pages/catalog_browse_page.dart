@@ -4,13 +4,27 @@ import 'package:go_router/go_router.dart';
 
 import '../api/api_client.dart';
 import '../models/catalog.dart';
+import '../models/library.dart';
 import '../models/media.dart';
+import '../providers/library_provider.dart';
 import '../theme/warp_tokens.dart';
 import '../widgets/cards/poster_card.dart';
 import '../widgets/layout/backdrop_layer.dart';
 import '../widgets/shared/dpad_controls.dart';
 
 const _kPageSize = 20;
+
+class _BrowsePageData {
+  const _BrowsePageData({
+    required this.items,
+    required this.count,
+    required this.hasMore,
+  });
+
+  final List<MediaItem> items;
+  final int count;
+  final bool hasMore;
+}
 
 class CatalogBrowsePage extends ConsumerStatefulWidget {
   const CatalogBrowsePage({
@@ -50,8 +64,31 @@ class _CatalogBrowsePageState extends ConsumerState<CatalogBrowsePage> {
   String get _displayTitle =>
       widget.title ?? widget.category.replaceAll('_', ' ');
 
-  Future<CatalogResponse?> _fetchCatalog(int offset) async {
+  bool get _isLocalBrowse => widget.provider == 'local';
+
+  Future<_BrowsePageData?> _fetchPageData(int offset) async {
     final client = ref.read(apiClientProvider);
+    if (_isLocalBrowse) {
+      final raw = await client.get<Map<String, dynamic>>(
+        widget.mediaType == 'show'
+            ? '/api/v1/library/shows'
+            : '/api/v1/library/movies',
+        params: {
+          'limit': _kPageSize,
+          'offset': offset,
+          'sort': widget.category == 'az' ? 'title' : 'added_at',
+          'order': widget.category == 'az' ? 'asc' : 'desc',
+          'local_only': 'true',
+        },
+      );
+      final data = LibraryListResponse.fromJson(raw);
+      return _BrowsePageData(
+        items: data.items.map(libraryItemToMedia).toList(),
+        count: data.items.length,
+        hasMore: data.hasNext,
+      );
+    }
+
     final raw = await client.get<Map<String, dynamic>>(
       '/api/v1/catalog/${widget.provider}/${widget.category}',
       params: {
@@ -60,14 +97,18 @@ class _CatalogBrowsePageState extends ConsumerState<CatalogBrowsePage> {
         'offset': offset,
       },
     );
-    return CatalogResponse.fromJson(raw);
-  }
-
-  bool _computeHasMore(CatalogResponse data, int currentOffset) {
-    if (data.total != null) {
-      return currentOffset + data.count < data.total!;
-    }
-    return data.count >= _kPageSize;
+    final data = CatalogResponse.fromJson(raw);
+    final hasMore = () {
+      if (data.total != null) {
+        return offset + data.count < data.total!;
+      }
+      return data.count >= _kPageSize;
+    }();
+    return _BrowsePageData(
+      items: data.items,
+      count: data.count,
+      hasMore: hasMore,
+    );
   }
 
   Future<void> _fetchPage(int offset) async {
@@ -81,16 +122,18 @@ class _CatalogBrowsePageState extends ConsumerState<CatalogBrowsePage> {
       });
     }
     try {
-      final data = await _fetchCatalog(offset);
+      final data = await _fetchPageData(offset);
       if (!mounted || data == null) return;
       setState(() {
         _items = offset == 0 ? data.items : [..._items, ...data.items];
         _offset = offset;
-        _hasMore = _computeHasMore(data, offset);
+        _hasMore = data.hasMore;
       });
     } catch (_) {
       if (mounted && offset == 0) {
-        setState(() => _error = 'Failed to load catalog. Is the backend running?');
+        setState(
+          () => _error = 'Failed to load catalog. Is the backend running?',
+        );
       }
     } finally {
       if (mounted) setState(() => _isLoading = false);
@@ -102,12 +145,12 @@ class _CatalogBrowsePageState extends ConsumerState<CatalogBrowsePage> {
     setState(() => _isLoadingMore = true);
     try {
       final nextOffset = _offset + _kPageSize;
-      final data = await _fetchCatalog(nextOffset);
+      final data = await _fetchPageData(nextOffset);
       if (!mounted || data == null) return;
       setState(() {
         _items = [..._items, ...data.items];
         _offset = nextOffset;
-        _hasMore = _computeHasMore(data, nextOffset);
+        _hasMore = data.hasMore;
       });
     } catch (_) {
       // silently ignore load-more failures
@@ -176,7 +219,10 @@ class _CatalogBrowsePageState extends ConsumerState<CatalogBrowsePage> {
                   child: Center(
                     child: Text(
                       'No titles available.',
-                      style: TextStyle(color: Colors.white54, fontSize: t.fontBody),
+                      style: TextStyle(
+                        color: Colors.white54,
+                        fontSize: t.fontBody,
+                      ),
                     ),
                   ),
                 )
@@ -246,7 +292,10 @@ class _CatalogBrowsePageState extends ConsumerState<CatalogBrowsePage> {
                   child: Center(
                     child: Text(
                       '${_items.length} title${_items.length != 1 ? 's' : ''} total',
-                      style: TextStyle(color: Colors.white38, fontSize: t.fontSubtitle),
+                      style: TextStyle(
+                        color: Colors.white38,
+                        fontSize: t.fontSubtitle,
+                      ),
                     ),
                   ),
                 ),
@@ -315,7 +364,10 @@ class _Header extends StatelessWidget {
               if (!isLoading && error == null && itemCount > 0)
                 Text(
                   '$itemCount title${itemCount != 1 ? 's' : ''}${hasMore ? '+' : ''}',
-                  style: TextStyle(color: Colors.white38, fontSize: t.fontSubtitle),
+                  style: TextStyle(
+                    color: Colors.white38,
+                    fontSize: t.fontSubtitle,
+                  ),
                 ),
             ],
           ),
@@ -358,7 +410,10 @@ class _BackBtnState extends State<_BackBtn> {
             'Back',
             style: TextStyle(
               color: Colors.white,
-              fontSize: (MediaQuery.sizeOf(context).width * 0.009).clamp(13.0, 16.0),
+              fontSize: (MediaQuery.sizeOf(context).width * 0.009).clamp(
+                13.0,
+                16.0,
+              ),
               fontWeight: FontWeight.w500,
             ),
           ),

@@ -9,6 +9,7 @@ import '../../models/torrent.dart';
 import '../../models/preload.dart';
 import '../../models/debrid.dart';
 import '../../theme/warp_tokens.dart';
+import '../shared/dpad_controls.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TorrentDialog — search → resolve → poll → stream → preload → navigate
@@ -139,6 +140,31 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog> {
 
   bool get _isBusy => _searching || _resolving;
 
+  bool _searchFieldDirection(TraversalDirection direction) {
+    if (direction == TraversalDirection.right) {
+      if (!_searchFieldFocus.hasFocus ||
+          _searchCtrl.selection.end >= _searchCtrl.text.length) {
+        Dpad.of(context).requestFocus(_searchBtnFocus);
+        return true;
+      }
+      return false;
+    }
+    if (direction == TraversalDirection.left) {
+      if (!_searchFieldFocus.hasFocus) return true;
+      return _searchCtrl.selection.start <= 0;
+    }
+    return false;
+  }
+
+  bool _searchButtonDirection(TraversalDirection direction) {
+    if (direction == TraversalDirection.left) {
+      Dpad.of(context).requestFocus(_searchWrapperFocus);
+      return true;
+    }
+    if (direction == TraversalDirection.right) return true;
+    return false;
+  }
+
   // ── Search ──────────────────────────────────────────────────────────────────
 
   Future<void> _doSearch() async {
@@ -171,6 +197,7 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog> {
       final safeHashes = filtered.map((r) => r.hash).toSet();
       final blockedCount = unfiltered.length - filtered.length;
 
+      if (!mounted) return;
       setState(() {
         _results = unfiltered;
         _rdSafeHashes = safeHashes;
@@ -194,6 +221,7 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog> {
         });
       }
     } catch (e) {
+      if (!mounted) return;
       setState(
         () => _banner = _BannerState(
           _BannerKind.error,
@@ -202,7 +230,7 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog> {
         ),
       );
     } finally {
-      setState(() => _searching = false);
+      if (mounted) setState(() => _searching = false);
     }
   }
 
@@ -785,57 +813,44 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog> {
       child: Row(
         children: [
           Expanded(
-            // Outer wrapper is the D-pad-navigable stop; Select transfers
-            // real focus onto the bare TextField (native dpad text-edit
-            // arrow handling takes over from there).
-            child: DpadFocusable(
-              focusNode: _searchWrapperFocus,
+            child: WarpDpadTextField(
+              controller: _searchCtrl,
+              fieldFocusNode: _searchFieldFocus,
+              wrapperFocusNode: _searchWrapperFocus,
+              tokens: t,
               autofocus: true,
               entry: true,
-              excludeChildFocus: false,
-              onSelect: () => _searchFieldFocus.requestFocus(),
-              builder: (context, state, child) => AnimatedContainer(
-                duration: const Duration(milliseconds: 150),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(
-                    color: state.focused
-                        ? const Color(0xFF0DB2E2)
-                        : Colors.transparent,
-                    width: 2,
-                  ),
+              disableWrapperWhileEditing: true,
+              moveCursorToEndOnEnter: true,
+              enableSelectAllContextMenu: true,
+              onDirection: _searchFieldDirection,
+              onSubmitted: (_) {
+                if (!_isBusy) _doSearch();
+              },
+              style: TextStyle(color: Colors.white, fontSize: t.fontBody),
+              decoration: InputDecoration(
+                hintText: 'Search sources…',
+                hintStyle: TextStyle(
+                  color: Colors.white38,
+                  fontSize: t.fontBody,
                 ),
-                child: child,
-              ),
-              child: TextField(
-                controller: _searchCtrl,
-                focusNode: _searchFieldFocus,
-                style: TextStyle(color: Colors.white, fontSize: t.fontBody),
-                onSubmitted: (_) => _isBusy ? null : _doSearch(),
-                decoration: InputDecoration(
-                  hintText: 'Search sources…',
-                  hintStyle: TextStyle(
-                    color: Colors.white38,
-                    fontSize: t.fontBody,
-                  ),
-                  filled: true,
-                  fillColor: Colors.white.withAlpha(13),
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 12,
-                  ),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                    borderSide: BorderSide(color: Colors.white.withAlpha(30)),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                    borderSide: BorderSide(color: Colors.white.withAlpha(30)),
-                  ),
-                  focusedBorder: const OutlineInputBorder(
-                    borderRadius: BorderRadius.all(Radius.circular(10)),
-                    borderSide: BorderSide(color: Color(0xFF0DB2E2)),
-                  ),
+                filled: true,
+                fillColor: Colors.white.withAlpha(13),
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 12,
+                ),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: BorderSide(color: Colors.white.withAlpha(30)),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: BorderSide(color: Colors.white.withAlpha(30)),
+                ),
+                focusedBorder: const OutlineInputBorder(
+                  borderRadius: BorderRadius.all(Radius.circular(10)),
+                  borderSide: BorderSide(color: Color(0xFF0DB2E2)),
                 ),
               ),
             ),
@@ -844,6 +859,7 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog> {
           DpadFocusable(
             focusNode: _searchBtnFocus,
             enabled: !_isBusy,
+            onDirection: _searchButtonDirection,
             onSelect: _doSearch,
             builder: (context, state, child) => GestureDetector(
               onTap: _isBusy ? null : _doSearch,

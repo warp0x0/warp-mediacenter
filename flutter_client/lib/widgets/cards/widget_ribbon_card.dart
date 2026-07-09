@@ -6,6 +6,7 @@ import '../../api/catalog_constants.dart';
 import '../../models/media.dart';
 import '../../providers/library_provider.dart';
 import '../../theme/warp_tokens.dart';
+import '../shared/warp_context_menu.dart';
 
 /// Ribbon card matching Tauri's WidgetRibbonItem — poster image only, no title/year text.
 /// Used in horizontal ribbon rows within WidgetSection.
@@ -19,6 +20,7 @@ class WidgetRibbonCard extends ConsumerStatefulWidget {
   final WarpTokens tokens;
   final DpadDirectionCallback? onDirection;
   final bool entry;
+  final List<WarpContextMenuItem> Function()? contextMenuBuilder;
 
   const WidgetRibbonCard({
     super.key,
@@ -30,6 +32,7 @@ class WidgetRibbonCard extends ConsumerStatefulWidget {
     this.focusNode,
     this.onDirection,
     this.entry = false,
+    this.contextMenuBuilder,
   });
 
   @override
@@ -39,6 +42,18 @@ class WidgetRibbonCard extends ConsumerStatefulWidget {
 class _WidgetRibbonCardState extends ConsumerState<WidgetRibbonCard> {
   bool _focused = false;
   bool _hovered = false;
+
+  void _openContextMenu() {
+    final builder = widget.contextMenuBuilder;
+    if (builder == null) return;
+    final items = builder();
+    if (items.isEmpty) return;
+    showWarpContextMenu(
+      context,
+      items: items,
+      restoreFocusNode: widget.focusNode,
+    );
+  }
 
   String _resolveUrl() {
     final direct = posterUrl(widget.item.posterPath);
@@ -94,6 +109,9 @@ class _WidgetRibbonCardState extends ConsumerState<WidgetRibbonCard> {
         // calls onTap/_selectItem on every focus change), so Select's own
         // job is to commit, matching mouse's double-tap-to-navigate.
         onSelect: widget.onDoubleTap,
+        onLongSelect: widget.contextMenuBuilder == null
+            ? null
+            : _openContextMenu,
         tapToSelect: false,
         child: GestureDetector(
           onTap: () {
@@ -101,95 +119,128 @@ class _WidgetRibbonCardState extends ConsumerState<WidgetRibbonCard> {
             widget.onTap();
           },
           onDoubleTap: widget.onDoubleTap,
+          onLongPress: widget.contextMenuBuilder == null
+              ? null
+              : _openContextMenu,
+          onSecondaryTap: widget.contextMenuBuilder == null
+              ? null
+              : _openContextMenu,
           child: AnimatedScale(
             scale: showRing || _hovered ? 1.05 : 1.0,
-          duration: const Duration(milliseconds: 180),
-          child: AnimatedContainer(
             duration: const Duration(milliseconds: 180),
-            width: imgW,
-            height: imgH,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(t.cardRadius),
-              border: showRing
-                  ? Border.all(color: const Color(0xFF0DB2E2), width: t.cardFocusRingWidth)
-                  : null,
-              boxShadow: showRing
-                  ? [const BoxShadow(color: Color(0x470DB2E2), blurRadius: 20, spreadRadius: 1)]
-                  : (_hovered
-                      ? [const BoxShadow(color: Colors.black54, blurRadius: 16)]
-                      : [const BoxShadow(color: Colors.black38, blurRadius: 8)]),
-            ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(
-                (t.cardRadius - (showRing ? t.cardFocusRingWidth : 0)).clamp(0.0, t.cardRadius),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              width: imgW,
+              height: imgH,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(t.cardRadius),
+                border: showRing
+                    ? Border.all(
+                        color: const Color(0xFF0DB2E2),
+                        width: t.cardFocusRingWidth,
+                      )
+                    : null,
+                boxShadow: showRing
+                    ? [
+                        const BoxShadow(
+                          color: Color(0x470DB2E2),
+                          blurRadius: 20,
+                          spreadRadius: 1,
+                        ),
+                      ]
+                    : (_hovered
+                          ? [
+                              const BoxShadow(
+                                color: Colors.black54,
+                                blurRadius: 16,
+                              ),
+                            ]
+                          : [
+                              const BoxShadow(
+                                color: Colors.black38,
+                                blurRadius: 8,
+                              ),
+                            ]),
               ),
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  if (url.isNotEmpty)
-                    CachedNetworkImage(
-                      imageUrl: url,
-                      fit: BoxFit.cover,
-                      placeholder: (_, _) => _RibbonSkeleton(radius: t.cardRadius),
-                      errorWidget: (_, _, _) => const _RibbonNoPoster(),
-                    )
-                  else
-                    const _RibbonNoPoster(),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(
+                  (t.cardRadius - (showRing ? t.cardFocusRingWidth : 0)).clamp(
+                    0.0,
+                    t.cardRadius,
+                  ),
+                ),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    if (url.isNotEmpty)
+                      CachedNetworkImage(
+                        imageUrl: url,
+                        fit: BoxFit.cover,
+                        placeholder: (_, _) =>
+                            _RibbonSkeleton(radius: t.cardRadius),
+                        errorWidget: (_, _, _) => const _RibbonNoPoster(),
+                      )
+                    else
+                      const _RibbonNoPoster(),
 
-                  // Subtle inner vignette — a dark rim between the poster
-                  // art and the outer cyan focus ring, so the ring stays
-                  // legible even against near-white/near-cyan poster edges.
-                  const Positioned.fill(
-                    child: IgnorePointer(
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          border: Border.fromBorderSide(
-                            BorderSide(color: Color(0x59000000), width: 3.5),
+                    // Subtle inner vignette — a dark rim between the poster
+                    // art and the outer cyan focus ring, so the ring stays
+                    // legible even against near-white/near-cyan poster edges.
+                    const Positioned.fill(
+                      child: IgnorePointer(
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            border: Border.fromBorderSide(
+                              BorderSide(color: Color(0x59000000), width: 3.5),
+                            ),
                           ),
                         ),
                       ),
                     ),
-                  ),
 
-                  if (tmdbId != null && tmdbId.isNotEmpty)
-                    Positioned(
-                      top: 4, left: 4,
-                      child: Column(
-                        children: [
-                          _RibbonCollectionBtn(
-                            size: btnSize,
-                            active: liked,
-                            icon: Icons.favorite,
-                            activeColor: const Color(0xFFF87171),
-                            activeBg: const Color(0x40EF4444),
-                            activeBorder: const Color(0x99EF4444),
-                            onTap: () => toggleLiked(ref, widget.item),
-                          ),
-                          const SizedBox(height: 3),
-                          _RibbonCollectionBtn(
-                            size: btnSize,
-                            active: wishlisted,
-                            icon: wishlisted ? Icons.check_circle : Icons.add,
-                            activeColor: const Color(0xFF34D399),
-                            activeBg: const Color(0x4010B981),
-                            activeBorder: const Color(0x9910B981),
-                            onTap: () => toggleWishlisted(ref, widget.item),
-                          ),
-                        ],
+                    if (tmdbId != null && tmdbId.isNotEmpty)
+                      Positioned(
+                        top: 4,
+                        left: 4,
+                        child: Column(
+                          children: [
+                            _RibbonCollectionBtn(
+                              size: btnSize,
+                              active: liked,
+                              icon: Icons.favorite,
+                              activeColor: const Color(0xFFF87171),
+                              activeBg: const Color(0x40EF4444),
+                              activeBorder: const Color(0x99EF4444),
+                              onTap: () => toggleLiked(ref, widget.item),
+                            ),
+                            const SizedBox(height: 3),
+                            _RibbonCollectionBtn(
+                              size: btnSize,
+                              active: wishlisted,
+                              icon: wishlisted ? Icons.check_circle : Icons.add,
+                              activeColor: const Color(0xFF34D399),
+                              activeBg: const Color(0x4010B981),
+                              activeBorder: const Color(0x9910B981),
+                              onTap: () => toggleWishlisted(ref, widget.item),
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
 
-                  if (widget.item.extra['progress'] is num &&
-                      (widget.item.extra['progress'] as num) > 0)
-                    Positioned(
-                      left: 0, right: 0, bottom: 2,
-                      child: _RibbonProgressBar(
-                        percent: (widget.item.extra['progress'] as num).toDouble(),
+                    if (widget.item.extra['progress'] is num &&
+                        (widget.item.extra['progress'] as num) > 0)
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        bottom: 2,
+                        child: _RibbonProgressBar(
+                          percent: (widget.item.extra['progress'] as num)
+                              .toDouble(),
+                        ),
                       ),
-                    ),
-                ],
+                  ],
+                ),
               ),
-            ),
             ),
           ),
         ),
@@ -232,7 +283,11 @@ class _RibbonCollectionBtn extends StatelessWidget {
             width: 1,
           ),
         ),
-        child: Icon(icon, size: size * 0.55, color: active ? activeColor : Colors.white),
+        child: Icon(
+          icon,
+          size: size * 0.55,
+          color: active ? activeColor : Colors.white,
+        ),
       ),
     );
   }

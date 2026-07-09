@@ -515,6 +515,8 @@ class _ConnectionPanel extends ConsumerStatefulWidget {
 
 class _ConnectionPanelState extends ConsumerState<_ConnectionPanel> {
   late final TextEditingController _urlCtrl;
+  final _urlFieldFocusNode = FocusNode(debugLabel: 'BackendUrlField');
+  final _urlWrapperFocusNode = FocusNode(debugLabel: 'BackendUrlWrapper');
   bool _testing = false;
   bool? _testOk;
   String? _testError;
@@ -528,6 +530,8 @@ class _ConnectionPanelState extends ConsumerState<_ConnectionPanel> {
 
   @override
   void dispose() {
+    _urlWrapperFocusNode.dispose();
+    _urlFieldFocusNode.dispose();
     _urlCtrl.dispose();
     super.dispose();
   }
@@ -583,8 +587,14 @@ class _ConnectionPanelState extends ConsumerState<_ConnectionPanel> {
         const SizedBox(height: 24),
 
         // URL field
-        TextField(
+        WarpDpadTextField(
           controller: _urlCtrl,
+          fieldFocusNode: _urlFieldFocusNode,
+          wrapperFocusNode: _urlWrapperFocusNode,
+          tokens: t,
+          moveCursorToEndOnEnter: true,
+          enableSelectAllContextMenu: true,
+          onSubmitted: (_) => _save(),
           style: TextStyle(color: Colors.white, fontSize: t.fontBody),
           decoration: InputDecoration(
             labelText: 'Backend URL',
