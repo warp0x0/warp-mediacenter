@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 
 import '../api/api_client.dart';
 import '../models/media.dart';
+import '../navigation/detail_route_extra.dart';
 import '../navigation/last_tab_route.dart';
 import '../navigation/row_first_card_registry.dart';
 import '../navigation/tab_bar_focus_registry.dart';
@@ -483,10 +484,13 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     }).toList();
   }
 
-  void _navigateToDetail(MediaItem item) {
+  void _navigateToDetail(MediaItem item, {FocusNode? returnFocusNode}) {
     final id = item.tmdbId?.isNotEmpty == true ? item.tmdbId! : item.id;
     if (id.isEmpty) return;
-    context.push('/detail/${item.type}/$id', extra: item);
+    context.push(
+      '/detail/${item.type}/$id',
+      extra: DetailRouteExtra(item: item, returnFocusNode: returnFocusNode),
+    );
   }
 
   // Search is one of the shell's tab routes, switched via go() (which
@@ -1149,7 +1153,7 @@ class _ResultRibbon extends StatefulWidget {
 
   final String label;
   final List<MediaItem> items;
-  final void Function(MediaItem) onTap;
+  final void Function(MediaItem item, {FocusNode? returnFocusNode}) onTap;
   final WarpTokens t;
   final int rowIndex;
   final RowFirstCardRegistry rowRegistry;
@@ -1390,8 +1394,18 @@ class _ResultRibbonState extends State<_ResultRibbon> {
                             autoScroll: false,
                             onDirection: (d) =>
                                 widget.onDirection(widget.rowIndex, d),
-                            onTap: () => widget.onTap(item),
-                            onDoubleTap: () => widget.onTap(item),
+                            onTap: () => widget.onTap(
+                              item,
+                              returnFocusNode: i < _focusNodes.length
+                                  ? _focusNodes[i]
+                                  : null,
+                            ),
+                            onDoubleTap: () => widget.onTap(
+                              item,
+                              returnFocusNode: i < _focusNodes.length
+                                  ? _focusNodes[i]
+                                  : null,
+                            ),
                           );
                         },
                       ),

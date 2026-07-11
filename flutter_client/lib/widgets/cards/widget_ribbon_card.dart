@@ -6,6 +6,7 @@ import '../../api/catalog_constants.dart';
 import '../../models/media.dart';
 import '../../providers/library_provider.dart';
 import '../../theme/warp_tokens.dart';
+import '../shared/media_context_menu.dart';
 import '../shared/warp_context_menu.dart';
 
 /// Ribbon card matching Tauri's WidgetRibbonItem — poster image only, no title/year text.
@@ -20,6 +21,7 @@ class WidgetRibbonCard extends ConsumerStatefulWidget {
   final WarpTokens tokens;
   final DpadDirectionCallback? onDirection;
   final bool entry;
+  final bool enableDefaultContextMenu;
   final List<WarpContextMenuItem> Function()? contextMenuBuilder;
 
   const WidgetRibbonCard({
@@ -32,6 +34,7 @@ class WidgetRibbonCard extends ConsumerStatefulWidget {
     this.focusNode,
     this.onDirection,
     this.entry = false,
+    this.enableDefaultContextMenu = true,
     this.contextMenuBuilder,
   });
 
@@ -42,17 +45,41 @@ class WidgetRibbonCard extends ConsumerStatefulWidget {
 class _WidgetRibbonCardState extends ConsumerState<WidgetRibbonCard> {
   bool _focused = false;
   bool _hovered = false;
+  bool _contextMenuOpen = false;
 
-  void _openContextMenu() {
+  List<WarpContextMenuItem> _contextMenuItems() {
     final builder = widget.contextMenuBuilder;
-    if (builder == null) return;
-    final items = builder();
-    if (items.isEmpty) return;
-    showWarpContextMenu(
-      context,
-      items: items,
-      restoreFocusNode: widget.focusNode,
+    if (builder != null) return builder();
+    if (!widget.enableDefaultContextMenu) return const [];
+    final tmdbId = widget.item.tmdbId;
+    final liked = tmdbId != null && tmdbId.isNotEmpty
+        ? ref.read(isLikedProvider(tmdbId)).asData?.value ?? false
+        : false;
+    final wishlisted = tmdbId != null && tmdbId.isNotEmpty
+        ? ref.read(isWishlistedProvider(tmdbId)).asData?.value ?? false
+        : false;
+    return buildMediaContextMenuItems(
+      ref,
+      widget.item,
+      liked: liked,
+      wishlisted: wishlisted,
     );
+  }
+
+  Future<void> _openContextMenu() async {
+    final items = _contextMenuItems();
+    if (items.isEmpty) return;
+    setState(() => _contextMenuOpen = true);
+    try {
+      await showWarpContextMenu(
+        context,
+        items: items,
+        restoreFocusNode: widget.focusNode,
+        centerInViewport: true,
+      );
+    } finally {
+      if (mounted) setState(() => _contextMenuOpen = false);
+    }
   }
 
   String _resolveUrl() {
@@ -70,7 +97,7 @@ class _WidgetRibbonCardState extends ConsumerState<WidgetRibbonCard> {
     final t = widget.tokens;
     final imgW = t.ribbonPosterWidth;
     final imgH = t.ribbonPosterHeight;
-    final showRing = _focused;
+    final showRing = _focused || _contextMenuOpen;
 
     final tmdbId = widget.item.tmdbId;
     final liked = tmdbId != null && tmdbId.isNotEmpty
@@ -109,9 +136,7 @@ class _WidgetRibbonCardState extends ConsumerState<WidgetRibbonCard> {
         // calls onTap/_selectItem on every focus change), so Select's own
         // job is to commit, matching mouse's double-tap-to-navigate.
         onSelect: widget.onDoubleTap,
-        onLongSelect: widget.contextMenuBuilder == null
-            ? null
-            : _openContextMenu,
+        onLongSelect: _openContextMenu,
         tapToSelect: false,
         child: GestureDetector(
           onTap: () {
@@ -119,12 +144,8 @@ class _WidgetRibbonCardState extends ConsumerState<WidgetRibbonCard> {
             widget.onTap();
           },
           onDoubleTap: widget.onDoubleTap,
-          onLongPress: widget.contextMenuBuilder == null
-              ? null
-              : _openContextMenu,
-          onSecondaryTap: widget.contextMenuBuilder == null
-              ? null
-              : _openContextMenu,
+          onLongPress: _openContextMenu,
+          onSecondaryTap: _openContextMenu,
           child: AnimatedScale(
             scale: showRing || _hovered ? 1.05 : 1.0,
             duration: const Duration(milliseconds: 180),

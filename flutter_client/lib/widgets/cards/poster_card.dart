@@ -7,6 +7,7 @@ import '../../models/media.dart';
 import '../../providers/detail_provider.dart';
 import '../../providers/library_provider.dart';
 import '../../theme/warp_tokens.dart';
+import '../shared/media_context_menu.dart';
 import '../shared/warp_context_menu.dart';
 
 class PosterCard extends ConsumerStatefulWidget {
@@ -27,6 +28,7 @@ class PosterCard extends ConsumerStatefulWidget {
   // scrolling the whole row to the middle of the viewport) should disable
   // this and do their own scrolling instead.
   final bool autoScroll;
+  final bool enableDefaultContextMenu;
   final List<WarpContextMenuItem> Function()? contextMenuBuilder;
 
   const PosterCard({
@@ -42,6 +44,7 @@ class PosterCard extends ConsumerStatefulWidget {
     this.onDirection,
     this.entry = false,
     this.autoScroll = true,
+    this.enableDefaultContextMenu = true,
     this.contextMenuBuilder,
   });
 
@@ -52,17 +55,41 @@ class PosterCard extends ConsumerStatefulWidget {
 class _PosterCardState extends ConsumerState<PosterCard> {
   bool _focused = false;
   bool _hovered = false;
+  bool _contextMenuOpen = false;
 
-  void _openContextMenu() {
+  List<WarpContextMenuItem> _contextMenuItems() {
     final builder = widget.contextMenuBuilder;
-    if (builder == null) return;
-    final items = builder();
-    if (items.isEmpty) return;
-    showWarpContextMenu(
-      context,
-      items: items,
-      restoreFocusNode: widget.focusNode,
+    if (builder != null) return builder();
+    if (!widget.enableDefaultContextMenu) return const [];
+    final tmdbId = widget.item.tmdbId;
+    final liked = tmdbId != null && tmdbId.isNotEmpty
+        ? ref.read(isLikedProvider(tmdbId)).asData?.value ?? false
+        : false;
+    final wishlisted = tmdbId != null && tmdbId.isNotEmpty
+        ? ref.read(isWishlistedProvider(tmdbId)).asData?.value ?? false
+        : false;
+    return buildMediaContextMenuItems(
+      ref,
+      widget.item,
+      liked: liked,
+      wishlisted: wishlisted,
     );
+  }
+
+  Future<void> _openContextMenu() async {
+    final items = _contextMenuItems();
+    if (items.isEmpty) return;
+    setState(() => _contextMenuOpen = true);
+    try {
+      await showWarpContextMenu(
+        context,
+        items: items,
+        restoreFocusNode: widget.focusNode,
+        centerInViewport: true,
+      );
+    } finally {
+      if (mounted) setState(() => _contextMenuOpen = false);
+    }
   }
 
   // Mirrors useTmdbEnrichment.ts fallback order:
@@ -90,7 +117,7 @@ class _PosterCardState extends ConsumerState<PosterCard> {
     final t = widget.tokens;
     final imgW = widget.cardWidth ?? t.posterWidth;
     final imgH = widget.cardHeight ?? t.posterHeight;
-    final showRing = _focused;
+    final showRing = _focused || _contextMenuOpen;
     final title = widget.item.title.isNotEmpty
         ? widget.item.title
         : (widget.item.media.title.isNotEmpty
@@ -144,9 +171,7 @@ class _PosterCardState extends ConsumerState<PosterCard> {
         onFocusChange: (v) => setState(() => _focused = v),
         onDirection: widget.onDirection,
         onSelect: widget.onTap,
-        onLongSelect: widget.contextMenuBuilder == null
-            ? null
-            : _openContextMenu,
+        onLongSelect: _openContextMenu,
         tapToSelect: false,
         child: GestureDetector(
           onTap: () {
@@ -154,12 +179,8 @@ class _PosterCardState extends ConsumerState<PosterCard> {
             widget.onTap();
           },
           onDoubleTap: widget.onDoubleTap,
-          onLongPress: widget.contextMenuBuilder == null
-              ? null
-              : _openContextMenu,
-          onSecondaryTap: widget.contextMenuBuilder == null
-              ? null
-              : _openContextMenu,
+          onLongPress: _openContextMenu,
+          onSecondaryTap: _openContextMenu,
           child: AnimatedScale(
             scale: _hovered ? 1.05 : 1.0,
             duration: const Duration(milliseconds: 150),

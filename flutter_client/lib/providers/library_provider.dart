@@ -4,8 +4,21 @@ import '../api/api_client.dart';
 import '../models/collection.dart';
 import '../models/library.dart';
 import '../models/media.dart';
+import 'catalog_provider.dart';
 
 part 'library_provider.g.dart';
+
+final collectionMutationVersionProvider =
+    NotifierProvider<CollectionMutationVersionNotifier, int>(
+      CollectionMutationVersionNotifier.new,
+    );
+
+class CollectionMutationVersionNotifier extends Notifier<int> {
+  @override
+  int build() => 0;
+
+  void bump() => state++;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Library list providers
@@ -16,7 +29,12 @@ Future<LibraryListResponse> libraryMovies(Ref ref) async {
   final client = ref.watch(apiClientProvider);
   final raw = await client.get<Map<String, dynamic>>(
     '/api/v1/library/movies',
-    params: {'limit': 30, 'sort': 'added_at', 'order': 'desc', 'local_only': 'true'},
+    params: {
+      'limit': 30,
+      'sort': 'added_at',
+      'order': 'desc',
+      'local_only': 'true',
+    },
   );
   return LibraryListResponse.fromJson(raw);
 }
@@ -26,7 +44,12 @@ Future<LibraryListResponse> libraryShows(Ref ref) async {
   final client = ref.watch(apiClientProvider);
   final raw = await client.get<Map<String, dynamic>>(
     '/api/v1/library/shows',
-    params: {'limit': 30, 'sort': 'added_at', 'order': 'desc', 'local_only': 'true'},
+    params: {
+      'limit': 30,
+      'sort': 'added_at',
+      'order': 'desc',
+      'local_only': 'true',
+    },
   );
   return LibraryListResponse.fromJson(raw);
 }
@@ -36,7 +59,12 @@ Future<LibraryListResponse> libraryMoviesAz(Ref ref) async {
   final client = ref.watch(apiClientProvider);
   final raw = await client.get<Map<String, dynamic>>(
     '/api/v1/library/movies',
-    params: {'limit': 30, 'sort': 'title', 'order': 'asc', 'local_only': 'true'},
+    params: {
+      'limit': 30,
+      'sort': 'title',
+      'order': 'asc',
+      'local_only': 'true',
+    },
   );
   return LibraryListResponse.fromJson(raw);
 }
@@ -46,7 +74,12 @@ Future<LibraryListResponse> libraryShowsAz(Ref ref) async {
   final client = ref.watch(apiClientProvider);
   final raw = await client.get<Map<String, dynamic>>(
     '/api/v1/library/shows',
-    params: {'limit': 30, 'sort': 'title', 'order': 'asc', 'local_only': 'true'},
+    params: {
+      'limit': 30,
+      'sort': 'title',
+      'order': 'asc',
+      'local_only': 'true',
+    },
   );
   return LibraryListResponse.fromJson(raw);
 }
@@ -99,15 +132,19 @@ Future<void> toggleLiked(WidgetRef ref, MediaItem item) async {
   final tmdbId = item.tmdbId;
   if (tmdbId == null || tmdbId.isEmpty) return;
   final client = ref.read(apiClientProvider);
-  final currentlyLiked = ref.read(isLikedProvider(tmdbId)).asData?.value ?? false;
+  final currentlyLiked =
+      ref.read(isLikedProvider(tmdbId)).asData?.value ?? false;
   try {
     if (currentlyLiked) {
       await client.delete('/api/v1/collections/liked/$tmdbId');
     } else {
-      await client.post<void>('/api/v1/collections/liked', body: _collectionPayload(item, tmdbId));
+      await client.post<void>(
+        '/api/v1/collections/liked',
+        body: _collectionPayload(item, tmdbId),
+      );
     }
   } finally {
-    ref.invalidate(isLikedProvider(tmdbId));
+    _refreshCollectionSurfaces(ref, tmdbId);
   }
 }
 
@@ -115,16 +152,29 @@ Future<void> toggleWishlisted(WidgetRef ref, MediaItem item) async {
   final tmdbId = item.tmdbId;
   if (tmdbId == null || tmdbId.isEmpty) return;
   final client = ref.read(apiClientProvider);
-  final currentlyWishlisted = ref.read(isWishlistedProvider(tmdbId)).asData?.value ?? false;
+  final currentlyWishlisted =
+      ref.read(isWishlistedProvider(tmdbId)).asData?.value ?? false;
   try {
     if (currentlyWishlisted) {
       await client.delete('/api/v1/collections/wishlist/$tmdbId');
     } else {
-      await client.post<void>('/api/v1/collections/wishlist', body: _collectionPayload(item, tmdbId));
+      await client.post<void>(
+        '/api/v1/collections/wishlist',
+        body: _collectionPayload(item, tmdbId),
+      );
     }
   } finally {
-    ref.invalidate(isWishlistedProvider(tmdbId));
+    _refreshCollectionSurfaces(ref, tmdbId);
   }
+}
+
+void _refreshCollectionSurfaces(WidgetRef ref, String tmdbId) {
+  ref.read(collectionMutationVersionProvider.notifier).bump();
+  ref.invalidate(isLikedProvider(tmdbId));
+  ref.invalidate(isWishlistedProvider(tmdbId));
+  ref.invalidate(collectionProvider('liked'));
+  ref.invalidate(collectionProvider('wishlist'));
+  ref.invalidate(catalogDataProvider);
 }
 
 Map<String, dynamic> _collectionPayload(MediaItem item, String tmdbId) => {
@@ -145,7 +195,9 @@ Map<String, dynamic> _collectionPayload(MediaItem item, String tmdbId) => {
 @riverpod
 Future<ScanStatusResponse> scanStatus(Ref ref) async {
   final client = ref.watch(apiClientProvider);
-  final raw = await client.get<Map<String, dynamic>>('/api/v1/settings/library/scan/status');
+  final raw = await client.get<Map<String, dynamic>>(
+    '/api/v1/settings/library/scan/status',
+  );
   return ScanStatusResponse.fromJson(raw);
 }
 

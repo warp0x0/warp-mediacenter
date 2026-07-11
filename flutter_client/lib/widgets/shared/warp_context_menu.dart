@@ -24,6 +24,7 @@ Future<void> showWarpContextMenu(
   required List<WarpContextMenuItem> items,
   FocusNode? restoreFocusNode,
   Offset? anchor,
+  bool centerInViewport = false,
 }) async {
   if (items.isEmpty) return;
   final focusToRestore = restoreFocusNode ?? FocusManager.instance.primaryFocus;
@@ -35,8 +36,11 @@ Future<void> showWarpContextMenu(
     barrierDismissible: true,
     barrierColor: Colors.black.withAlpha(90),
     transitionDuration: const Duration(milliseconds: 120),
-    pageBuilder: (dialogContext, _, _) =>
-        _WarpContextMenuOverlay(items: items, anchor: resolvedAnchor),
+    pageBuilder: (dialogContext, _, _) => _WarpContextMenuOverlay(
+      items: items,
+      anchor: resolvedAnchor,
+      centerInViewport: centerInViewport,
+    ),
     transitionBuilder: (_, animation, _, child) => FadeTransition(
       opacity: CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
       child: ScaleTransition(
@@ -62,10 +66,15 @@ Offset? _anchorForFocusNode(FocusNode? node) {
 }
 
 class _WarpContextMenuOverlay extends StatefulWidget {
-  const _WarpContextMenuOverlay({required this.items, required this.anchor});
+  const _WarpContextMenuOverlay({
+    required this.items,
+    required this.anchor,
+    required this.centerInViewport,
+  });
 
   final List<WarpContextMenuItem> items;
   final Offset? anchor;
+  final bool centerInViewport;
 
   @override
   State<_WarpContextMenuOverlay> createState() =>
@@ -120,17 +129,18 @@ class _WarpContextMenuOverlayState extends State<_WarpContextMenuOverlay> {
   Widget build(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
     final tokens = WarpTokens(UiDensity.desktop, size);
-    const menuWidth = 220.0;
+    final menuWidth = widget.centerInViewport ? 320.0 : 220.0;
     final estimatedHeight = (widget.items.length * 44.0 + 18).clamp(
       72.0,
       320.0,
     );
     final anchor = widget.anchor ?? size.center(Offset.zero);
-    final left = (anchor.dx - 12).clamp(16.0, size.width - menuWidth - 16);
-    final top = (anchor.dy + 12).clamp(
-      16.0,
-      size.height - estimatedHeight - 16,
-    );
+    final left = widget.centerInViewport
+        ? (size.width - menuWidth) / 2
+        : (anchor.dx - 12).clamp(16.0, size.width - menuWidth - 16);
+    final top = widget.centerInViewport
+        ? (size.height - estimatedHeight) / 2
+        : (anchor.dy + 12).clamp(16.0, size.height - estimatedHeight - 16);
 
     return CallbackShortcuts(
       bindings: {
@@ -138,69 +148,74 @@ class _WarpContextMenuOverlayState extends State<_WarpContextMenuOverlay> {
         const SingleActivator(LogicalKeyboardKey.goBack): _close,
         const SingleActivator(LogicalKeyboardKey.browserBack): _close,
       },
-      child: DpadRegion(
-        memoryKey: 'warp-context-menu-$hashCode',
-        horizontalEdge: DpadEdgeBehavior.stop,
-        verticalEdge: DpadEdgeBehavior.stop,
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: _close,
-          child: Material(
-            type: MaterialType.transparency,
-            child: Stack(
-              children: [
-                Positioned(
-                  left: left,
-                  top: top,
-                  width: menuWidth,
-                  child: GestureDetector(
-                    onTap: () {},
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: const Color(0xF20C0C12),
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: Colors.white.withAlpha(28)),
-                        boxShadow: const [
-                          BoxShadow(
-                            color: Colors.black87,
-                            blurRadius: 30,
-                            offset: Offset(0, 16),
-                          ),
-                        ],
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: _close,
+        child: Material(
+          type: MaterialType.transparency,
+          child: Stack(
+            children: [
+              Positioned(
+                left: left,
+                top: top,
+                width: menuWidth,
+                child: GestureDetector(
+                  onTap: () {},
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: widget.centerInViewport
+                          ? const Color(0xFF1C1C1C)
+                          : const Color(0xF20C0C12),
+                      borderRadius: BorderRadius.circular(
+                        widget.centerInViewport ? 12 : 14,
                       ),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 6),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            SizedBox(
-                              width: 1,
-                              height: 1,
-                              child: DpadFocusable(
-                                effects: const [],
-                                focusNode: _sentinelFocus,
-                                autofocus: true,
-                                entry: true,
-                                onDirection: _sentinelDirection,
-                                onSelect: () {},
-                                child: const SizedBox.shrink(),
-                              ),
-                            ),
-                            for (var i = 0; i < widget.items.length; i++)
-                              _ContextMenuRow(
-                                item: widget.items[i],
-                                focusNode: _itemFocusNodes[i],
-                                tokens: tokens,
-                                onSelect: () => _select(widget.items[i]),
-                              ),
-                          ],
+                      border: Border.all(
+                        color: Colors.white.withAlpha(
+                          widget.centerInViewport ? 25 : 28,
                         ),
+                      ),
+                      boxShadow: widget.centerInViewport
+                          ? null
+                          : const [
+                              BoxShadow(
+                                color: Colors.black87,
+                                blurRadius: 30,
+                                offset: Offset(0, 16),
+                              ),
+                            ],
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 6),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          SizedBox(
+                            width: 1,
+                            height: 1,
+                            child: DpadFocusable(
+                              effects: const [],
+                              focusNode: _sentinelFocus,
+                              autofocus: true,
+                              entry: true,
+                              onDirection: _sentinelDirection,
+                              onSelect: () {},
+                              child: const SizedBox.shrink(),
+                            ),
+                          ),
+                          for (var i = 0; i < widget.items.length; i++)
+                            _ContextMenuRow(
+                              item: widget.items[i],
+                              focusNode: _itemFocusNodes[i],
+                              tokens: tokens,
+                              onSelect: () => _select(widget.items[i]),
+                            ),
+                        ],
                       ),
                     ),
                   ),
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
       ),

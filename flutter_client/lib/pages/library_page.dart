@@ -6,6 +6,8 @@ import 'package:go_router/go_router.dart';
 import '../api/api_client.dart';
 import '../models/collection.dart';
 import '../models/media.dart';
+import '../navigation/catalog_browse_route_extra.dart';
+import '../navigation/detail_route_extra.dart';
 import '../navigation/row_first_card_registry.dart';
 import '../navigation/tab_bar_focus_registry.dart';
 import '../providers/catalog_provider.dart';
@@ -942,6 +944,10 @@ class _CollectionTabState extends ConsumerState<_CollectionTab> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<int>(collectionMutationVersionProvider, (previous, next) {
+      if (previous != null && previous != next) _fetch(reset: true);
+    });
+
     final t = WarpTokens.watch(context, ref);
     final size = MediaQuery.sizeOf(context);
     final hPad = (size.width * 0.02).clamp(24.0, 48.0);
@@ -1039,11 +1045,21 @@ class _CollectionTabState extends ConsumerState<_CollectionTab> {
                   onDirection: (d) => _cardDirection(i, cols, hasMore, d),
                   onTap: () => context.push(
                     '/detail/${item.type}/${item.tmdbId ?? item.id}',
-                    extra: item,
+                    extra: DetailRouteExtra(
+                      item: item,
+                      returnFocusNode: i < _cardFocusNodes.length
+                          ? _cardFocusNodes[i]
+                          : null,
+                    ),
                   ),
                   onDoubleTap: () => context.push(
                     '/detail/${item.type}/${item.tmdbId ?? item.id}',
-                    extra: item,
+                    extra: DetailRouteExtra(
+                      item: item,
+                      returnFocusNode: i < _cardFocusNodes.length
+                          ? _cardFocusNodes[i]
+                          : null,
+                    ),
                   ),
                 );
               }, childCount: _items.length),
@@ -1624,6 +1640,9 @@ class _DiscoverRibbonState extends ConsumerState<_DiscoverRibbon> {
                     onDirection: _seeMoreDirection,
                     onTap: () => context.push(
                       '/catalog/${widget.provider}/${widget.category}?type=${widget.mediaType}&title=${Uri.encodeComponent(widget.label)}',
+                      extra: CatalogBrowseRouteExtra(
+                        returnFocusNode: _seeMoreFocusNode,
+                      ),
                     ),
                   ),
                 ],
@@ -1666,11 +1685,21 @@ class _DiscoverRibbonState extends ConsumerState<_DiscoverRibbon> {
                         onDirection: (d) => _cardDirection(i, d),
                         onTap: () => context.push(
                           '/detail/${item.type}/${item.tmdbId ?? item.id}',
-                          extra: item,
+                          extra: DetailRouteExtra(
+                            item: item,
+                            returnFocusNode: i < _focusNodes.length
+                                ? _focusNodes[i]
+                                : null,
+                          ),
                         ),
                         onDoubleTap: () => context.push(
                           '/detail/${item.type}/${item.tmdbId ?? item.id}',
-                          extra: item,
+                          extra: DetailRouteExtra(
+                            item: item,
+                            returnFocusNode: i < _focusNodes.length
+                                ? _focusNodes[i]
+                                : null,
+                          ),
                         ),
                       );
                     },
@@ -1938,8 +1967,11 @@ class _LocalTabState extends ConsumerState<_LocalTab> {
                           scanFocusNode: widget.scanFocusNode,
                           onScanReturn: (node) => _scanReturnNode = node,
                           onDirection: _ribbonDirection,
-                          onSeeMore: () => context.push(
+                          onSeeMore: (returnFocusNode) => context.push(
                             '/catalog/local/recent?type=${widget.mediaType.name}&title=${Uri.encodeComponent('Recently Added')}',
+                            extra: CatalogBrowseRouteExtra(
+                              returnFocusNode: returnFocusNode,
+                            ),
                           ),
                         ),
                         _LocalRibbon(
@@ -1955,8 +1987,11 @@ class _LocalTabState extends ConsumerState<_LocalTab> {
                           scanFocusNode: widget.scanFocusNode,
                           onScanReturn: (node) => _scanReturnNode = node,
                           onDirection: _ribbonDirection,
-                          onSeeMore: () => context.push(
+                          onSeeMore: (returnFocusNode) => context.push(
                             '/catalog/local/az?type=${widget.mediaType.name}&title=${Uri.encodeComponent('Names A-Z')}',
+                            extra: CatalogBrowseRouteExtra(
+                              returnFocusNode: returnFocusNode,
+                            ),
                           ),
                         ),
                         // Empty state — shown only when both ribbons have finished loading with no content
@@ -2019,7 +2054,7 @@ class _LocalRibbon extends StatefulWidget {
   final FocusNode scanFocusNode;
   final void Function(FocusNode node) onScanReturn;
   final bool Function(int rowIndex, TraversalDirection direction) onDirection;
-  final VoidCallback onSeeMore;
+  final void Function(FocusNode returnFocusNode) onSeeMore;
 
   const _LocalRibbon({
     required this.label,
@@ -2172,7 +2207,7 @@ class _LocalRibbonState extends State<_LocalRibbon> {
                     t: widget.t,
                     focusNode: _seeMoreFocusNode,
                     onDirection: _seeMoreDirection,
-                    onTap: widget.onSeeMore,
+                    onTap: () => widget.onSeeMore(_seeMoreFocusNode),
                   ),
               ],
             ),
@@ -2226,11 +2261,21 @@ class _LocalRibbonState extends State<_LocalRibbon> {
                         onDirection: (d) => _cardDirection(i, d),
                         onTap: () => context.push(
                           '/detail/${item.type}/${item.tmdbId ?? item.id}',
-                          extra: item,
+                          extra: DetailRouteExtra(
+                            item: item,
+                            returnFocusNode: i < _focusNodes.length
+                                ? _focusNodes[i]
+                                : null,
+                          ),
                         ),
                         onDoubleTap: () => context.push(
                           '/detail/${item.type}/${item.tmdbId ?? item.id}',
-                          extra: item,
+                          extra: DetailRouteExtra(
+                            item: item,
+                            returnFocusNode: i < _focusNodes.length
+                                ? _focusNodes[i]
+                                : null,
+                          ),
                         ),
                       );
                     },

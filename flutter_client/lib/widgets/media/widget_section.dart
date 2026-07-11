@@ -5,8 +5,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../api/catalog_constants.dart';
 import '../../models/media.dart';
+import '../../navigation/catalog_browse_route_extra.dart';
 import '../../navigation/row_first_card_registry.dart';
 import '../../navigation/tab_bar_focus_registry.dart';
+import '../../navigation/detail_route_extra.dart';
 import '../../providers/detail_provider.dart';
 import '../../theme/warp_theme.dart';
 import '../../theme/warp_tokens.dart';
@@ -77,12 +79,15 @@ class _WidgetSectionState extends ConsumerState<WidgetSection> {
   // point when a trailer is available (_hasTrailer, kept in sync from
   // build()); otherwise More Info/Resume is. See More is registered
   // separately and only mounted when provider+category are set.
-  late final FocusNode _playTrailerFocusNode =
-      FocusNode(debugLabel: 'PlayTrailer-row${widget.rowIndex}');
-  late final FocusNode _moreInfoFocusNode =
-      FocusNode(debugLabel: 'MoreInfo-row${widget.rowIndex}');
-  late final FocusNode _seeMoreFocusNode =
-      FocusNode(debugLabel: 'SeeMore-row${widget.rowIndex}');
+  late final FocusNode _playTrailerFocusNode = FocusNode(
+    debugLabel: 'PlayTrailer-row${widget.rowIndex}',
+  );
+  late final FocusNode _moreInfoFocusNode = FocusNode(
+    debugLabel: 'MoreInfo-row${widget.rowIndex}',
+  );
+  late final FocusNode _seeMoreFocusNode = FocusNode(
+    debugLabel: 'SeeMore-row${widget.rowIndex}',
+  );
   bool _hasTrailer = false;
 
   FocusNode get _heroEntryFocusNode =>
@@ -167,7 +172,9 @@ class _WidgetSectionState extends ConsumerState<WidgetSection> {
     }
     if (d == TraversalDirection.up) {
       if (widget.rowIndex == 0) {
-        final tab = ref.read(tabBarFocusRegistryProvider).forRoute(widget.ownRoute);
+        final tab = ref
+            .read(tabBarFocusRegistryProvider)
+            .forRoute(widget.ownRoute);
         if (tab != null) {
           Dpad.of(context).requestFocus(tab);
           return true;
@@ -251,7 +258,9 @@ class _WidgetSectionState extends ConsumerState<WidgetSection> {
   void didUpdateWidget(WidgetSection old) {
     super.didUpdateWidget(old);
     if (old.items.length != widget.items.length) {
-      for (final fn in _focusNodes) { fn.dispose(); }
+      for (final fn in _focusNodes) {
+        fn.dispose();
+      }
       _selectedIdx = 0;
       _rebuildFocusNodes();
       _registerFirstCard();
@@ -267,7 +276,9 @@ class _WidgetSectionState extends ConsumerState<WidgetSection> {
     _playTrailerFocusNode.dispose();
     _moreInfoFocusNode.dispose();
     _seeMoreFocusNode.dispose();
-    for (final fn in _focusNodes) { fn.dispose(); }
+    for (final fn in _focusNodes) {
+      fn.dispose();
+    }
     super.dispose();
   }
 
@@ -327,11 +338,13 @@ class _WidgetSectionState extends ConsumerState<WidgetSection> {
         children: [
           // ── Content (hero + ribbon) — bottom-anchored ─────────────────────
           Positioned(
-            left: 0, right: 0, bottom: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
             child: Padding(
               padding: EdgeInsets.only(
-                left:   (size.width * 0.045).clamp(45.0, 90.0),
-                right:  (size.width * 0.045).clamp(45.0, 90.0),
+                left: (size.width * 0.045).clamp(45.0, 90.0),
+                right: (size.width * 0.045).clamp(45.0, 90.0),
                 bottom: (size.height * 0.025).clamp(20.0, 36.0),
               ),
               child: Column(
@@ -368,11 +381,20 @@ class _WidgetSectionState extends ConsumerState<WidgetSection> {
                             moreInfoFocusNode: _moreInfoFocusNode,
                             onDirection: _heroDirection,
                             onPlayTrailer: firstTrailer != null
-                                ? () => _openTrailer(firstTrailer.url, selected.title)
+                                ? () => _openTrailer(
+                                    firstTrailer.url,
+                                    selected.title,
+                                  )
                                 : null,
                             onMoreInfo: () => context.push(
                               '/detail/${selected.type}/${selected.tmdbId ?? selected.id}',
-                              extra: selected,
+                              extra: DetailRouteExtra(
+                                item: selected,
+                                returnFocusNode:
+                                    _selectedIdx < _focusNodes.length
+                                    ? _focusNodes[_selectedIdx]
+                                    : _moreInfoFocusNode,
+                              ),
                             ),
                           ),
                         ),
@@ -407,9 +429,14 @@ class _WidgetSectionState extends ConsumerState<WidgetSection> {
                       tokens: t,
                       onSelect: _selectItem,
                       onDirection: _ribbonDirection,
-                      onNavigate: (item) => context.push(
+                      onNavigate: (item, index) => context.push(
                         '/detail/${item.type}/${item.tmdbId ?? item.id}',
-                        extra: item,
+                        extra: DetailRouteExtra(
+                          item: item,
+                          returnFocusNode: index < _focusNodes.length
+                              ? _focusNodes[index]
+                              : null,
+                        ),
                       ),
                     ),
                   ),
@@ -417,7 +444,6 @@ class _WidgetSectionState extends ConsumerState<WidgetSection> {
               ),
             ),
           ),
-
         ],
       ),
     );
@@ -428,7 +454,10 @@ class _WidgetSectionState extends ConsumerState<WidgetSection> {
     child: const ColoredBox(
       color: Color(0xFF181818),
       child: Center(
-        child: CircularProgressIndicator(color: Color(0xFF0DB2E2), strokeWidth: 2),
+        child: CircularProgressIndicator(
+          color: Color(0xFF0DB2E2),
+          strokeWidth: 2,
+        ),
       ),
     ),
   );
@@ -440,7 +469,10 @@ class _WidgetSectionState extends ConsumerState<WidgetSection> {
       child: Center(
         child: Text(
           'No items available',
-          style: TextStyle(color: const Color(0xFF8A8A8A), fontSize: t.fontBody),
+          style: TextStyle(
+            color: const Color(0xFF8A8A8A),
+            fontSize: t.fontBody,
+          ),
         ),
       ),
     ),
@@ -514,7 +546,13 @@ class _HeroInfo extends StatelessWidget {
             color: Colors.white,
             height: 1.1,
             letterSpacing: -0.5,
-            shadows: const [Shadow(color: Color(0xCC000000), blurRadius: 12, offset: Offset(2, 4))],
+            shadows: const [
+              Shadow(
+                color: Color(0xCC000000),
+                blurRadius: 12,
+                offset: Offset(2, 4),
+              ),
+            ],
           ),
         ),
         SizedBox(height: sectionGap),
@@ -534,7 +572,13 @@ class _HeroInfo extends StatelessWidget {
                   fontWeight: FontWeight.w400,
                   color: Colors.white.withAlpha(230), // white/90
                   height: 1.6,
-                  shadows: const [Shadow(color: Color(0xE6000000), blurRadius: 8, offset: Offset(1, 2))],
+                  shadows: const [
+                    Shadow(
+                      color: Color(0xE6000000),
+                      blurRadius: 8,
+                      offset: Offset(1, 2),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -590,7 +634,8 @@ class _HeroInfo extends StatelessWidget {
                 onDirection: onDirection,
                 onSelect: onPlayTrailer!,
               ),
-            if (onPlayTrailer != null) SizedBox(width: (w * 0.01).clamp(12.0, 20.0)),
+            if (onPlayTrailer != null)
+              SizedBox(width: (w * 0.01).clamp(12.0, 20.0)),
 
             // More Info / Resume — dark bg, cyan border unfocused; focused
             // reveals amber (Resume) or cyan (More Info).
@@ -738,8 +783,11 @@ class _SectionHeader extends StatelessWidget {
           onDirection: onDirection,
           onTap: (provider != null && category != null)
               ? () => context.push(
-                    '/catalog/$provider/$category?type=$mediaType&title=${Uri.encodeComponent(title)}',
-                  )
+                  '/catalog/$provider/$category?type=$mediaType&title=${Uri.encodeComponent(title)}',
+                  extra: CatalogBrowseRouteExtra(
+                    returnFocusNode: seeMoreFocusNode,
+                  ),
+                )
               : null,
         ),
       ],
@@ -837,7 +885,7 @@ class _PosterRibbon extends StatefulWidget {
   final ScrollController scrollController;
   final WarpTokens tokens;
   final void Function(int idx) onSelect;
-  final void Function(MediaItem item) onNavigate;
+  final void Function(MediaItem item, int index) onNavigate;
   final bool Function(int cardIdx, TraversalDirection d) onDirection;
 
   const _PosterRibbon({
@@ -896,23 +944,31 @@ class _PosterRibbonState extends State<_PosterRibbon> {
           children: [
             Positioned.fill(
               child: ScrollConfiguration(
-                behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
+                behavior: ScrollConfiguration.of(
+                  context,
+                ).copyWith(scrollbars: false),
                 child: ListView.separated(
                   controller: widget.scrollController,
                   scrollDirection: Axis.horizontal,
                   // Extra vertical padding matches the headroom above
-                  padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 4),
+                  padding: const EdgeInsets.symmetric(
+                    vertical: 16,
+                    horizontal: 4,
+                  ),
                   itemCount: widget.items.length,
-                  separatorBuilder: (context, i) => SizedBox(width: widget.tokens.cardGap),
+                  separatorBuilder: (context, i) =>
+                      SizedBox(width: widget.tokens.cardGap),
                   itemBuilder: (_, i) => WidgetRibbonCard(
                     item: widget.items[i],
                     isSelected: widget.selectedIdx == i,
                     tokens: widget.tokens,
-                    focusNode: i < widget.focusNodes.length ? widget.focusNodes[i] : null,
+                    focusNode: i < widget.focusNodes.length
+                        ? widget.focusNodes[i]
+                        : null,
                     entry: i == 0,
                     onDirection: (d) => widget.onDirection(i, d),
                     onTap: () => widget.onSelect(i),
-                    onDoubleTap: () => widget.onNavigate(widget.items[i]),
+                    onDoubleTap: () => widget.onNavigate(widget.items[i], i),
                   ),
                 ),
               ),
@@ -920,14 +976,19 @@ class _PosterRibbonState extends State<_PosterRibbon> {
 
             // Left chevron — 400px scroll, visible on hover
             Positioned(
-              left: 4, top: 0, bottom: 0,
+              left: 4,
+              top: 0,
+              bottom: 0,
               child: Center(
                 child: AbsorbPointer(
                   absorbing: !_hovered,
                   child: AnimatedOpacity(
                     opacity: _hovered ? 1.0 : 0.0,
                     duration: const Duration(milliseconds: 200),
-                    child: _ChevronBtn(icon: Icons.chevron_left, onTap: _scrollLeft),
+                    child: _ChevronBtn(
+                      icon: Icons.chevron_left,
+                      onTap: _scrollLeft,
+                    ),
                   ),
                 ),
               ),
@@ -935,14 +996,19 @@ class _PosterRibbonState extends State<_PosterRibbon> {
 
             // Right chevron — 400px scroll, visible on hover
             Positioned(
-              right: 4, top: 0, bottom: 0,
+              right: 4,
+              top: 0,
+              bottom: 0,
               child: Center(
                 child: AbsorbPointer(
                   absorbing: !_hovered,
                   child: AnimatedOpacity(
                     opacity: _hovered ? 1.0 : 0.0,
                     duration: const Duration(milliseconds: 200),
-                    child: _ChevronBtn(icon: Icons.chevron_right, onTap: _scrollRight),
+                    child: _ChevronBtn(
+                      icon: Icons.chevron_right,
+                      onTap: _scrollRight,
+                    ),
                   ),
                 ),
               ),
@@ -980,7 +1046,11 @@ class _ChevronBtnState extends State<_ChevronBtn> {
             color: Colors.black.withAlpha(_hovered ? 210 : 128),
             shape: BoxShape.circle,
             boxShadow: const [
-              BoxShadow(color: Color(0x66000000), blurRadius: 8, offset: Offset(0, 2)),
+              BoxShadow(
+                color: Color(0x66000000),
+                blurRadius: 8,
+                offset: Offset(0, 2),
+              ),
             ],
           ),
           child: Icon(widget.icon, color: Colors.white, size: 50),

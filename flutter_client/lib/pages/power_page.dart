@@ -26,10 +26,13 @@ class PowerPage extends ConsumerStatefulWidget {
   ConsumerState<PowerPage> createState() => _PowerPageState();
 }
 
-class _PowerPageState extends ConsumerState<PowerPage> {
+class _PowerPageState extends ConsumerState<PowerPage>
+    with WidgetsBindingObserver {
   final _sessionStart = DateTime.now();
   Timer? _uptimeTimer;
   Duration _uptime = Duration.zero;
+  FocusNode? _lastPowerFocus;
+  bool _appActive = true;
 
   bool _apiRunning = false;
   bool _apiChecking = true;
@@ -52,12 +55,16 @@ class _PowerPageState extends ConsumerState<PowerPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    FocusManager.instance.addListener(_rememberPowerFocus);
     // Clear backdrop — Power page uses an opaque dark background
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) ref.read(backdropProvider.notifier).clear();
     });
     _uptimeTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted) setState(() => _uptime = DateTime.now().difference(_sessionStart));
+      if (mounted) {
+        setState(() => _uptime = DateTime.now().difference(_sessionStart));
+      }
     });
     _checkHealth();
     _healthTimer = Timer.periodic(const Duration(seconds: 15), (_) {
@@ -69,9 +76,46 @@ class _PowerPageState extends ConsumerState<PowerPage> {
 
   @override
   void dispose() {
+    FocusManager.instance.removeListener(_rememberPowerFocus);
+    WidgetsBinding.instance.removeObserver(this);
     _uptimeTimer?.cancel();
     _healthTimer?.cancel();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _appActive = state == AppLifecycleState.resumed;
+    if (_appActive) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final node = _lastPowerFocus;
+        if (mounted && node?.context != null) node?.requestFocus();
+      });
+    }
+  }
+
+  void _rememberPowerFocus() {
+    if (!_appActive || !mounted) {
+      return;
+    }
+    final node = FocusManager.instance.primaryFocus;
+    final nodeContext = node?.context;
+    if (node == null || node is FocusScopeNode || nodeContext == null) {
+      return;
+    }
+    final pageBox = context.findRenderObject();
+    final focusBox = nodeContext.findRenderObject();
+    if (pageBox == null || focusBox == null) {
+      return;
+    }
+    var current = focusBox.parent;
+    while (current != null) {
+      if (identical(current, pageBox)) {
+        _lastPowerFocus = node;
+        return;
+      }
+      current = current.parent;
+    }
   }
 
   Future<void> _checkHealth() async {
@@ -85,7 +129,12 @@ class _PowerPageState extends ConsumerState<PowerPage> {
         });
       }
     } catch (_) {
-      if (mounted) setState(() { _apiRunning = false; _apiChecking = false; });
+      if (mounted) {
+        setState(() {
+          _apiRunning = false;
+          _apiChecking = false;
+        });
+      }
     }
   }
 
@@ -116,12 +165,20 @@ class _PowerPageState extends ConsumerState<PowerPage> {
       );
       if (mounted) {
         setState(() {
-          _torrentRunning = resp.statusCode != null && resp.statusCode! >= 200 && resp.statusCode! < 300;
+          _torrentRunning =
+              resp.statusCode != null &&
+              resp.statusCode! >= 200 &&
+              resp.statusCode! < 300;
           _torrentChecking = false;
         });
       }
     } catch (_) {
-      if (mounted) setState(() { _torrentRunning = false; _torrentChecking = false; });
+      if (mounted) {
+        setState(() {
+          _torrentRunning = false;
+          _torrentChecking = false;
+        });
+      }
     }
   }
 
@@ -137,9 +194,9 @@ class _PowerPageState extends ConsumerState<PowerPage> {
     final uri = Uri.parse('$baseUrl/docs');
     if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Could not open browser')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Could not open browser')));
       }
     }
   }
@@ -247,9 +304,16 @@ class _HeaderCard extends StatelessWidget {
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               color: const Color(0xFF0DB2E2).withAlpha(30),
-              border: Border.all(color: const Color(0xFF0DB2E2).withAlpha(80), width: 1),
+              border: Border.all(
+                color: const Color(0xFF0DB2E2).withAlpha(80),
+                width: 1,
+              ),
             ),
-            child: const Icon(Icons.power_settings_new, color: Color(0xFF0DB2E2), size: 28),
+            child: const Icon(
+              Icons.power_settings_new,
+              color: Color(0xFF0DB2E2),
+              size: 28,
+            ),
           ),
           const SizedBox(width: 20),
           Expanded(
@@ -285,7 +349,9 @@ class _HeaderCard extends StatelessWidget {
                     : Icon(
                         Icons.circle,
                         size: 8,
-                        color: apiRunning ? const Color(0xFF4ADE80) : Colors.red,
+                        color: apiRunning
+                            ? const Color(0xFF4ADE80)
+                            : Colors.red,
                       ),
                 label: apiChecking ? '…' : (apiRunning ? 'Running' : 'Offline'),
                 sublabel: 'API Server',
@@ -419,7 +485,9 @@ class _ServerStatusCard extends StatelessWidget {
           _StatusRow(
             name: 'API Server',
             detail: baseUrl,
-            status: apiChecking ? 'Checking…' : (apiRunning ? 'Running' : 'Offline'),
+            status: apiChecking
+                ? 'Checking…'
+                : (apiRunning ? 'Running' : 'Offline'),
             statusColor: apiChecking
                 ? Colors.white38
                 : (apiRunning ? const Color(0xFF4ADE80) : Colors.red),
@@ -434,7 +502,9 @@ class _ServerStatusCard extends StatelessWidget {
           _StatusRow(
             name: 'Torrent-API-Py',
             detail: 'Sub-process',
-            status: torrentChecking ? 'Checking…' : (torrentRunning ? 'Healthy' : 'Offline'),
+            status: torrentChecking
+                ? 'Checking…'
+                : (torrentRunning ? 'Healthy' : 'Offline'),
             statusColor: torrentChecking
                 ? Colors.white38
                 : (torrentRunning ? const Color(0xFF4ADE80) : Colors.red),
@@ -486,7 +556,10 @@ class _StatusRow extends StatelessWidget {
               ),
               Text(
                 detail,
-                style: TextStyle(color: Colors.white38, fontSize: t.fontSubtitle),
+                style: TextStyle(
+                  color: Colors.white38,
+                  fontSize: t.fontSubtitle,
+                ),
               ),
             ],
           ),
@@ -539,7 +612,11 @@ class _SystemInfoCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _CardHeader(icon: Icons.info_outline, label: 'SYSTEM INFORMATION', t: t),
+          _CardHeader(
+            icon: Icons.info_outline,
+            label: 'SYSTEM INFORMATION',
+            t: t,
+          ),
           const SizedBox(height: 16),
           _InfoRow(label: 'API Server', value: baseUrl, t: t),
           const SizedBox(height: 10),
@@ -562,7 +639,12 @@ class _SystemInfoCard extends StatelessWidget {
           const SizedBox(height: 10),
           const _Divider(),
           const SizedBox(height: 10),
-          _InfoRow(label: 'Session uptime', value: uptime, monospace: true, t: t),
+          _InfoRow(
+            label: 'Session uptime',
+            value: uptime,
+            monospace: true,
+            t: t,
+          ),
         ],
       ),
     );
@@ -602,7 +684,9 @@ class _InfoRow extends StatelessWidget {
               color: valueColor ?? Colors.white70,
               fontSize: t.fontSubtitle,
               fontWeight: FontWeight.w500,
-              fontFeatures: monospace ? const [FontFeature.tabularFigures()] : null,
+              fontFeatures: monospace
+                  ? const [FontFeature.tabularFigures()]
+                  : null,
             ),
             overflow: TextOverflow.ellipsis,
           ),

@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import '../models/media.dart';
+import 'catalog_browse_route_extra.dart';
+import 'detail_route_extra.dart';
 import '../pages/detail_view_page.dart';
 import '../providers/detail_provider.dart';
 import '../pages/library_page.dart';
@@ -46,31 +48,45 @@ GoRouter warpRouter(Ref ref) {
       ShellRoute(
         builder: (context, state, child) => AppShell(child: child),
         routes: [
-          GoRoute(path: '/',         builder: (_, _) => const MoviesPage()),
-          GoRoute(path: '/shows',    builder: (_, _) => const ShowsPage()),
-          GoRoute(path: '/search',   builder: (_, _) => const SearchPage()),
-          GoRoute(path: '/library',  builder: (_, _) => const LibraryPage()),
+          GoRoute(path: '/', builder: (_, _) => const MoviesPage()),
+          GoRoute(path: '/shows', builder: (_, _) => const ShowsPage()),
+          GoRoute(path: '/search', builder: (_, _) => const SearchPage()),
+          GoRoute(path: '/library', builder: (_, _) => const LibraryPage()),
           GoRoute(path: '/settings', builder: (_, _) => const SettingsPage()),
-          GoRoute(path: '/power',    builder: (_, _) => const PowerPage()),
+          GoRoute(path: '/power', builder: (_, _) => const PowerPage()),
           GoRoute(
             path: '/catalog/:provider/:category',
-            builder: (ctx, state) => CatalogBrowsePage(
-              provider: state.pathParameters['provider']!,
-              category: state.pathParameters['category']!,
-              mediaType: state.uri.queryParameters['type'] ?? 'movie',
-              title: state.uri.queryParameters['title'],
-            ),
+            builder: (ctx, state) {
+              final extra = state.extra;
+              return CatalogBrowsePage(
+                provider: state.pathParameters['provider']!,
+                category: state.pathParameters['category']!,
+                mediaType: state.uri.queryParameters['type'] ?? 'movie',
+                title: state.uri.queryParameters['title'],
+                returnFocusNode: extra is CatalogBrowseRouteExtra
+                    ? extra.returnFocusNode
+                    : null,
+              );
+            },
           ),
         ],
       ),
       // Full-screen routes (no TabBar/Shell)
       GoRoute(
         path: '/detail/:mediaType/:mediaId',
-        builder: (ctx, state) => DetailViewPage(
-          mediaType: state.pathParameters['mediaType']!,
-          mediaId: state.pathParameters['mediaId']!,
-          item: state.extra as MediaItem?,
-        ),
+        builder: (ctx, state) {
+          final extra = state.extra;
+          return DetailViewPage(
+            mediaType: state.pathParameters['mediaType']!,
+            mediaId: state.pathParameters['mediaId']!,
+            item: extra is DetailRouteExtra
+                ? extra.item
+                : (extra is MediaItem ? extra : null),
+            returnFocusNode: extra is DetailRouteExtra
+                ? extra.returnFocusNode
+                : null,
+          );
+        },
       ),
       GoRoute(
         path: '/playback',
@@ -126,7 +142,9 @@ class AppShell extends ConsumerWidget {
           child,
           // Floating tab bar — blur + gradient background, pill-style active tab
           Positioned(
-            top: 0, left: 0, right: 0,
+            top: 0,
+            left: 0,
+            right: 0,
             child: _WarpTabBar(selectedIndex: selectedIndex),
           ),
         ],
@@ -135,13 +153,13 @@ class AppShell extends ConsumerWidget {
   }
 
   static int _routeIndex(String path) => switch (path) {
-    '/search'   => 0,
-    '/'         => 1,
-    '/shows'    => 2,
-    '/library'  => 3,
+    '/search' => 0,
+    '/' => 1,
+    '/shows' => 2,
+    '/library' => 3,
     '/settings' => 4,
-    '/power'    => 5,
-    _           => 1,
+    '/power' => 5,
+    _ => 1,
   };
 }
 
@@ -157,12 +175,12 @@ class _WarpTabBar extends StatelessWidget {
   const _WarpTabBar({required this.selectedIndex});
 
   static const _tabs = [
-    (icon: Icons.search,             label: 'Search',   route: '/search'),
-    (icon: Icons.movie_outlined,     label: 'Movies',   route: '/'),
-    (icon: Icons.tv_outlined,        label: 'Shows',    route: '/shows'),
-    (icon: Icons.folder_outlined,    label: 'Library',  route: '/library'),
-    (icon: Icons.settings_outlined,  label: 'Settings', route: '/settings'),
-    (icon: Icons.power_settings_new, label: 'Power',    route: '/power'),
+    (icon: Icons.search, label: 'Search', route: '/search'),
+    (icon: Icons.movie_outlined, label: 'Movies', route: '/'),
+    (icon: Icons.tv_outlined, label: 'Shows', route: '/shows'),
+    (icon: Icons.folder_outlined, label: 'Library', route: '/library'),
+    (icon: Icons.settings_outlined, label: 'Settings', route: '/settings'),
+    (icon: Icons.power_settings_new, label: 'Power', route: '/power'),
   ];
 
   @override
@@ -204,10 +222,7 @@ class _WarpTabBar extends StatelessWidget {
                   children: [
                     for (int i = 0; i < _tabs.length; i++) ...[
                       if (i > 0) SizedBox(width: gap),
-                      _TabPill(
-                        tab: _tabs[i],
-                        isActive: selectedIndex == i,
-                      ),
+                      _TabPill(tab: _tabs[i], isActive: selectedIndex == i),
                     ],
                   ],
                 ),
@@ -237,7 +252,9 @@ class _TabPillState extends ConsumerState<_TabPill> {
   @override
   void initState() {
     super.initState();
-    ref.read(tabBarFocusRegistryProvider).register(widget.tab.route, _focusNode);
+    ref
+        .read(tabBarFocusRegistryProvider)
+        .register(widget.tab.route, _focusNode);
   }
 
   @override
@@ -245,7 +262,9 @@ class _TabPillState extends ConsumerState<_TabPill> {
     super.didUpdateWidget(old);
     if (old.tab.route != widget.tab.route) {
       ref.read(tabBarFocusRegistryProvider).unregister(old.tab.route);
-      ref.read(tabBarFocusRegistryProvider).register(widget.tab.route, _focusNode);
+      ref
+          .read(tabBarFocusRegistryProvider)
+          .register(widget.tab.route, _focusNode);
     }
   }
 
@@ -336,7 +355,11 @@ class _PlaceholderScreen extends StatelessWidget {
     return Center(
       child: Text(
         label,
-        style: const TextStyle(color: Color(0xFFDEDEDE), fontSize: 22, fontWeight: FontWeight.w700),
+        style: const TextStyle(
+          color: Color(0xFFDEDEDE),
+          fontSize: 22,
+          fontWeight: FontWeight.w700,
+        ),
       ),
     );
   }

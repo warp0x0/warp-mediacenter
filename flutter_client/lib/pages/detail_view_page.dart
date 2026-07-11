@@ -6,6 +6,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:dio/dio.dart';
 import 'package:dpad/dpad.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../api/api_client.dart';
@@ -14,6 +15,7 @@ import '../models/detail.dart';
 import '../models/library.dart';
 import '../models/media.dart';
 import '../providers/detail_provider.dart';
+import '../providers/catalog_provider.dart';
 import '../providers/library_provider.dart';
 import '../theme/warp_theme.dart';
 import '../theme/warp_tokens.dart';
@@ -39,6 +41,12 @@ class _ShowResumeInfo {
   });
 }
 
+class _SeasonEntryController {
+  VoidCallback? _focusEntry;
+
+  void focusEntry() => _focusEntry?.call();
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // DetailViewPage
 // ─────────────────────────────────────────────────────────────────────────────
@@ -47,12 +55,14 @@ class DetailViewPage extends ConsumerStatefulWidget {
   final String mediaType; // 'movie' | 'show'
   final String mediaId; // TMDB ID
   final MediaItem? item; // optional fast-path from navigation
+  final FocusNode? returnFocusNode;
 
   const DetailViewPage({
     super.key,
     required this.mediaType,
     required this.mediaId,
     this.item,
+    this.returnFocusNode,
   });
 
   @override
@@ -60,7 +70,7 @@ class DetailViewPage extends ConsumerStatefulWidget {
 }
 
 class _DetailViewPageState extends ConsumerState<DetailViewPage>
-    with RouteAware {
+    with RouteAware, WidgetsBindingObserver {
   final _scrollCtrl = ScrollController();
   int _selectedSeasonIdx = 0;
   int? _torrentSeason;
@@ -69,6 +79,9 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
   double? _resumePercent;
   String? _markingEpisodeKey;
   bool _pushedPlayback = false;
+  FocusNode? _lastDetailFocus;
+  FocusNode? _lastEpisodeActionFocusNode;
+  bool _appActive = true;
 
   bool get _isShow => widget.mediaType == 'show';
 
@@ -89,12 +102,16 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
   final _whereToWatchEntryFocusNode = FocusNode(
     debugLabel: 'WhereToWatchEntry',
   ); // 1st provider logo
+  final _castEntryFocusNode = FocusNode(debugLabel: 'CastEntry');
   final _localSourcesEntryFocusNode = FocusNode(
     debugLabel: 'LocalSourcesEntry',
   ); // 1st source row
+  final _scrollRailFocusNode = FocusNode(debugLabel: 'DetailScrollRail');
+  final _seasonEntryController = _SeasonEntryController();
 
   bool _hasTrailer = false;
   bool _hasEpisodes = false;
+  bool _hasCast = false;
   bool _hasWhereToWatch = false;
   bool _hasLocalSources = false;
   bool _initialFocusRequested = false;
@@ -102,10 +119,63 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
   FocusNode get _heroEntryNode =>
       _hasTrailer ? _playTrailerFocusNode : _playResumeFocusNode;
 
+  void _focus(FocusNode node) => Dpad.of(context).requestFocus(node);
+
+  void _restoreOriginFocus() {
+    final node = widget.returnFocusNode;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (node?.context != null) node?.requestFocus();
+    });
+  }
+
+  void _goBack() {
+    if (_resumeModalOpen) {
+      setState(() => _resumeModalOpen = false);
+      return;
+    }
+    if (context.canPop()) {
+      context.pop();
+      _restoreOriginFocus();
+    }
+  }
+
+  void _scrollDetail(double direction) {
+    if (!_scrollCtrl.hasClients) return;
+    final position = _scrollCtrl.position;
+    final next =
+        (position.pixels + position.viewportDimension * 0.85 * direction).clamp(
+          position.minScrollExtent,
+          position.maxScrollExtent,
+        );
+    position.animateTo(
+      next,
+      duration: const Duration(milliseconds: 240),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  bool _scrollRailDirection(TraversalDirection d) {
+    if (d == TraversalDirection.up) {
+      _scrollDetail(-1);
+      return true;
+    }
+    if (d == TraversalDirection.down) {
+      _scrollDetail(1);
+      return true;
+    }
+    if (d == TraversalDirection.left) return false;
+    if (d == TraversalDirection.right) return true;
+    return false;
+  }
+
   bool _heroDirection(TraversalDirection d) {
     if (d != TraversalDirection.down) return false;
     if (_hasEpisodes) {
-      Dpad.of(context).requestFocus(_episodesEntryFocusNode);
+      _seasonEntryController.focusEntry();
+      return true;
+    }
+    if (_hasCast) {
+      Dpad.of(context).requestFocus(_castEntryFocusNode);
       return true;
     }
     if (_hasWhereToWatch) {
@@ -119,7 +189,71 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
     return false;
   }
 
+  bool _heroActionDirection(FocusNode node, TraversalDirection d) {
+    if (d == TraversalDirection.down) return _heroDirection(d);
+    if (d == TraversalDirection.up) return true;
+    final firstAction = _hasTrailer
+        ? _playTrailerFocusNode
+        : _playResumeFocusNode;
+    if (d == TraversalDirection.left) {
+      if (node == _backFocusNode) return true;
+      if (node == firstAction) {
+        _focus(_backFocusNode);
+        return true;
+      }
+      if (node == _playResumeFocusNode && _hasTrailer) {
+        _focus(_playTrailerFocusNode);
+        return true;
+      }
+      if (node == _wishlistFocusNode) {
+        _focus(_playResumeFocusNode);
+        return true;
+      }
+      if (node == _shareFocusNode) {
+        _focus(_wishlistFocusNode);
+        return true;
+      }
+      if (node == _likeFocusNode) {
+        _focus(_shareFocusNode);
+        return true;
+      }
+      return true;
+    }
+    if (d == TraversalDirection.right) {
+      if (node == _backFocusNode) {
+        _focus(firstAction);
+        return true;
+      }
+      if (node == _playTrailerFocusNode) {
+        _focus(_playResumeFocusNode);
+        return true;
+      }
+      if (node == _playResumeFocusNode) {
+        _focus(_wishlistFocusNode);
+        return true;
+      }
+      if (node == _wishlistFocusNode) {
+        _focus(_shareFocusNode);
+        return true;
+      }
+      if (node == _shareFocusNode) {
+        _focus(_likeFocusNode);
+        return true;
+      }
+      if (node == _likeFocusNode) {
+        _focus(_scrollRailFocusNode);
+        return true;
+      }
+      return true;
+    }
+    return false;
+  }
+
   bool _episodesEntryUp(TraversalDirection d) {
+    if (d == TraversalDirection.right) {
+      _focus(_scrollRailFocusNode);
+      return true;
+    }
     if (d != TraversalDirection.up) return false;
     Dpad.of(context).requestFocus(_heroEntryNode);
     return true;
@@ -128,6 +262,10 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
   // Down from the last episode card -> whatever section comes next.
   bool _episodesLastDown(TraversalDirection d) {
     if (d != TraversalDirection.down) return false;
+    if (_hasCast) {
+      Dpad.of(context).requestFocus(_castEntryFocusNode);
+      return true;
+    }
     if (_hasWhereToWatch) {
       Dpad.of(context).requestFocus(_whereToWatchEntryFocusNode);
       return true;
@@ -140,10 +278,18 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
   }
 
   bool _whereToWatchDirection(TraversalDirection d) {
+    if (d == TraversalDirection.right) {
+      _focus(_scrollRailFocusNode);
+      return true;
+    }
     if (d == TraversalDirection.up) {
-      Dpad.of(
-        context,
-      ).requestFocus(_hasEpisodes ? _episodesEntryFocusNode : _heroEntryNode);
+      if (_hasCast) {
+        Dpad.of(context).requestFocus(_castEntryFocusNode);
+      } else {
+        Dpad.of(
+          context,
+        ).requestFocus(_hasEpisodes ? _episodesEntryFocusNode : _heroEntryNode);
+      }
       return true;
     }
     if (d == TraversalDirection.down) {
@@ -156,12 +302,46 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
     return false;
   }
 
+  bool _castUp(TraversalDirection d) {
+    if (d != TraversalDirection.up) return false;
+    final lastEpisode = _lastEpisodeActionFocusNode;
+    if (_hasEpisodes && lastEpisode?.context != null) {
+      Dpad.of(context).requestFocus(lastEpisode!);
+    } else {
+      Dpad.of(
+        context,
+      ).requestFocus(_hasEpisodes ? _episodesEntryFocusNode : _heroEntryNode);
+    }
+    return true;
+  }
+
+  bool _castDown(TraversalDirection d) {
+    if (d != TraversalDirection.down) return false;
+    if (_hasWhereToWatch) {
+      Dpad.of(context).requestFocus(_whereToWatchEntryFocusNode);
+      return true;
+    }
+    if (_hasLocalSources) {
+      Dpad.of(context).requestFocus(_localSourcesEntryFocusNode);
+      return true;
+    }
+    return true;
+  }
+
   // Only the 1st Local Sources row needs an Up override — it's a vertical
   // list, so intra-section Up/Down between rows is plain default beam nav.
   bool _localSourcesFirstUp(TraversalDirection d) {
+    if (d == TraversalDirection.right) {
+      _focus(_scrollRailFocusNode);
+      return true;
+    }
     if (d != TraversalDirection.up) return false;
     if (_hasWhereToWatch) {
       Dpad.of(context).requestFocus(_whereToWatchEntryFocusNode);
+      return true;
+    }
+    if (_hasCast) {
+      Dpad.of(context).requestFocus(_castEntryFocusNode);
       return true;
     }
     if (_hasEpisodes) {
@@ -175,6 +355,8 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    FocusManager.instance.addListener(_rememberDetailFocus);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _seedBackdrop();
     });
@@ -189,6 +371,8 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
 
   @override
   void dispose() {
+    FocusManager.instance.removeListener(_rememberDetailFocus);
+    WidgetsBinding.instance.removeObserver(this);
     routeObserver.unsubscribe(this);
     _scrollCtrl.dispose();
     _backFocusNode.dispose();
@@ -198,9 +382,40 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
     _shareFocusNode.dispose();
     _likeFocusNode.dispose();
     _episodesEntryFocusNode.dispose();
+    _castEntryFocusNode.dispose();
     _whereToWatchEntryFocusNode.dispose();
     _localSourcesEntryFocusNode.dispose();
+    _scrollRailFocusNode.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _appActive = state == AppLifecycleState.resumed;
+    if (_appActive) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final node = _lastDetailFocus;
+        if (mounted && node?.context != null) node?.requestFocus();
+      });
+    }
+  }
+
+  void _rememberDetailFocus() {
+    if (!_appActive || !mounted) return;
+    final node = FocusManager.instance.primaryFocus;
+    final nodeContext = node?.context;
+    if (node == null || node is FocusScopeNode || nodeContext == null) return;
+    final detailBox = context.findRenderObject();
+    final focusBox = nodeContext.findRenderObject();
+    if (detailBox == null || focusBox == null) return;
+    var current = focusBox.parent;
+    while (current != null) {
+      if (identical(current, detailBox)) {
+        _lastDetailFocus = node;
+        return;
+      }
+      current = current.parent;
+    }
   }
 
   /// Called by RouteObserver exactly when PlaybackPage (or any page above us)
@@ -262,7 +477,12 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
         );
       }
     } finally {
+      ref.read(collectionMutationVersionProvider.notifier).bump();
       ref.invalidate(isLikedProvider(tmdbId));
+      ref.invalidate(isWishlistedProvider(tmdbId));
+      ref.invalidate(collectionProvider('liked'));
+      ref.invalidate(collectionProvider('wishlist'));
+      ref.invalidate(catalogDataProvider);
     }
   }
 
@@ -291,7 +511,12 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
         );
       }
     } finally {
+      ref.read(collectionMutationVersionProvider.notifier).bump();
+      ref.invalidate(isLikedProvider(tmdbId));
       ref.invalidate(isWishlistedProvider(tmdbId));
+      ref.invalidate(collectionProvider('liked'));
+      ref.invalidate(collectionProvider('wishlist'));
+      ref.invalidate(catalogDataProvider);
     }
   }
 
@@ -467,8 +692,8 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
       if (overview != null) body['overview'] = overview;
 
       await client.post<void>('/api/v1/library/mark-watched', body: body);
-      // Invalidate progress so episode state refreshes
-      ref.invalidate(showProgressProvider(widget.mediaId));
+      _refreshAfterPlayback();
+      ref.invalidate(catalogDataProvider);
     } finally {
       if (mounted) {
         setState(() {
@@ -719,6 +944,7 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
     _hasTrailer = trailerUrl != null;
     _hasEpisodes =
         _isShow && (seasonsAsync?.asData?.value?.seasons.isNotEmpty ?? false);
+    _hasCast = cast.isNotEmpty;
     _hasWhereToWatch =
         watchProviders != null &&
         (watchProviders.streaming.isNotEmpty ||
@@ -732,213 +958,253 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
       });
     }
 
-    return Scaffold(
-      backgroundColor: const Color(0xFF0A0A0A),
-      body: Stack(
-        children: [
-          // ── Main scroll ──────────────────────────────────────────────────
-          CustomScrollView(
-            controller: _scrollCtrl,
-            slivers: [
-              // ── Hero ───────────────────────────────────────────────────────
-              SliverToBoxAdapter(
-                child: SizedBox(
-                  width: size.width,
-                  height: heroH,
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      // Backdrop image
-                      if (backdropImg.isNotEmpty)
-                        CachedNetworkImage(
-                          imageUrl: backdropImg,
-                          fit: BoxFit.cover,
-                          alignment: Alignment.topCenter,
-                          placeholder: (_, _) =>
-                              const ColoredBox(color: Color(0xFF181818)),
-                          errorWidget: (_, _, _) =>
-                              const ColoredBox(color: Color(0xFF181818)),
-                        )
-                      else
-                        const ColoredBox(color: Color(0xFF181818)),
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.escape): _goBack,
+        const SingleActivator(LogicalKeyboardKey.goBack): _goBack,
+        const SingleActivator(LogicalKeyboardKey.browserBack): _goBack,
+      },
+      child: Scaffold(
+        backgroundColor: const Color(0xFF0A0A0A),
+        body: Stack(
+          children: [
+            // ── Main scroll ──────────────────────────────────────────────────
+            CustomScrollView(
+              controller: _scrollCtrl,
+              slivers: [
+                // ── Hero ───────────────────────────────────────────────────────
+                SliverToBoxAdapter(
+                  child: SizedBox(
+                    width: size.width,
+                    height: heroH,
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        // Backdrop image
+                        if (backdropImg.isNotEmpty)
+                          CachedNetworkImage(
+                            imageUrl: backdropImg,
+                            fit: BoxFit.cover,
+                            alignment: Alignment.topCenter,
+                            placeholder: (_, _) =>
+                                const ColoredBox(color: Color(0xFF181818)),
+                            errorWidget: (_, _, _) =>
+                                const ColoredBox(color: Color(0xFF181818)),
+                          )
+                        else
+                          const ColoredBox(color: Color(0xFF181818)),
 
-                      // Tauri gradient: transparent 0%, transparent 30%, rgba(0,0,0,0.3) 50%,
-                      //                  rgba(0,0,0,0.7) 70%, rgba(0,0,0,0.95) 90%, #0a0a0a 100%
-                      const DecoratedBox(
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
-                            colors: [
-                              Colors.transparent,
-                              Colors.transparent,
-                              Color(0x4C000000),
-                              Color(0xB3000000),
-                              Color(0xF2000000),
-                              Color(0xFF0A0A0A),
-                            ],
-                            stops: [0.0, 0.30, 0.50, 0.70, 0.90, 1.0],
+                        // Tauri gradient: transparent 0%, transparent 30%, rgba(0,0,0,0.3) 50%,
+                        //                  rgba(0,0,0,0.7) 70%, rgba(0,0,0,0.95) 90%, #0a0a0a 100%
+                        const DecoratedBox(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: [
+                                Colors.transparent,
+                                Colors.transparent,
+                                Color(0x4C000000),
+                                Color(0xB3000000),
+                                Color(0xF2000000),
+                                Color(0xFF0A0A0A),
+                              ],
+                              stops: [0.0, 0.30, 0.50, 0.70, 0.90, 1.0],
+                            ),
                           ),
                         ),
-                      ),
 
-                      // Hero action bar — Back, Play Trailer, Play/Resume, and
-                      // the Like/Wishlist/Share icons all share one DpadRegion
-                      // so left/right beam nav flows between them even though
-                      // Back is positioned separately (top-left) from the rest
-                      // (top-right); all share the same _heroDirection
-                      // callback (down -> next section).
-                      DpadRegion(
-                        memoryKey: 'detail-hero-actions',
-                        child: Stack(
-                          children: [
-                            // Back button — top-left
-                            // Tauri: position top clamp(20,2.5vw,48) left clamp(20,2.5vw,48)
-                            //   100×40, bg-black/90 border-white → hover bg-black/80 border-white/30
-                            Positioned(
-                              top: hPad,
-                              left: hPad,
-                              child: _BackButton(
-                                onBack: () => context.pop(),
-                                focusNode: _backFocusNode,
-                                onDirection: _heroDirection,
+                        // Hero action bar — Back, Play Trailer, Play/Resume, and
+                        // the Like/Wishlist/Share icons all share one DpadRegion
+                        // so left/right beam nav flows between them even though
+                        // Back is positioned separately (top-left) from the rest
+                        // (top-right); all share the same _heroDirection
+                        // callback (down -> next section).
+                        DpadRegion(
+                          memoryKey: 'detail-hero-actions',
+                          child: Stack(
+                            children: [
+                              // Back button — top-left
+                              // Tauri: position top clamp(20,2.5vw,48) left clamp(20,2.5vw,48)
+                              //   100×40, bg-black/90 border-white → hover bg-black/80 border-white/30
+                              Positioned(
+                                top: hPad,
+                                left: hPad,
+                                child: _BackButton(
+                                  onBack: _goBack,
+                                  focusNode: _backFocusNode,
+                                  onDirection: (d) =>
+                                      _heroActionDirection(_backFocusNode, d),
+                                ),
                               ),
-                            ),
 
-                            // Action buttons — top-right
-                            Positioned(
-                              top: hPad,
-                              right: hPad,
-                              child: Row(
-                                children: [
-                                  // Trailer button (only when trailer exists)
-                                  if (trailerUrl != null) ...[
-                                    _PlayTrailerButton(
-                                      loading: false,
-                                      focusNode: _playTrailerFocusNode,
-                                      onDirection: _heroDirection,
-                                      onTap: () {
-                                        showDialog<void>(
-                                          context: context,
-                                          barrierDismissible: true,
-                                          builder: (_) => TrailerDialog(
-                                            trailerUrl: trailerUrl,
-                                            title: title,
-                                          ),
-                                        );
-                                      },
-                                    ),
-                                    const SizedBox(width: 12),
-                                  ],
+                              // Action buttons — top-right
+                              Positioned(
+                                top: hPad,
+                                right: hPad,
+                                child: Row(
+                                  children: [
+                                    // Trailer button (only when trailer exists)
+                                    if (trailerUrl != null) ...[
+                                      _PlayTrailerButton(
+                                        loading: false,
+                                        focusNode: _playTrailerFocusNode,
+                                        onDirection: (d) =>
+                                            _heroActionDirection(
+                                              _playTrailerFocusNode,
+                                              d,
+                                            ),
+                                        onTap: () {
+                                          showDialog<void>(
+                                            context: context,
+                                            barrierDismissible: true,
+                                            builder: (_) => TrailerDialog(
+                                              trailerUrl: trailerUrl,
+                                              title: title,
+                                            ),
+                                          );
+                                        },
+                                      ),
+                                      const SizedBox(width: 12),
+                                    ],
 
-                                  // Play / Resume button
-                                  _PlayResumeButton(
-                                    isShow: _isShow,
-                                    showResumeInfo: showResumeInfo,
-                                    isMovieResumeAvailable:
-                                        isMovieResumeAvailable,
-                                    focusNode: _playResumeFocusNode,
-                                    onDirection: _heroDirection,
-                                    onTap: () => _handlePlay(
+                                    // Play / Resume button
+                                    _PlayResumeButton(
                                       isShow: _isShow,
                                       showResumeInfo: showResumeInfo,
                                       isMovieResumeAvailable:
                                           isMovieResumeAvailable,
-                                      movieResumeProgress: movieResumeProgress,
-                                      localSource: localSource,
-                                      sources: sources,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 12),
-
-                                  // Wishlist circle button
-                                  _CircleActionButton(
-                                    active: wishlisted,
-                                    activeColor: const Color(0x40109B60),
-                                    activeBorderColor: const Color(0x9910B97D),
-                                    activeIconColor: const Color(0xFF34D399),
-                                    icon: wishlisted
-                                        ? Icons.check_circle
-                                        : Icons.add,
-                                    focusNode: _wishlistFocusNode,
-                                    onDirection: _heroDirection,
-                                    onTap: () =>
-                                        _toggleWishlist(wishlisted, item),
-                                  ),
-                                  const SizedBox(width: 8),
-
-                                  // Share circle button
-                                  _CircleActionButton(
-                                    active: false,
-                                    activeColor: Colors.transparent,
-                                    activeBorderColor: Colors.transparent,
-                                    activeIconColor: Colors.white,
-                                    icon: Icons.share,
-                                    focusNode: _shareFocusNode,
-                                    onDirection: _heroDirection,
-                                    onTap: () {},
-                                  ),
-                                  const SizedBox(width: 8),
-
-                                  // Like circle button
-                                  _CircleActionButton(
-                                    active: liked,
-                                    activeColor: const Color(0x40EF4444),
-                                    activeBorderColor: const Color(0x99EF4444),
-                                    activeIconColor: const Color(0xFFF87171),
-                                    icon: liked
-                                        ? Icons.favorite
-                                        : Icons.favorite_border,
-                                    focusNode: _likeFocusNode,
-                                    onDirection: _heroDirection,
-                                    onTap: () => _toggleLike(liked, item),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-
-                      // Poster + metadata — positioned at bottom, translateY(50%)
-                      Positioned(
-                        left: 0,
-                        right: 0,
-                        bottom: 0,
-                        child: Transform.translate(
-                          offset: Offset(0, posterH * 0.50),
-                          child: Padding(
-                            padding: EdgeInsets.fromLTRB(hPad, 0, hPad, 24),
-                            child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              children: [
-                                // Poster
-                                Container(
-                                  width: posterW,
-                                  height: posterH,
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withAlpha(13),
-                                    borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(
-                                      color: Colors.white.withAlpha(25),
-                                      width: 2,
-                                    ),
-                                    boxShadow: const [
-                                      BoxShadow(
-                                        color: Color(0x99000000),
-                                        blurRadius: 32,
-                                        offset: Offset(0, 8),
+                                      focusNode: _playResumeFocusNode,
+                                      onDirection: (d) => _heroActionDirection(
+                                        _playResumeFocusNode,
+                                        d,
                                       ),
-                                    ],
-                                  ),
-                                  clipBehavior: Clip.hardEdge,
-                                  child: posterImg.isNotEmpty
-                                      ? CachedNetworkImage(
-                                          imageUrl: posterImg,
-                                          fit: BoxFit.cover,
-                                          placeholder: (_, _) =>
-                                              const SizedBox.shrink(),
-                                          errorWidget: (_, _, _) => Center(
+                                      onTap: () => _handlePlay(
+                                        isShow: _isShow,
+                                        showResumeInfo: showResumeInfo,
+                                        isMovieResumeAvailable:
+                                            isMovieResumeAvailable,
+                                        movieResumeProgress:
+                                            movieResumeProgress,
+                                        localSource: localSource,
+                                        sources: sources,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
+
+                                    // Wishlist circle button
+                                    _CircleActionButton(
+                                      active: wishlisted,
+                                      activeColor: const Color(0x40109B60),
+                                      activeBorderColor: const Color(
+                                        0x9910B97D,
+                                      ),
+                                      activeIconColor: const Color(0xFF34D399),
+                                      icon: wishlisted
+                                          ? Icons.check_circle
+                                          : Icons.add,
+                                      focusNode: _wishlistFocusNode,
+                                      onDirection: (d) => _heroActionDirection(
+                                        _wishlistFocusNode,
+                                        d,
+                                      ),
+                                      onTap: () =>
+                                          _toggleWishlist(wishlisted, item),
+                                    ),
+                                    const SizedBox(width: 8),
+
+                                    // Share circle button
+                                    _CircleActionButton(
+                                      active: false,
+                                      activeColor: Colors.transparent,
+                                      activeBorderColor: Colors.transparent,
+                                      activeIconColor: Colors.white,
+                                      icon: Icons.share,
+                                      focusNode: _shareFocusNode,
+                                      onDirection: (d) => _heroActionDirection(
+                                        _shareFocusNode,
+                                        d,
+                                      ),
+                                      onTap: () {},
+                                    ),
+                                    const SizedBox(width: 8),
+
+                                    // Like circle button
+                                    _CircleActionButton(
+                                      active: liked,
+                                      activeColor: const Color(0x40EF4444),
+                                      activeBorderColor: const Color(
+                                        0x99EF4444,
+                                      ),
+                                      activeIconColor: const Color(0xFFF87171),
+                                      icon: liked
+                                          ? Icons.favorite
+                                          : Icons.favorite_border,
+                                      focusNode: _likeFocusNode,
+                                      onDirection: (d) => _heroActionDirection(
+                                        _likeFocusNode,
+                                        d,
+                                      ),
+                                      onTap: () => _toggleLike(liked, item),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+
+                        // Poster + metadata — positioned at bottom, translateY(50%)
+                        Positioned(
+                          left: 0,
+                          right: 0,
+                          bottom: 0,
+                          child: Transform.translate(
+                            offset: Offset(0, posterH * 0.50),
+                            child: Padding(
+                              padding: EdgeInsets.fromLTRB(hPad, 0, hPad, 24),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.end,
+                                children: [
+                                  // Poster
+                                  Container(
+                                    width: posterW,
+                                    height: posterH,
+                                    decoration: BoxDecoration(
+                                      color: Colors.white.withAlpha(13),
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(
+                                        color: Colors.white.withAlpha(25),
+                                        width: 2,
+                                      ),
+                                      boxShadow: const [
+                                        BoxShadow(
+                                          color: Color(0x99000000),
+                                          blurRadius: 32,
+                                          offset: Offset(0, 8),
+                                        ),
+                                      ],
+                                    ),
+                                    clipBehavior: Clip.hardEdge,
+                                    child: posterImg.isNotEmpty
+                                        ? CachedNetworkImage(
+                                            imageUrl: posterImg,
+                                            fit: BoxFit.cover,
+                                            placeholder: (_, _) =>
+                                                const SizedBox.shrink(),
+                                            errorWidget: (_, _, _) => Center(
+                                              child: Text(
+                                                'No Poster',
+                                                style: TextStyle(
+                                                  color: Colors.white.withAlpha(
+                                                    76,
+                                                  ),
+                                                  fontSize: 13,
+                                                ),
+                                              ),
+                                            ),
+                                          )
+                                        : Center(
                                             child: Text(
                                               'No Poster',
                                               style: TextStyle(
@@ -949,429 +1215,498 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
                                               ),
                                             ),
                                           ),
-                                        )
-                                      : Center(
-                                          child: Text(
-                                            'No Poster',
-                                            style: TextStyle(
-                                              color: Colors.white.withAlpha(76),
-                                              fontSize: 13,
-                                            ),
-                                          ),
+                                  ),
+
+                                  const SizedBox(width: 32),
+
+                                  // Metadata block
+                                  Expanded(
+                                    child: Padding(
+                                      // clamp(40px, 6vh, 80px) top padding
+                                      padding: EdgeInsets.only(
+                                        top: (size.height * 0.06).clamp(
+                                          40.0,
+                                          80.0,
                                         ),
-                                ),
-
-                                const SizedBox(width: 32),
-
-                                // Metadata block
-                                Expanded(
-                                  child: Padding(
-                                    // clamp(40px, 6vh, 80px) top padding
-                                    padding: EdgeInsets.only(
-                                      top: (size.height * 0.06).clamp(
-                                        40.0,
-                                        80.0,
                                       ),
-                                    ),
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        // Title clamp(32px, 3.5vw, 56px) — 50px wider than overview
-                                        ConstrainedBox(
-                                          constraints: const BoxConstraints(
-                                            maxWidth: 800,
-                                          ),
-                                          child: Text(
-                                            title,
-                                            style: TextStyle(
-                                              fontSize: (size.width * 0.035)
-                                                  .clamp(32.0, 56.0),
-                                              fontWeight: FontWeight.w800,
-                                              color: Colors.white,
-                                              height: 1.1,
-                                              shadows: const [
-                                                Shadow(
-                                                  color: Color(0xE6000000),
-                                                  blurRadius: 16,
-                                                  offset: Offset(2, 4),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                        ),
-
-                                        // Tagline
-                                        if (tagline != null) ...[
-                                          const SizedBox(height: 16),
-                                          Text(
-                                            tagline,
-                                            style: TextStyle(
-                                              fontSize: (size.width * 0.012)
-                                                  .clamp(16.0, 18.0),
-                                              color: Colors.white.withAlpha(
-                                                204,
-                                              ),
-                                              fontStyle: FontStyle.italic,
-                                              shadows: const [
-                                                Shadow(
-                                                  color: Color(0xE6000000),
-                                                  blurRadius: 8,
-                                                  offset: Offset(1, 2),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                        ],
-
-                                        const SizedBox(height: 16),
-
-                                        // Rating badges + year + runtime
-                                        Row(
-                                          children: [
-                                            if (tmdbRating != null)
-                                              _TmdbBadge(rating: tmdbRating),
-                                            if (tmdbRating != null &&
-                                                imdbRating != null)
-                                              const SizedBox(width: 12),
-                                            if (imdbRating != null)
-                                              _ImdbBadge(rating: imdbRating),
-                                            if ((imdbRating != null ||
-                                                    tmdbRating != null) &&
-                                                year != null)
-                                              const SizedBox(width: 20),
-                                            if (year != null)
-                                              Text(
-                                                '$year',
-                                                style: const TextStyle(
-                                                  color: Colors.white,
-                                                  fontWeight: FontWeight.w500,
-                                                  fontSize: 16,
-                                                ),
-                                              ),
-                                            if (runtime != null) ...[
-                                              const SizedBox(width: 20),
-                                              Text(
-                                                '$runtime min',
-                                                style: const TextStyle(
-                                                  color: Colors.white,
-                                                  fontWeight: FontWeight.w500,
-                                                  fontSize: 16,
-                                                ),
-                                              ),
-                                            ],
-                                          ],
-                                        ),
-
-                                        // Genres
-                                        if (genres.isNotEmpty) ...[
-                                          const SizedBox(height: 16),
-                                          Row(
-                                            children: [
-                                              const Icon(
-                                                Icons.label_outline,
-                                                color: Colors.white,
-                                                size: 22,
-                                              ),
-                                              const SizedBox(width: 8),
-                                              Expanded(
-                                                child: Text(
-                                                  genres.take(5).join('  ·  '),
-                                                  style: TextStyle(
-                                                    color: Colors.white
-                                                        .withAlpha(180),
-                                                    fontSize: 15,
-                                                  ),
-                                                  maxLines: 1,
-                                                  overflow:
-                                                      TextOverflow.ellipsis,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ],
-
-                                        // Overview — Tauri: max-w-3xl (≈768px), clamp font
-                                        if (overview.isNotEmpty) ...[
-                                          const SizedBox(height: 16),
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          // Title clamp(32px, 3.5vw, 56px) — 50px wider than overview
                                           ConstrainedBox(
                                             constraints: const BoxConstraints(
-                                              maxWidth: 700,
+                                              maxWidth: 800,
                                             ),
                                             child: Text(
-                                              overview,
+                                              title,
                                               style: TextStyle(
-                                                fontSize: (size.width * 0.011)
-                                                    .clamp(15.0, 18.0),
-                                                color: Colors.white.withAlpha(
-                                                  217,
-                                                ),
-                                                height: 1.7,
+                                                fontSize: (size.width * 0.035)
+                                                    .clamp(32.0, 56.0),
+                                                fontWeight: FontWeight.w800,
+                                                color: Colors.white,
+                                                height: 1.1,
                                                 shadows: const [
                                                   Shadow(
-                                                    color: Color(0xCC000000),
+                                                    color: Color(0xE6000000),
+                                                    blurRadius: 16,
+                                                    offset: Offset(2, 4),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          ),
+
+                                          // Tagline
+                                          if (tagline != null) ...[
+                                            const SizedBox(height: 16),
+                                            Text(
+                                              tagline,
+                                              style: TextStyle(
+                                                fontSize: (size.width * 0.012)
+                                                    .clamp(16.0, 18.0),
+                                                color: Colors.white.withAlpha(
+                                                  204,
+                                                ),
+                                                fontStyle: FontStyle.italic,
+                                                shadows: const [
+                                                  Shadow(
+                                                    color: Color(0xE6000000),
                                                     blurRadius: 8,
                                                     offset: Offset(1, 2),
                                                   ),
                                                 ],
                                               ),
                                             ),
+                                          ],
+
+                                          const SizedBox(height: 16),
+
+                                          // Rating badges + year + runtime
+                                          Row(
+                                            children: [
+                                              if (tmdbRating != null)
+                                                _TmdbBadge(rating: tmdbRating),
+                                              if (tmdbRating != null &&
+                                                  imdbRating != null)
+                                                const SizedBox(width: 12),
+                                              if (imdbRating != null)
+                                                _ImdbBadge(rating: imdbRating),
+                                              if ((imdbRating != null ||
+                                                      tmdbRating != null) &&
+                                                  year != null)
+                                                const SizedBox(width: 20),
+                                              if (year != null)
+                                                Text(
+                                                  '$year',
+                                                  style: const TextStyle(
+                                                    color: Colors.white,
+                                                    fontWeight: FontWeight.w500,
+                                                    fontSize: 16,
+                                                  ),
+                                                ),
+                                              if (runtime != null) ...[
+                                                const SizedBox(width: 20),
+                                                Text(
+                                                  '$runtime min',
+                                                  style: const TextStyle(
+                                                    color: Colors.white,
+                                                    fontWeight: FontWeight.w500,
+                                                    fontSize: 16,
+                                                  ),
+                                                ),
+                                              ],
+                                            ],
                                           ),
+
+                                          // Genres
+                                          if (genres.isNotEmpty) ...[
+                                            const SizedBox(height: 16),
+                                            Row(
+                                              children: [
+                                                const Icon(
+                                                  Icons.label_outline,
+                                                  color: Colors.white,
+                                                  size: 22,
+                                                ),
+                                                const SizedBox(width: 8),
+                                                Expanded(
+                                                  child: Text(
+                                                    genres
+                                                        .take(5)
+                                                        .join('  ·  '),
+                                                    style: TextStyle(
+                                                      color: Colors.white
+                                                          .withAlpha(180),
+                                                      fontSize: 15,
+                                                    ),
+                                                    maxLines: 1,
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ],
+
+                                          // Overview — Tauri: max-w-3xl (≈768px), clamp font
+                                          if (overview.isNotEmpty) ...[
+                                            const SizedBox(height: 16),
+                                            ConstrainedBox(
+                                              constraints: const BoxConstraints(
+                                                maxWidth: 700,
+                                              ),
+                                              child: Text(
+                                                overview,
+                                                style: TextStyle(
+                                                  fontSize: (size.width * 0.011)
+                                                      .clamp(15.0, 18.0),
+                                                  color: Colors.white.withAlpha(
+                                                    217,
+                                                  ),
+                                                  height: 1.7,
+                                                  shadows: const [
+                                                    Shadow(
+                                                      color: Color(0xCC000000),
+                                                      blurRadius: 8,
+                                                      offset: Offset(1, 2),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ),
+                                          ],
                                         ],
-                                      ],
+                                      ),
                                     ),
                                   ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-
-              // ── Spacer for overlapping poster ───────────────────────────────
-              SliverToBoxAdapter(child: SizedBox(height: spacerH)),
-
-              // ── Progress bar (shows: overall %, movies: scrobble %) ─────────
-              SliverToBoxAdapter(
-                child: Builder(
-                  builder: (_) {
-                    final pct = _isShow
-                        ? showOverallProgress
-                        : movieResumeProgress;
-                    if (pct == null || pct <= 0) return const SizedBox.shrink();
-                    final label = _isShow
-                        ? '$pct% completed'
-                        : '${pct.round()}% watched';
-                    return Padding(
-                      padding: EdgeInsets.fromLTRB(hPad, 0, hPad, 20),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(99),
-                              child: Container(
-                                height: 6,
-                                color: Colors.white.withAlpha(25),
-                                child: FractionallySizedBox(
-                                  alignment: Alignment.centerLeft,
-                                  widthFactor: (pct / 100).clamp(0.0, 1.0),
-                                  child: Container(
-                                    color: const Color(0xFFFBBF24),
-                                  ),
-                                ),
+                                ],
                               ),
                             ),
                           ),
-                          const SizedBox(width: 12),
-                          Text(
-                            label,
-                            style: TextStyle(
-                              color: Colors.white.withAlpha(128),
-                              fontSize: 12,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
-              ),
-
-              // ── Director / Writers / Year ───────────────────────────────────
-              if (!isDetailLoading && (director != null || writers.isNotEmpty))
-                SliverToBoxAdapter(
-                  child: Container(
-                    padding: EdgeInsets.fromLTRB(hPad, 40, hPad, 32),
-                    decoration: const BoxDecoration(
-                      color: Color(0xFF0A0A0A),
-                      border: Border(top: BorderSide(color: Color(0x0DFFFFFF))),
-                    ),
-                    child: Wrap(
-                      spacing: 40,
-                      runSpacing: 16,
-                      children: [
-                        if (director != null)
-                          _CrewItem(label: 'Director', value: director),
-                        if (writers.isNotEmpty)
-                          _CrewItem(
-                            label: writers.length > 1 ? 'Writers' : 'Writer',
-                            value: writers.join(', '),
-                          ),
-                        if (year != null)
-                          _CrewItem(label: 'Year', value: '$year'),
+                        ),
                       ],
                     ),
                   ),
                 ),
 
-              // ── Episodes section (shows) ─────────────────────────────────────
-              if (_isShow && seasonsAsync != null)
+                // ── Spacer for overlapping poster ───────────────────────────────
+                SliverToBoxAdapter(child: SizedBox(height: spacerH)),
+
+                // ── Progress bar (shows: overall %, movies: scrobble %) ─────────
                 SliverToBoxAdapter(
-                  child: seasonsAsync.when(
-                    loading: () => const SizedBox.shrink(),
-                    error: (_, _) => const SizedBox.shrink(),
-                    data: (seasons) =>
-                        seasons == null || seasons.seasons.isEmpty
-                        ? const SizedBox.shrink()
-                        : _EpisodesSection(
-                            seasons: seasons,
-                            selectedIdx: _selectedSeasonIdx,
-                            showProgress: showProgress,
-                            showResumeInfo: showResumeInfo,
-                            sources: sources,
-                            markingEpisodeKey: _markingEpisodeKey,
-                            entryFocusNode: _episodesEntryFocusNode,
-                            onEntryUp: _episodesEntryUp,
-                            onLastEpisodeDown: _episodesLastDown,
-                            onSeasonChange: (i) =>
-                                setState(() => _selectedSeasonIdx = i),
-                            onPlayEpisode: (ep, seasonNum, epScrobblePct) =>
-                                _handlePlayEpisode(
-                                  ep: ep,
-                                  seasonNum: seasonNum,
-                                  epScrobblePct: epScrobblePct,
-                                  sources: sources,
+                  child: Builder(
+                    builder: (_) {
+                      final pct = _isShow
+                          ? showOverallProgress
+                          : movieResumeProgress;
+                      if (pct == null || pct <= 0) {
+                        return const SizedBox.shrink();
+                      }
+                      final label = _isShow
+                          ? '$pct% completed'
+                          : '${pct.round()}% watched';
+                      return Padding(
+                        padding: EdgeInsets.fromLTRB(hPad, 0, hPad, 20),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(99),
+                                child: Container(
+                                  height: 6,
+                                  color: Colors.white.withAlpha(25),
+                                  child: FractionallySizedBox(
+                                    alignment: Alignment.centerLeft,
+                                    widthFactor: (pct / 100).clamp(0.0, 1.0),
+                                    child: Container(
+                                      color: const Color(0xFFFBBF24),
+                                    ),
+                                  ),
                                 ),
-                            onMarkWatched: (sNum, epNum, pbId) =>
-                                _markEpisodeWatched(
-                                  sNum,
-                                  epNum,
-                                  pbId,
-                                  title,
-                                  year,
-                                  overview,
-                                  item,
-                                ),
-                            findLocalSource: (s, e) =>
-                                _findLocalEpisodeSource(s, e, sources),
-                            hPad: hPad,
-                          ),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Text(
+                              label,
+                              style: TextStyle(
+                                color: Colors.white.withAlpha(128),
+                                fontSize: 12,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
                   ),
                 ),
 
-              // ── Cast section (with chevrons — user requirement) ──────────────
-              if (!isDetailLoading && cast.isNotEmpty)
-                SliverToBoxAdapter(
-                  child: _CastSection(cast: cast, hPad: hPad),
-                ),
-
-              // ── Where to Watch ───────────────────────────────────────────────
-              if (watchProviders != null &&
-                  (watchProviders.streaming.isNotEmpty ||
-                      watchProviders.rent.isNotEmpty ||
-                      watchProviders.buy.isNotEmpty))
-                SliverToBoxAdapter(
-                  child: _WatchProvidersSection(
-                    providers: watchProviders,
-                    hPad: hPad,
-                    entryFocusNode: _whereToWatchEntryFocusNode,
-                    onDirection: _whereToWatchDirection,
-                  ),
-                ),
-
-              // ── Local Sources ────────────────────────────────────────────────
-              if (sources.isNotEmpty)
-                SliverToBoxAdapter(
-                  child: _LocalSourcesSection(
-                    sources: sources,
-                    hPad: hPad,
-                    entryFocusNode: _localSourcesEntryFocusNode,
-                    onEntryUp: _localSourcesFirstUp,
-                    onPlay: (src) =>
-                        _playLocalSource(src, season: null, episode: null),
-                  ),
-                ),
-
-              // ── "Add to library" hint ────────────────────────────────────────
-              if (libraryAsync.asData?.value == null && !libraryAsync.isLoading)
-                SliverToBoxAdapter(
-                  child: Padding(
-                    padding: EdgeInsets.fromLTRB(hPad, 32, hPad, 32),
-                    child: Text(
-                      'Add this title to your library to see local file sources.',
-                      style: TextStyle(
-                        color: Colors.white.withAlpha(102),
-                        fontSize: 14,
+                // ── Director / Writers / Year ───────────────────────────────────
+                if (!isDetailLoading &&
+                    (director != null || writers.isNotEmpty))
+                  SliverToBoxAdapter(
+                    child: Container(
+                      padding: EdgeInsets.fromLTRB(hPad, 40, hPad, 32),
+                      decoration: const BoxDecoration(
+                        color: Color(0xFF0A0A0A),
+                        border: Border(
+                          top: BorderSide(color: Color(0x0DFFFFFF)),
+                        ),
+                      ),
+                      child: Wrap(
+                        spacing: 40,
+                        runSpacing: 16,
+                        children: [
+                          if (director != null)
+                            _CrewItem(label: 'Director', value: director),
+                          if (writers.isNotEmpty)
+                            _CrewItem(
+                              label: writers.length > 1 ? 'Writers' : 'Writer',
+                              value: writers.join(', '),
+                            ),
+                          if (year != null)
+                            _CrewItem(label: 'Year', value: '$year'),
+                        ],
                       ),
                     ),
                   ),
-                ),
 
-              const SliverToBoxAdapter(child: SizedBox(height: 80)),
-            ],
-          ),
+                // ── Episodes section (shows) ─────────────────────────────────────
+                if (_isShow && seasonsAsync != null)
+                  SliverToBoxAdapter(
+                    child: seasonsAsync.when(
+                      loading: () => const SizedBox.shrink(),
+                      error: (_, _) => const SizedBox.shrink(),
+                      data: (seasons) =>
+                          seasons == null || seasons.seasons.isEmpty
+                          ? const SizedBox.shrink()
+                          : _EpisodesSection(
+                              seasons: seasons,
+                              selectedIdx: _selectedSeasonIdx,
+                              showProgress: showProgress,
+                              showResumeInfo: showResumeInfo,
+                              sources: sources,
+                              markingEpisodeKey: _markingEpisodeKey,
+                              entryFocusNode: _episodesEntryFocusNode,
+                              seasonEntryController: _seasonEntryController,
+                              onEntryUp: _episodesEntryUp,
+                              onLastEpisodeDown: _episodesLastDown,
+                              onEpisodeRight: (d) {
+                                if (d != TraversalDirection.right) return false;
+                                _focus(_scrollRailFocusNode);
+                                return true;
+                              },
+                              onLastEpisodeFocusChanged: (node) {
+                                _lastEpisodeActionFocusNode = node;
+                              },
+                              onSeasonChange: (i) =>
+                                  setState(() => _selectedSeasonIdx = i),
+                              onPlayEpisode: (ep, seasonNum, epScrobblePct) =>
+                                  _handlePlayEpisode(
+                                    ep: ep,
+                                    seasonNum: seasonNum,
+                                    epScrobblePct: epScrobblePct,
+                                    sources: sources,
+                                  ),
+                              onMarkWatched: (sNum, epNum, pbId) =>
+                                  _markEpisodeWatched(
+                                    sNum,
+                                    epNum,
+                                    pbId,
+                                    title,
+                                    year,
+                                    overview,
+                                    item,
+                                  ),
+                              findLocalSource: (s, e) =>
+                                  _findLocalEpisodeSource(s, e, sources),
+                              hPad: hPad,
+                            ),
+                    ),
+                  ),
 
-          // ── Resume modal overlay ─────────────────────────────────────────
-          if (_resumeModalOpen)
-            _ResumeModal(
-              resumePercent: _resumePercent,
-              onContinue: () {
-                final pct = _resumePercent;
-                setState(() => _resumeModalOpen = false);
-                if (_isShow &&
-                    _torrentSeason != null &&
-                    _torrentEpisode != null) {
-                  final epSrc = _findLocalEpisodeSource(
-                    _torrentSeason!,
-                    _torrentEpisode!,
-                    sources,
-                  );
-                  if (epSrc != null) {
+                // ── Cast section (with chevrons — user requirement) ──────────────
+                if (!isDetailLoading && cast.isNotEmpty)
+                  SliverToBoxAdapter(
+                    child: _CastSection(
+                      cast: cast,
+                      hPad: hPad,
+                      entryFocusNode: _castEntryFocusNode,
+                      onUp: _castUp,
+                      onDown: _castDown,
+                      onFocusRail: () => _focus(_scrollRailFocusNode),
+                    ),
+                  ),
+
+                // ── Where to Watch ───────────────────────────────────────────────
+                if (watchProviders != null &&
+                    (watchProviders.streaming.isNotEmpty ||
+                        watchProviders.rent.isNotEmpty ||
+                        watchProviders.buy.isNotEmpty))
+                  SliverToBoxAdapter(
+                    child: _WatchProvidersSection(
+                      providers: watchProviders,
+                      hPad: hPad,
+                      entryFocusNode: _whereToWatchEntryFocusNode,
+                      onDirection: _whereToWatchDirection,
+                    ),
+                  ),
+
+                // ── Local Sources ────────────────────────────────────────────────
+                if (sources.isNotEmpty)
+                  SliverToBoxAdapter(
+                    child: _LocalSourcesSection(
+                      sources: sources,
+                      hPad: hPad,
+                      entryFocusNode: _localSourcesEntryFocusNode,
+                      onEntryUp: _localSourcesFirstUp,
+                      onFocusRail: () => _focus(_scrollRailFocusNode),
+                      onPlay: (src) =>
+                          _playLocalSource(src, season: null, episode: null),
+                    ),
+                  ),
+
+                // ── "Add to library" hint ────────────────────────────────────────
+                if (libraryAsync.asData?.value == null &&
+                    !libraryAsync.isLoading)
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: EdgeInsets.fromLTRB(hPad, 32, hPad, 32),
+                      child: Text(
+                        'Add this title to your library to see local file sources.',
+                        style: TextStyle(
+                          color: Colors.white.withAlpha(102),
+                          fontSize: 14,
+                        ),
+                      ),
+                    ),
+                  ),
+
+                const SliverToBoxAdapter(child: SizedBox(height: 80)),
+              ],
+            ),
+
+            // ── Resume modal overlay ─────────────────────────────────────────
+            Positioned(
+              top: 0,
+              right: 0,
+              bottom: 0,
+              child: _DetailScrollRail(
+                focusNode: _scrollRailFocusNode,
+                onDirection: _scrollRailDirection,
+              ),
+            ),
+
+            if (_resumeModalOpen)
+              _ResumeModal(
+                resumePercent: _resumePercent,
+                onContinue: () {
+                  final pct = _resumePercent;
+                  setState(() => _resumeModalOpen = false);
+                  if (_isShow &&
+                      _torrentSeason != null &&
+                      _torrentEpisode != null) {
+                    final epSrc = _findLocalEpisodeSource(
+                      _torrentSeason!,
+                      _torrentEpisode!,
+                      sources,
+                    );
+                    if (epSrc != null) {
+                      _playLocalSource(
+                        epSrc,
+                        season: _torrentSeason,
+                        episode: _torrentEpisode,
+                        resumeFromFrac: pct != null ? pct / 100 : null,
+                      );
+                      return;
+                    }
+                  } else if (!_isShow && localSource != null) {
                     _playLocalSource(
-                      epSrc,
-                      season: _torrentSeason,
-                      episode: _torrentEpisode,
+                      localSource,
+                      season: null,
+                      episode: null,
                       resumeFromFrac: pct != null ? pct / 100 : null,
                     );
                     return;
                   }
-                } else if (!_isShow && localSource != null) {
-                  _playLocalSource(
-                    localSource,
-                    season: null,
-                    episode: null,
-                    resumeFromFrac: pct != null ? pct / 100 : null,
-                  );
-                  return;
-                }
-                _openTorrentDialog(resumePercent: pct?.toDouble());
-              },
-              onStartOver: () {
-                setState(() {
-                  _resumePercent = null;
-                  _resumeModalOpen = false;
-                });
-                if (_isShow &&
-                    _torrentSeason != null &&
-                    _torrentEpisode != null) {
-                  final epSrc = _findLocalEpisodeSource(
-                    _torrentSeason!,
-                    _torrentEpisode!,
-                    sources,
-                  );
-                  if (epSrc != null) {
-                    _playLocalSource(
-                      epSrc,
-                      season: _torrentSeason,
-                      episode: _torrentEpisode,
+                  _openTorrentDialog(resumePercent: pct?.toDouble());
+                },
+                onStartOver: () {
+                  setState(() {
+                    _resumePercent = null;
+                    _resumeModalOpen = false;
+                  });
+                  if (_isShow &&
+                      _torrentSeason != null &&
+                      _torrentEpisode != null) {
+                    final epSrc = _findLocalEpisodeSource(
+                      _torrentSeason!,
+                      _torrentEpisode!,
+                      sources,
                     );
+                    if (epSrc != null) {
+                      _playLocalSource(
+                        epSrc,
+                        season: _torrentSeason,
+                        episode: _torrentEpisode,
+                      );
+                      return;
+                    }
+                  } else if (!_isShow && localSource != null) {
+                    _playLocalSource(localSource, season: null, episode: null);
                     return;
                   }
-                } else if (!_isShow && localSource != null) {
-                  _playLocalSource(localSource, season: null, episode: null);
-                  return;
-                }
-                _openTorrentDialog();
-              },
-              onCancel: () => setState(() => _resumeModalOpen = false),
+                  _openTorrentDialog();
+                },
+                onCancel: () => setState(() => _resumeModalOpen = false),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DetailScrollRail extends StatelessWidget {
+  final FocusNode focusNode;
+  final DpadDirectionCallback onDirection;
+
+  const _DetailScrollRail({required this.focusNode, required this.onDirection});
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 24,
+      child: Center(
+        child: DpadFocusable(
+          focusNode: focusNode,
+          onDirection: onDirection,
+          onSelect: () {},
+          tapToSelect: false,
+          builder: (context, state, child) => AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            width: state.focused ? 8 : 4,
+            height: 132,
+            decoration: BoxDecoration(
+              color: state.focused
+                  ? const Color(0xFF0DB2E2)
+                  : Colors.white.withAlpha(30),
+              borderRadius: BorderRadius.circular(999),
+              boxShadow: state.focused
+                  ? [
+                      BoxShadow(
+                        color: const Color(0xFF0DB2E2).withAlpha(120),
+                        blurRadius: 18,
+                        spreadRadius: 2,
+                      ),
+                    ]
+                  : null,
             ),
-        ],
+          ),
+          child: const SizedBox.shrink(),
+        ),
       ),
     );
   }
@@ -1393,10 +1728,11 @@ class _BackButton extends StatefulWidget {
 
 class _BackButtonState extends State<_BackButton> {
   bool _hovered = false;
+  static const _backColor = Color(0xFF8B5CF6);
+  static const _backShadow = Color(0x668B5CF6);
 
   @override
   Widget build(BuildContext context) {
-    // Tauri: 100×40, bg-black/90 border-white, hover bg-black/80 border-white/30
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
@@ -1406,51 +1742,49 @@ class _BackButtonState extends State<_BackButton> {
         onDirection: widget.onDirection,
         onSelect: widget.onBack,
         tapToSelect: false,
-        builder: (context, state, child) => GestureDetector(
-          onTap: () {
-            widget.focusNode?.requestFocus();
-            widget.onBack();
-          },
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
-            width: 100,
-            height: 40,
-            decoration: BoxDecoration(
-              color: _hovered
-                  ? const Color(0xCC000000)
-                  : const Color(0xE6000000),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(
-                color: _hovered ? Colors.white.withAlpha(76) : Colors.white,
+        builder: (context, state, child) {
+          final active = state.focused || _hovered;
+          return GestureDetector(
+            onTap: () {
+              widget.focusNode?.requestFocus();
+              widget.onBack();
+            },
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              width: 100,
+              height: 40,
+              decoration: BoxDecoration(
+                color: active ? _backColor : const Color(0xCC333232),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: _backColor, width: 1),
+                boxShadow: active
+                    ? const [
+                        BoxShadow(
+                          color: _backShadow,
+                          blurRadius: 16,
+                          offset: Offset(0, 4),
+                        ),
+                      ]
+                    : null,
               ),
-              // Icon-category focus indicator: prominent cyan halo.
-              boxShadow: state.focused
-                  ? [
-                      BoxShadow(
-                        color: WarpColors.accent.withAlpha(140),
-                        blurRadius: 18,
-                        spreadRadius: 2,
-                      ),
-                    ]
-                  : null,
-            ),
-            child: const Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.arrow_back, color: Colors.white, size: 18),
-                SizedBox(width: 8),
-                Text(
-                  'Back',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w500,
+              child: const Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.arrow_back, color: Colors.white, size: 18),
+                  SizedBox(width: 8),
+                  Text(
+                    'Back',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w500,
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-        ),
+          );
+        },
         child: const SizedBox.shrink(),
       ),
     );
@@ -1727,56 +2061,78 @@ class _CircleActionButtonState extends State<_CircleActionButton> {
             widget.onTap();
           },
           child: AnimatedScale(
-            scale: _hovered ? 1.10 : 1.0,
+            scale: (_hovered || state.focused) ? 1.10 : 1.0,
             duration: const Duration(milliseconds: 200),
-            // Icon-category focus indicator: prominent cyan halo, drawn
-            // outside the ClipOval so it isn't clipped away.
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 150),
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                boxShadow: state.focused
-                    ? [
-                        BoxShadow(
-                          color: WarpColors.accent.withAlpha(140),
-                          blurRadius: 18,
-                          spreadRadius: 2,
+            child: Stack(
+              clipBehavior: Clip.none,
+              alignment: Alignment.center,
+              children: [
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 150),
+                  padding: EdgeInsets.all(state.focused ? 4 : 0),
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: state.focused
+                        ? Border.all(color: Colors.white, width: 2.5)
+                        : null,
+                    boxShadow: state.focused
+                        ? const [
+                            BoxShadow(
+                              color: Color(0xCC000000),
+                              blurRadius: 18,
+                              spreadRadius: 2,
+                            ),
+                          ]
+                        : null,
+                  ),
+                  child: ClipOval(
+                    child: BackdropFilter(
+                      filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 200),
+                        width: 48,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          color: widget.active
+                              ? Color.alphaBlend(
+                                  widget.activeColor,
+                                  const Color(0xCC000000),
+                                )
+                              : const Color(0xCC000000),
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: state.focused
+                                ? Colors.black
+                                : widget.active
+                                ? widget.activeBorderColor
+                                : Colors.white.withAlpha(80),
+                            width: state.focused ? 2 : 1,
+                          ),
                         ),
-                      ]
-                    : null,
-              ),
-              child: ClipOval(
-                child: BackdropFilter(
-                  filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 200),
-                    width: 48,
-                    height: 48,
-                    decoration: BoxDecoration(
-                      // Inactive: deep black with stronger opacity; active: brand color over dark base
-                      color: widget.active
-                          ? Color.alphaBlend(
-                              widget.activeColor,
-                              const Color(0xCC000000),
-                            )
-                          : const Color(0xCC000000),
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: widget.active
-                            ? widget.activeBorderColor
-                            : Colors.white.withAlpha(80),
+                        child: Icon(
+                          widget.icon,
+                          color: widget.active
+                              ? widget.activeIconColor
+                              : Colors.white,
+                          size: 20,
+                        ),
                       ),
-                    ),
-                    child: Icon(
-                      widget.icon,
-                      color: widget.active
-                          ? widget.activeIconColor
-                          : Colors.white,
-                      size: 20,
                     ),
                   ),
                 ),
-              ),
+                if (state.focused)
+                  Positioned(
+                    bottom: -8,
+                    child: Container(
+                      width: 18,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(99),
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
         ),
@@ -1930,8 +2286,11 @@ class _EpisodesSection extends StatefulWidget {
   // onLastEpisodeDown fires for the last episode card's Down (-> whatever
   // section comes next: Where to Watch or Local Sources).
   final FocusNode entryFocusNode;
+  final _SeasonEntryController seasonEntryController;
   final DpadDirectionCallback onEntryUp;
   final DpadDirectionCallback onLastEpisodeDown;
+  final DpadDirectionCallback onEpisodeRight;
+  final ValueChanged<FocusNode?> onLastEpisodeFocusChanged;
 
   const _EpisodesSection({
     required this.seasons,
@@ -1946,8 +2305,11 @@ class _EpisodesSection extends StatefulWidget {
     required this.findLocalSource,
     required this.hPad,
     required this.entryFocusNode,
+    required this.seasonEntryController,
     required this.onEntryUp,
     required this.onLastEpisodeDown,
+    required this.onEpisodeRight,
+    required this.onLastEpisodeFocusChanged,
   });
 
   @override
@@ -1956,11 +2318,35 @@ class _EpisodesSection extends StatefulWidget {
 
 class _EpisodesSectionState extends State<_EpisodesSection> {
   final _seasonScroll = ScrollController();
+  final _seasonViewportKey = GlobalKey();
   List<FocusNode> _pillFocusNodes = [];
   List<FocusNode> _episodeFocusNodes = [];
+  FocusNode? _reportedLastEpisodeFocusNode;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.seasonEntryController._focusEntry = _focusSeasonEntry;
+  }
+
+  @override
+  void didUpdateWidget(_EpisodesSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(
+      oldWidget.seasonEntryController,
+      widget.seasonEntryController,
+    )) {
+      oldWidget.seasonEntryController._focusEntry = null;
+      widget.seasonEntryController._focusEntry = _focusSeasonEntry;
+    }
+  }
 
   @override
   void dispose() {
+    if (widget.seasonEntryController._focusEntry == _focusSeasonEntry) {
+      widget.seasonEntryController._focusEntry = null;
+    }
+    widget.onLastEpisodeFocusChanged(null);
     _seasonScroll.dispose();
     for (var i = 1; i < _pillFocusNodes.length; i++) {
       _pillFocusNodes[i].dispose();
@@ -1992,9 +2378,100 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
     _episodeFocusNodes = List.generate(count, (_) => FocusNode());
   }
 
+  void _reportLastEpisodeFocusNode() {
+    final node = _episodeFocusNodes.isNotEmpty ? _episodeFocusNodes.last : null;
+    if (identical(node, _reportedLastEpisodeFocusNode)) return;
+    _reportedLastEpisodeFocusNode = node;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) widget.onLastEpisodeFocusChanged(node);
+    });
+  }
+
   // Every pill shares this: Up -> hero action bar; Down -> 1st episode card
   // (local — the episode list is part of this same section).
-  bool _pillDirection(TraversalDirection d) {
+  void _focusPill(int index) {
+    if (index < 0 || index >= _pillFocusNodes.length) return;
+    final node = _pillFocusNodes[index];
+    if (!Dpad.of(context).requestFocus(node)) {
+      node.requestFocus();
+    }
+  }
+
+  int _seasonEntryIndex() {
+    if (_pillFocusNodes.isEmpty) return 0;
+    return widget.selectedIdx.clamp(0, _pillFocusNodes.length - 1);
+  }
+
+  void _focusSeasonEntry() {
+    if (_pillFocusNodes.isEmpty) return;
+    final index = _seasonEntryIndex();
+    final target = _seasonPillCenterOffset(index);
+    if (target == null ||
+        !_seasonScroll.hasClients ||
+        (target - _seasonScroll.offset).abs() < 1) {
+      _focusPill(index);
+      return;
+    }
+    unawaited(
+      _seasonScroll
+          .animateTo(
+            target,
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+          )
+          .then((_) {
+            if (!mounted) return;
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) _focusPill(index);
+            });
+          }),
+    );
+  }
+
+  double? _seasonPillCenterOffset(int index) {
+    if (!_seasonScroll.hasClients) return null;
+    final position = _seasonScroll.position;
+    var target = position.pixels;
+
+    final pillContext = _pillFocusNodes[index].context;
+    final viewportContext = _seasonViewportKey.currentContext;
+    if (pillContext != null &&
+        pillContext.mounted &&
+        viewportContext != null &&
+        viewportContext.mounted) {
+      final pillBox = pillContext.findRenderObject();
+      final viewportBox = viewportContext.findRenderObject();
+      if (pillBox is RenderBox &&
+          pillBox.hasSize &&
+          viewportBox is RenderBox &&
+          viewportBox.hasSize) {
+        final pillCenter = pillBox.localToGlobal(
+          pillBox.size.center(Offset.zero),
+        );
+        final viewportCenter = viewportBox.localToGlobal(
+          viewportBox.size.center(Offset.zero),
+        );
+        target = position.pixels + pillCenter.dx - viewportCenter.dx;
+      }
+    } else if (_pillFocusNodes.length > 1) {
+      target = position.maxScrollExtent * index / (_pillFocusNodes.length - 1);
+    }
+
+    return target.clamp(position.minScrollExtent, position.maxScrollExtent);
+  }
+
+  bool _pillDirection(int index, TraversalDirection d) {
+    if (d == TraversalDirection.left) {
+      if (index > 0) _focusPill(index - 1);
+      return true;
+    }
+    if (d == TraversalDirection.right) {
+      if (index + 1 < _pillFocusNodes.length) {
+        _focusPill(index + 1);
+        return true;
+      }
+      return widget.onEntryUp(d);
+    }
     if (d == TraversalDirection.up) return widget.onEntryUp(d);
     if (d == TraversalDirection.down) {
       if (_episodeFocusNodes.isNotEmpty) {
@@ -2016,6 +2493,7 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
 
     _syncPillFocusNodes(seasons.length);
     _syncEpisodeFocusNodes(episodes.length);
+    _reportLastEpisodeFocusNode();
 
     return Container(
       padding: EdgeInsets.fromLTRB(widget.hPad, 48, widget.hPad, 64),
@@ -2067,25 +2545,32 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
               const SizedBox(width: 8),
               Expanded(
                 child: SizedBox(
+                  key: _seasonViewportKey,
                   height: 40,
                   child: ScrollConfiguration(
                     behavior: ScrollConfiguration.of(
                       context,
                     ).copyWith(scrollbars: false),
-                    child: ListView.separated(
+                    child: SingleChildScrollView(
                       controller: _seasonScroll,
                       scrollDirection: Axis.horizontal,
-                      itemCount: seasons.length,
-                      separatorBuilder: (_, _) => const SizedBox(width: 8),
-                      itemBuilder: (_, i) => _SeasonPill(
-                        seasonNumber: seasons[i].seasonNumber,
-                        episodeCount: seasons[i].episodeCount,
-                        active: i == widget.selectedIdx,
-                        onTap: () => widget.onSeasonChange(i),
-                        focusNode: i < _pillFocusNodes.length
-                            ? _pillFocusNodes[i]
-                            : null,
-                        onDirection: _pillDirection,
+                      child: Row(
+                        children: [
+                          for (var i = 0; i < seasons.length; i++) ...[
+                            _SeasonPill(
+                              seasonNumber: seasons[i].seasonNumber,
+                              episodeCount: seasons[i].episodeCount,
+                              active: i == widget.selectedIdx,
+                              onTap: () => widget.onSeasonChange(i),
+                              focusNode: i < _pillFocusNodes.length
+                                  ? _pillFocusNodes[i]
+                                  : null,
+                              onDirection: (d) => _pillDirection(i, d),
+                            ),
+                            if (i != seasons.length - 1)
+                              const SizedBox(width: 8),
+                          ],
+                        ],
                       ),
                     ),
                   ),
@@ -2144,19 +2629,20 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
                 // default beam nav.
                 final bool isFirstEp = epIdx == 0;
                 final bool isLastEp = epIdx == episodes.length - 1;
-                final DpadDirectionCallback? epDirection =
-                    (isFirstEp || isLastEp)
-                    ? (d) {
-                        if (isFirstEp && d == TraversalDirection.up) {
-                          Dpad.of(context).requestFocus(_pillFocusNodes[0]);
-                          return true;
-                        }
-                        if (isLastEp && d == TraversalDirection.down) {
-                          return widget.onLastEpisodeDown(d);
-                        }
-                        return false;
-                      }
-                    : null;
+                bool epDirection(TraversalDirection d) {
+                  if (d == TraversalDirection.left) return true;
+                  if (d == TraversalDirection.right) {
+                    return widget.onEpisodeRight(d);
+                  }
+                  if (isFirstEp && d == TraversalDirection.up) {
+                    _focusSeasonEntry();
+                    return true;
+                  }
+                  if (isLastEp && d == TraversalDirection.down) {
+                    return widget.onLastEpisodeDown(d);
+                  }
+                  return false;
+                }
 
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 12),
@@ -2181,7 +2667,6 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
                       ep.episodeNumber ?? epIdx + 1,
                       progressEp?.playbackId,
                     ),
-                    contextMenuBuilder: null,
                     size: size,
                   ),
                 );
@@ -2309,13 +2794,25 @@ class _SeasonPillState extends State<_SeasonPill> {
                         : Colors.white.withAlpha(15)),
               borderRadius: BorderRadius.circular(99),
               border: state.focused
-                  ? Border.all(color: WarpColors.accent, width: 2)
+                  ? Border.all(
+                      color: active ? Colors.white : WarpColors.accent,
+                      width: 2.5,
+                    )
                   : (active
                         ? null
                         : Border.all(
                             color: Colors.white.withAlpha(_hovered ? 38 : 25),
                           )),
-              boxShadow: active
+              boxShadow: state.focused
+                  ? const [
+                      BoxShadow(
+                        color: Color(0xCC000000),
+                        blurRadius: 12,
+                        spreadRadius: 1,
+                      ),
+                      BoxShadow(color: Color(0x9901B4E4), blurRadius: 18),
+                    ]
+                  : active
                   ? const [BoxShadow(color: Color(0x5901B4E4), blurRadius: 14)]
                   : null,
             ),
@@ -2373,7 +2870,6 @@ class _EpisodeCard extends StatefulWidget {
   final Size size;
   final FocusNode? focusNode;
   final DpadDirectionCallback? onDirection;
-  final List<WarpContextMenuItem> Function()? contextMenuBuilder;
 
   const _EpisodeCard({
     required this.episode,
@@ -2390,7 +2886,6 @@ class _EpisodeCard extends StatefulWidget {
     required this.size,
     this.focusNode,
     this.onDirection,
-    this.contextMenuBuilder,
   });
 
   @override
@@ -2399,19 +2894,6 @@ class _EpisodeCard extends StatefulWidget {
 
 class _EpisodeCardState extends State<_EpisodeCard> {
   bool _hovered = false;
-  bool _focused = false;
-
-  void _openContextMenu() {
-    final builder = widget.contextMenuBuilder;
-    if (builder == null) return;
-    final items = builder();
-    if (items.isEmpty) return;
-    showWarpContextMenu(
-      context,
-      items: items,
-      restoreFocusNode: widget.focusNode,
-    );
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -2442,286 +2924,268 @@ class _EpisodeCardState extends State<_EpisodeCard> {
     // Still frame width: clamp(160px, 14vw, 220px)
     final stillW = (size.width * 0.14).clamp(160.0, 220.0);
 
-    return DpadFocusable(
-      focusNode: widget.focusNode,
-      onDirection: widget.onDirection,
-      onFocusChange: (v) => setState(() => _focused = v),
-      onSelect: widget.onPlay,
-      onLongSelect: widget.contextMenuBuilder == null ? null : _openContextMenu,
-      tapToSelect: false,
-      builder: (context, state, child) => MouseRegion(
-        onEnter: (_) => setState(() => _hovered = true),
-        onExit: (_) => setState(() => _hovered = false),
-        child: GestureDetector(
-          onTap: () {
-            widget.focusNode?.requestFocus();
-            widget.onPlay();
-          },
-          onLongPress: widget.contextMenuBuilder == null
-              ? null
-              : _openContextMenu,
-          onSecondaryTap: widget.contextMenuBuilder == null
-              ? null
-              : _openContextMenu,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
-            constraints: const BoxConstraints(minHeight: 110),
-            decoration: BoxDecoration(
-              color: bgColor,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: _focused ? const Color(0xFF0DB2E2) : borderColor,
-                width: _focused ? 1.5 : 1.0,
-              ),
-              boxShadow: _hovered
-                  ? const [
-                      BoxShadow(
-                        color: Color(0x80000000),
-                        blurRadius: 24,
-                        offset: Offset(0, 4),
-                      ),
-                    ]
-                  : null,
-            ),
-            // Tauri: opacity 0.65 for watched-done episodes that aren't resume
-            child: Opacity(
-              opacity: watchedDone ? 0.65 : 1.0,
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(12),
-                child: Stack(
-                  children: [
-                    IntrinsicHeight(
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          // Still frame
-                          SizedBox(
-                            width: stillW,
-                            child: Stack(
-                              fit: StackFit.expand,
-                              children: [
-                                if (stillImg != null) ...[
-                                  CachedNetworkImage(
-                                    imageUrl: stillImg,
-                                    fit: BoxFit.cover,
-                                    placeholder: (_, _) => const ColoredBox(
-                                      color: Color(0x0AFFFFFF),
-                                    ),
-                                    errorWidget: (_, _, _) => const ColoredBox(
-                                      color: Color(0x0AFFFFFF),
-                                    ),
-                                  ),
-                                  // Tauri: gradient to right from transparent to black/20
-                                  const DecoratedBox(
-                                    decoration: BoxDecoration(
-                                      gradient: LinearGradient(
-                                        begin: Alignment.centerLeft,
-                                        end: Alignment.centerRight,
-                                        colors: [
-                                          Colors.transparent,
-                                          Color(0x33000000),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                ] else
-                                  const Center(
-                                    child: Icon(
-                                      Icons.play_arrow,
-                                      color: Color(0x33FFFFFF),
-                                      size: 22,
-                                    ),
-                                  ),
-
-                                // SxxExx badge
-                                Positioned(
-                                  bottom: 8,
-                                  left: 8,
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 7,
-                                      vertical: 2,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xB7000000),
-                                      borderRadius: BorderRadius.circular(5),
-                                    ),
-                                    child: Text(
-                                      widget.epCode,
-                                      style: const TextStyle(
-                                        fontSize: 11,
-                                        color: Color(0xE6FFFFFF),
-                                        fontWeight: FontWeight.w700,
-                                        letterSpacing: 0.5,
-                                      ),
-                                    ),
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        constraints: const BoxConstraints(minHeight: 110),
+        decoration: BoxDecoration(
+          color: bgColor,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: borderColor, width: 1.0),
+          boxShadow: _hovered
+              ? const [
+                  BoxShadow(
+                    color: Color(0x80000000),
+                    blurRadius: 24,
+                    offset: Offset(0, 4),
+                  ),
+                ]
+              : null,
+        ),
+        // Tauri: opacity 0.65 for watched-done episodes that aren't resume
+        child: Opacity(
+          opacity: watchedDone ? 0.65 : 1.0,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: Stack(
+              children: [
+                IntrinsicHeight(
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // Still frame
+                      SizedBox(
+                        width: stillW,
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            if (stillImg != null) ...[
+                              CachedNetworkImage(
+                                imageUrl: stillImg,
+                                fit: BoxFit.cover,
+                                placeholder: (_, _) =>
+                                    const ColoredBox(color: Color(0x0AFFFFFF)),
+                                errorWidget: (_, _, _) =>
+                                    const ColoredBox(color: Color(0x0AFFFFFF)),
+                              ),
+                              // Tauri: gradient to right from transparent to black/20
+                              const DecoratedBox(
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    begin: Alignment.centerLeft,
+                                    end: Alignment.centerRight,
+                                    colors: [
+                                      Colors.transparent,
+                                      Color(0x33000000),
+                                    ],
                                   ),
                                 ),
+                              ),
+                            ] else
+                              const Center(
+                                child: Icon(
+                                  Icons.play_arrow,
+                                  color: Color(0x33FFFFFF),
+                                  size: 22,
+                                ),
+                              ),
 
-                                // Watched tick overlay
-                                if (widget.isWatched)
-                                  const Positioned(
-                                    top: 8,
-                                    right: 8,
-                                    child: Icon(
-                                      Icons.check_circle,
-                                      color: Color(0xFF34D399),
-                                      size: 18,
-                                    ),
+                            // SxxExx badge
+                            Positioned(
+                              bottom: 8,
+                              left: 8,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 7,
+                                  vertical: 2,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xB7000000),
+                                  borderRadius: BorderRadius.circular(5),
+                                ),
+                                child: Text(
+                                  widget.epCode,
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    color: Color(0xE6FFFFFF),
+                                    fontWeight: FontWeight.w700,
+                                    letterSpacing: 0.5,
                                   ),
-
-                                // Local file indicator — cyan HardDrive
-                                if (epLocalSrc != null)
-                                  const Positioned(
-                                    bottom: 8,
-                                    right: 8,
-                                    child: Icon(
-                                      Icons.storage,
-                                      color: Color(0xFF22D3EE),
-                                      size: 14,
-                                    ),
-                                  ),
-                              ],
+                                ),
+                              ),
                             ),
-                          ),
 
-                          // Metadata + play button
-                          Expanded(
-                            child: Container(
-                              color: Colors.white.withAlpha(25),
-                              padding: const EdgeInsets.fromLTRB(24, 16, 0, 16),
-                              child: Row(
-                                children: [
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
+                            // Watched tick overlay
+                            if (widget.isWatched)
+                              const Positioned(
+                                top: 8,
+                                right: 8,
+                                child: Icon(
+                                  Icons.check_circle,
+                                  color: Color(0xFF34D399),
+                                  size: 18,
+                                ),
+                              ),
+
+                            // Local file indicator — cyan HardDrive
+                            if (epLocalSrc != null)
+                              const Positioned(
+                                bottom: 8,
+                                right: 8,
+                                child: Icon(
+                                  Icons.storage,
+                                  color: Color(0xFF22D3EE),
+                                  size: 14,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+
+                      // Metadata + play button
+                      Expanded(
+                        child: Container(
+                          color: Colors.white.withAlpha(25),
+                          padding: const EdgeInsets.fromLTRB(24, 16, 16, 16),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      ep.title.isEmpty
+                                          ? 'Episode ${ep.episodeNumber}'
+                                          : ep.title,
+                                      style: TextStyle(
+                                        fontSize: (size.width * 0.01).clamp(
+                                          14.0,
+                                          17.0,
+                                        ),
+                                        fontWeight: FontWeight.w600,
+                                        color: Colors.white,
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    const SizedBox(height: 5),
+                                    Row(
                                       children: [
-                                        Text(
-                                          ep.title.isEmpty
-                                              ? 'Episode ${ep.episodeNumber}'
-                                              : ep.title,
-                                          style: TextStyle(
-                                            fontSize: (size.width * 0.01).clamp(
-                                              14.0,
-                                              17.0,
-                                            ),
-                                            fontWeight: FontWeight.w600,
-                                            color: Colors.white,
-                                          ),
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                        const SizedBox(height: 5),
-                                        Row(
-                                          children: [
-                                            if (ep.airDate != null)
-                                              Text(
-                                                ep.airDate!,
-                                                style: const TextStyle(
-                                                  fontSize: 12,
-                                                  color: Color(0x66FFFFFF),
-                                                ),
-                                              ),
-                                            if (ep.airDate != null &&
-                                                ep.runtimeMinutes != null)
-                                              const Text(
-                                                ' · ',
-                                                style: TextStyle(
-                                                  color: Color(0x66FFFFFF),
-                                                ),
-                                              ),
-                                            if (ep.runtimeMinutes != null)
-                                              Text(
-                                                '${ep.runtimeMinutes} min',
-                                                style: const TextStyle(
-                                                  fontSize: 12,
-                                                  color: Color(0x66FFFFFF),
-                                                ),
-                                              ),
-                                            if (ep.voteAverage != null) ...[
-                                              const SizedBox(width: 8),
-                                              const Icon(
-                                                Icons.star,
-                                                size: 10,
-                                                color: Color(0xE6EAB308),
-                                              ),
-                                              const SizedBox(width: 2),
-                                              Text(
-                                                ep.voteAverage!.toStringAsFixed(
-                                                  1,
-                                                ),
-                                                style: const TextStyle(
-                                                  fontSize: 12,
-                                                  color: Color(0xE6EAB308),
-                                                  fontWeight: FontWeight.w600,
-                                                ),
-                                              ),
-                                            ],
-                                          ],
-                                        ),
-                                        if (ep.overview != null &&
-                                            ep.overview!.isNotEmpty) ...[
-                                          const SizedBox(height: 8),
+                                        if (ep.airDate != null)
                                           Text(
-                                            ep.overview!,
-                                            maxLines: 2,
-                                            overflow: TextOverflow.ellipsis,
+                                            ep.airDate!,
+                                            style: const TextStyle(
+                                              fontSize: 12,
+                                              color: Color(0x66FFFFFF),
+                                            ),
+                                          ),
+                                        if (ep.airDate != null &&
+                                            ep.runtimeMinutes != null)
+                                          const Text(
+                                            ' · ',
                                             style: TextStyle(
-                                              fontSize: (size.width * 0.0075)
-                                                  .clamp(12.0, 14.0),
-                                              color: Colors.white.withAlpha(
-                                                115,
-                                              ),
-                                              height: 1.5,
+                                              color: Color(0x66FFFFFF),
+                                            ),
+                                          ),
+                                        if (ep.runtimeMinutes != null)
+                                          Text(
+                                            '${ep.runtimeMinutes} min',
+                                            style: const TextStyle(
+                                              fontSize: 12,
+                                              color: Color(0x66FFFFFF),
+                                            ),
+                                          ),
+                                        if (ep.voteAverage != null) ...[
+                                          const SizedBox(width: 8),
+                                          const Icon(
+                                            Icons.star,
+                                            size: 10,
+                                            color: Color(0xE6EAB308),
+                                          ),
+                                          const SizedBox(width: 2),
+                                          Text(
+                                            ep.voteAverage!.toStringAsFixed(1),
+                                            style: const TextStyle(
+                                              fontSize: 12,
+                                              color: Color(0xE6EAB308),
+                                              fontWeight: FontWeight.w600,
                                             ),
                                           ),
                                         ],
                                       ],
                                     ),
-                                  ),
-
-                                  // Episode play button
-                                  _EpisodePlayButton(
-                                    watchedDone: watchedDone,
-                                    epScrobblePct: epScrobblePct,
-                                    hasLocalSource: epLocalSrc != null,
-                                    isMarking: isMarking,
-                                    onPlay: widget.onPlay,
-                                    onMarkWatched: widget.onMarkWatched,
-                                  ),
-                                ],
+                                    if (ep.overview != null &&
+                                        ep.overview!.isNotEmpty) ...[
+                                      const SizedBox(height: 8),
+                                      Text(
+                                        ep.overview!,
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          fontSize: (size.width * 0.0075).clamp(
+                                            12.0,
+                                            14.0,
+                                          ),
+                                          color: Colors.white.withAlpha(115),
+                                          height: 1.5,
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
                               ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
 
-                    // Scrobble progress bar — full card width, top edge (3px)
-                    if (epScrobblePct != null)
-                      Positioned(
-                        top: 0,
-                        left: 0,
-                        right: 0,
-                        child: Container(
-                          height: 3,
-                          color: Colors.white.withAlpha(25),
-                          child: FractionallySizedBox(
-                            alignment: Alignment.centerLeft,
-                            widthFactor: (epScrobblePct / 100).clamp(0.0, 1.0),
-                            child: Container(color: const Color(0xFFFBBF24)),
+                              Container(
+                                width: 1,
+                                height: 58,
+                                margin: const EdgeInsets.symmetric(
+                                  horizontal: 20,
+                                ),
+                                color: Colors.white.withAlpha(22),
+                              ),
+
+                              // Episode play button
+                              _EpisodePlayButton(
+                                watchedDone: watchedDone,
+                                epScrobblePct: epScrobblePct,
+                                hasLocalSource: epLocalSrc != null,
+                                isMarking: isMarking,
+                                focusNode: widget.focusNode,
+                                onDirection: widget.onDirection,
+                                onPlay: widget.onPlay,
+                                onMarkWatched: widget.onMarkWatched,
+                              ),
+                            ],
                           ),
                         ),
                       ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
+
+                // Scrobble progress bar — full card width, top edge (3px)
+                if (epScrobblePct != null)
+                  Positioned(
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    child: Container(
+                      height: 3,
+                      color: Colors.white.withAlpha(25),
+                      child: FractionallySizedBox(
+                        alignment: Alignment.centerLeft,
+                        widthFactor: (epScrobblePct / 100).clamp(0.0, 1.0),
+                        child: Container(color: const Color(0xFFFBBF24)),
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
         ),
       ),
-      child: const SizedBox.shrink(),
     );
   }
 }
@@ -2735,6 +3199,8 @@ class _EpisodePlayButton extends StatefulWidget {
   final double? epScrobblePct;
   final bool hasLocalSource;
   final bool isMarking;
+  final FocusNode? focusNode;
+  final DpadDirectionCallback? onDirection;
   final VoidCallback onPlay;
   final Future<void> Function() onMarkWatched;
 
@@ -2743,6 +3209,8 @@ class _EpisodePlayButton extends StatefulWidget {
     required this.epScrobblePct,
     required this.hasLocalSource,
     required this.isMarking,
+    this.focusNode,
+    this.onDirection,
     required this.onPlay,
     required this.onMarkWatched,
   });
@@ -2754,26 +3222,43 @@ class _EpisodePlayButton extends StatefulWidget {
 class _EpisodePlayButtonState extends State<_EpisodePlayButton> {
   bool _hovered = false;
 
-  // Tauri colors for episode play button
-  Color get _bgColor => widget.watchedDone
-      ? const Color(0x29109B60)
+  void _openContextMenu() {
+    if (widget.isMarking) return;
+    showWarpContextMenu(
+      context,
+      items: [
+        WarpContextMenuItem(
+          label: 'Mark as Watched',
+          icon: Icons.check_circle_outline,
+          onSelected: () => unawaited(widget.onMarkWatched()),
+        ),
+      ],
+      restoreFocusNode: widget.focusNode,
+      centerInViewport: true,
+    );
+  }
+
+  Color get _accentColor => widget.watchedDone
+      ? const Color(0xFF109B60)
+      : widget.epScrobblePct != null
+      ? const Color(0xFFD97706)
+      : const Color(0xFFE50914);
+
+  Color get _activeBgColor => widget.watchedDone
+      ? const Color(0xCC109B60)
       : widget.epScrobblePct != null
       ? const Color(0xE6D97706)
       : const Color(0xD9E50914);
 
+  Color get _inactiveBgColor => const Color(0xCC333232);
+
   Color get _textColor =>
       widget.watchedDone ? const Color(0xFF6EE7B7) : Colors.white;
 
-  BoxBorder get _border => widget.watchedDone
-      ? Border.all(color: const Color(0x59109B60))
-      : Border.all(color: Colors.transparent);
+  Color get _inactiveBorderColor => _accentColor.withAlpha(180);
 
   BoxShadow get _shadow => BoxShadow(
-    color: widget.watchedDone
-        ? const Color(0x29109B60)
-        : widget.epScrobblePct != null
-        ? const Color(0x66D97706)
-        : const Color(0x4DE50914),
+    color: _accentColor.withAlpha(widget.watchedDone ? 65 : 100),
     blurRadius: 12,
     offset: const Offset(0, 2),
   );
@@ -2808,37 +3293,58 @@ class _EpisodePlayButtonState extends State<_EpisodePlayButton> {
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
       cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: widget.isMarking ? null : widget.onPlay,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          margin: const EdgeInsets.only(right: 20),
-          padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 10),
-          decoration: BoxDecoration(
-            color: _bgColor,
-            borderRadius: BorderRadius.circular(8),
-            border: _border,
-            boxShadow: [_shadow],
-          ),
-          child: Opacity(
-            opacity: widget.isMarking ? 0.8 : (_hovered ? 1.0 : 1.0),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _icon,
-                const SizedBox(width: 8),
-                Text(
-                  _label,
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: _textColor,
-                  ),
+      child: DpadFocusable(
+        focusNode: widget.focusNode,
+        onDirection: widget.onDirection,
+        onSelect: widget.isMarking ? () {} : widget.onPlay,
+        onLongSelect: _openContextMenu,
+        enabled: !widget.isMarking,
+        tapToSelect: false,
+        builder: (context, state, child) {
+          final active = state.focused || _hovered;
+          return GestureDetector(
+            onTap: widget.isMarking
+                ? null
+                : () {
+                    widget.focusNode?.requestFocus();
+                    widget.onPlay();
+                  },
+            onLongPress: _openContextMenu,
+            onSecondaryTap: _openContextMenu,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 10),
+              decoration: BoxDecoration(
+                color: active ? _activeBgColor : _inactiveBgColor,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: active ? _accentColor : _inactiveBorderColor,
+                  width: 1,
                 ),
-              ],
+                boxShadow: active ? [_shadow] : null,
+              ),
+              child: Opacity(
+                opacity: widget.isMarking ? 0.8 : 1.0,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _icon,
+                    const SizedBox(width: 8),
+                    Text(
+                      _label,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: _textColor,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
-          ),
-        ),
+          );
+        },
+        child: const SizedBox.shrink(),
       ),
     );
   }
@@ -2851,8 +3357,19 @@ class _EpisodePlayButtonState extends State<_EpisodePlayButton> {
 class _CastSection extends StatefulWidget {
   final List<CastMember> cast;
   final double hPad;
+  final FocusNode entryFocusNode;
+  final DpadDirectionCallback onUp;
+  final DpadDirectionCallback onDown;
+  final VoidCallback onFocusRail;
 
-  const _CastSection({required this.cast, required this.hPad});
+  const _CastSection({
+    required this.cast,
+    required this.hPad,
+    required this.entryFocusNode,
+    required this.onUp,
+    required this.onDown,
+    required this.onFocusRail,
+  });
 
   @override
   State<_CastSection> createState() => _CastSectionState();
@@ -2860,16 +3377,66 @@ class _CastSection extends StatefulWidget {
 
 class _CastSectionState extends State<_CastSection> {
   final _scroll = ScrollController();
+  List<FocusNode> _castFocusNodes = [];
 
   @override
   void dispose() {
     _scroll.dispose();
+    for (var i = 1; i < _castFocusNodes.length; i++) {
+      _castFocusNodes[i].dispose();
+    }
     super.dispose();
+  }
+
+  void _syncFocusNodes(int count) {
+    if (_castFocusNodes.length == count) return;
+    for (var i = 1; i < _castFocusNodes.length; i++) {
+      _castFocusNodes[i].dispose();
+    }
+    _castFocusNodes = List.generate(
+      count,
+      (i) => i == 0 ? widget.entryFocusNode : FocusNode(),
+    );
+  }
+
+  void _focusCast(int index) {
+    if (index < 0 || index >= _castFocusNodes.length) return;
+    final node = _castFocusNodes[index];
+    Dpad.of(context).requestFocus(node);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final nodeContext = node.context;
+      if (nodeContext == null) return;
+      Scrollable.ensureVisible(
+        nodeContext,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+        alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
+      );
+    });
+  }
+
+  bool _castDirection(int index, TraversalDirection direction) {
+    if (direction == TraversalDirection.left) {
+      if (index > 0) _focusCast(index - 1);
+      return true;
+    }
+    if (direction == TraversalDirection.right) {
+      if (index + 1 < _castFocusNodes.length) {
+        _focusCast(index + 1);
+      } else {
+        widget.onFocusRail();
+      }
+      return true;
+    }
+    if (direction == TraversalDirection.up) return widget.onUp(direction);
+    if (direction == TraversalDirection.down) return widget.onDown(direction);
+    return false;
   }
 
   @override
   Widget build(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
+    _syncFocusNodes(widget.cast.length);
     return Container(
       padding: EdgeInsets.fromLTRB(widget.hPad, 48, 0, 56),
       decoration: const BoxDecoration(
@@ -2890,18 +3457,6 @@ class _CastSectionState extends State<_CastSection> {
                     fontSize: (size.width * 0.0175).clamp(22.0, 28.0),
                     fontWeight: FontWeight.w700,
                     color: Colors.white,
-                  ),
-                ),
-                // "View All" button — Tauri has this
-                MouseRegion(
-                  cursor: SystemMouseCursors.click,
-                  child: Text(
-                    'View All',
-                    style: const TextStyle(
-                      color: Color(0x99FFFFFF),
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
-                    ),
                   ),
                 ),
               ],
@@ -2935,7 +3490,14 @@ class _CastSectionState extends State<_CastSection> {
                       padding: EdgeInsets.only(right: widget.hPad - 4),
                       itemCount: widget.cast.length,
                       separatorBuilder: (_, _) => const SizedBox(width: 16),
-                      itemBuilder: (_, i) => _CastCard(member: widget.cast[i]),
+                      itemBuilder: (_, i) => _CastCard(
+                        member: widget.cast[i],
+                        focusNode: i < _castFocusNodes.length
+                            ? _castFocusNodes[i]
+                            : null,
+                        onDirection: (direction) =>
+                            _castDirection(i, direction),
+                      ),
                     ),
                   ),
                 ),
@@ -2998,7 +3560,10 @@ class _CastChevronState extends State<_CastChevron> {
 
 class _CastCard extends StatefulWidget {
   final CastMember member;
-  const _CastCard({required this.member});
+  final FocusNode? focusNode;
+  final DpadDirectionCallback? onDirection;
+
+  const _CastCard({required this.member, this.focusNode, this.onDirection});
 
   @override
   State<_CastCard> createState() => _CastCardState();
@@ -3018,86 +3583,97 @@ class _CastCardState extends State<_CastCard> {
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
       cursor: SystemMouseCursors.click,
-      child: AnimatedSlide(
-        offset: _hovered ? const Offset(0, -0.08) : Offset.zero,
-        duration: const Duration(milliseconds: 200),
-        child: AnimatedContainer(
+      child: DpadFocusable(
+        focusNode: widget.focusNode,
+        onDirection: widget.onDirection,
+        onSelect: () {},
+        tapToSelect: false,
+        builder: (context, state, child) => AnimatedSlide(
+          offset: (_hovered || state.focused)
+              ? const Offset(0, -0.08)
+              : Offset.zero,
           duration: const Duration(milliseconds: 200),
-          width: 160,
-          // Tauri: hover:shadow-[0_12px_24px_rgba(0,0,0,0.5)] hover:bg-white/[0.05]
-          decoration: BoxDecoration(
-            color: _hovered
-                ? Colors.white.withAlpha(13)
-                : Colors.white.withAlpha(8),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: _hovered
-                  ? Colors.white.withAlpha(38)
-                  : Colors.white.withAlpha(20),
-            ),
-            boxShadow: _hovered
-                ? const [
-                    BoxShadow(
-                      color: Color(0x80000000),
-                      blurRadius: 24,
-                      offset: Offset(0, 12),
-                    ),
-                  ]
-                : null,
-          ),
-          clipBehavior: Clip.hardEdge,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              SizedBox(
-                height: 200,
-                width: 160,
-                child: photo != null
-                    ? CachedNetworkImage(
-                        imageUrl: photo,
-                        fit: BoxFit.cover,
-                        placeholder: (_, _) =>
-                            const ColoredBox(color: Color(0x0DFFFFFF)),
-                        errorWidget: (_, _, _) => const _NoPhoto(),
-                      )
-                    : const _NoPhoto(),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            width: 160,
+            decoration: BoxDecoration(
+              color: _hovered || state.focused
+                  ? Colors.white.withAlpha(13)
+                  : Colors.white.withAlpha(8),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: state.focused
+                    ? Colors.white
+                    : _hovered
+                    ? Colors.white.withAlpha(38)
+                    : Colors.white.withAlpha(20),
+                width: state.focused ? 2.5 : 1,
               ),
-              Flexible(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(10, 10, 10, 6),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        m.name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Color(0xE6FFFFFF),
-                          fontWeight: FontWeight.w600,
-                          fontSize: 14,
-                        ),
+              boxShadow: _hovered || state.focused
+                  ? const [
+                      BoxShadow(
+                        color: Color(0x80000000),
+                        blurRadius: 24,
+                        offset: Offset(0, 12),
                       ),
-                      if (m.character != null) ...[
-                        const SizedBox(height: 2),
+                    ]
+                  : null,
+            ),
+            clipBehavior: Clip.hardEdge,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  height: 200,
+                  width: 160,
+                  child: photo != null
+                      ? CachedNetworkImage(
+                          imageUrl: photo,
+                          fit: BoxFit.cover,
+                          placeholder: (_, _) =>
+                              const ColoredBox(color: Color(0x0DFFFFFF)),
+                          errorWidget: (_, _, _) => const _NoPhoto(),
+                        )
+                      : const _NoPhoto(),
+                ),
+                Flexible(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(10, 10, 10, 6),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
                         Text(
-                          m.character!,
+                          m.name,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
-                            color: Color(0x80FFFFFF),
-                            fontSize: 12,
+                            color: Color(0xE6FFFFFF),
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
                           ),
                         ),
+                        if (m.character != null) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            m.character!,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Color(0x80FFFFFF),
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
                       ],
-                    ],
+                    ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
+        child: const SizedBox.shrink(),
       ),
     );
   }
@@ -3119,13 +3695,9 @@ class _NoPhoto extends StatelessWidget {
 // Where to Watch Section
 // ─────────────────────────────────────────────────────────────────────────────
 
-class _WatchProvidersSection extends StatelessWidget {
+class _WatchProvidersSection extends StatefulWidget {
   final WatchProvidersResponse providers;
   final double hPad;
-  // D-pad chain: entryFocusNode goes on the very first logo rendered
-  // (streaming's first if present, else rent/buy's first). onDirection is
-  // shared across every logo in this section (up -> previous section;
-  // down -> next section).
   final FocusNode entryFocusNode;
   final DpadDirectionCallback onDirection;
 
@@ -3137,13 +3709,135 @@ class _WatchProvidersSection extends StatelessWidget {
   });
 
   @override
+  State<_WatchProvidersSection> createState() => _WatchProvidersSectionState();
+}
+
+class _WatchProvidersSectionState extends State<_WatchProvidersSection> {
+  List<FocusNode> _streamingNodes = [];
+  List<FocusNode> _rentBuyNodes = [];
+  bool _rentBuyUsesEntry = false;
+
+  @override
+  void dispose() {
+    for (var i = 1; i < _streamingNodes.length; i++) {
+      _streamingNodes[i].dispose();
+    }
+    for (var i = _rentBuyUsesEntry ? 1 : 0; i < _rentBuyNodes.length; i++) {
+      final node = _rentBuyNodes[i];
+      node.dispose();
+    }
+    super.dispose();
+  }
+
+  void _syncNodes({required int streamingCount, required int rentBuyCount}) {
+    if (_streamingNodes.length != streamingCount) {
+      for (var i = 1; i < _streamingNodes.length; i++) {
+        _streamingNodes[i].dispose();
+      }
+      _streamingNodes = List.generate(
+        streamingCount,
+        (i) => i == 0 ? widget.entryFocusNode : FocusNode(),
+      );
+    }
+
+    final entryGoesToRentBuy = streamingCount == 0;
+    if (_rentBuyNodes.length != rentBuyCount ||
+        _rentBuyUsesEntry != entryGoesToRentBuy) {
+      for (var i = _rentBuyUsesEntry ? 1 : 0; i < _rentBuyNodes.length; i++) {
+        final node = _rentBuyNodes[i];
+        node.dispose();
+      }
+      _rentBuyUsesEntry = entryGoesToRentBuy;
+      _rentBuyNodes = List.generate(
+        rentBuyCount,
+        (i) =>
+            entryGoesToRentBuy && i == 0 ? widget.entryFocusNode : FocusNode(),
+      );
+    }
+  }
+
+  int _columnCount(double availableWidth) {
+    const logo = 56.0;
+    const spacing = 16.0;
+    return math.max(1, ((availableWidth + spacing) / (logo + spacing)).floor());
+  }
+
+  void _focusNode(List<FocusNode> nodes, int index) {
+    if (nodes.isEmpty) return;
+    Dpad.of(context).requestFocus(nodes[index.clamp(0, nodes.length - 1)]);
+  }
+
+  bool _providerDirection({
+    required bool streaming,
+    required int index,
+    required int columns,
+    required int streamingCount,
+    required int rentBuyCount,
+    required TraversalDirection direction,
+  }) {
+    final nodes = streaming ? _streamingNodes : _rentBuyNodes;
+    final count = streaming ? streamingCount : rentBuyCount;
+    final col = index % columns;
+
+    if (direction == TraversalDirection.left) {
+      if (index > 0) {
+        _focusNode(nodes, index - 1);
+        return true;
+      }
+      return true;
+    }
+
+    if (direction == TraversalDirection.right) {
+      if (index + 1 < count && (index + 1) % columns != 0) {
+        _focusNode(nodes, index + 1);
+        return true;
+      }
+      return widget.onDirection(direction);
+    }
+
+    if (direction == TraversalDirection.up) {
+      final previous = index - columns;
+      if (previous >= 0) {
+        _focusNode(nodes, previous);
+        return true;
+      }
+      if (!streaming && streamingCount > 0) {
+        final targetRowStart = ((streamingCount - 1) ~/ columns) * columns;
+        _focusNode(
+          _streamingNodes,
+          math.min(targetRowStart + col, streamingCount - 1),
+        );
+        return true;
+      }
+      return widget.onDirection(direction);
+    }
+
+    if (direction == TraversalDirection.down) {
+      final next = index + columns;
+      if (next < count) {
+        _focusNode(nodes, next);
+        return true;
+      }
+      if (streaming && rentBuyCount > 0) {
+        _focusNode(_rentBuyNodes, math.min(col, rentBuyCount - 1));
+        return true;
+      }
+      return widget.onDirection(direction);
+    }
+
+    return false;
+  }
+
+  @override
   Widget build(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
-    final combined = [...providers.rent, ...providers.buy];
-    final firstIsStreaming = providers.streaming.isNotEmpty;
+    final combined = [...widget.providers.rent, ...widget.providers.buy];
+    final streaming = widget.providers.streaming;
+    _syncNodes(streamingCount: streaming.length, rentBuyCount: combined.length);
+    final columns = _columnCount(size.width - (widget.hPad * 2));
 
     return Container(
-      padding: EdgeInsets.fromLTRB(hPad, 48, hPad, 56),
+      padding: EdgeInsets.fromLTRB(widget.hPad, 48, widget.hPad, 56),
       decoration: const BoxDecoration(
         color: Color(0xFF0A0A0A),
         border: Border(top: BorderSide(color: Color(0x0DFFFFFF))),
@@ -3160,7 +3854,7 @@ class _WatchProvidersSection extends StatelessWidget {
             ),
           ),
 
-          if (providers.streaming.isNotEmpty) ...[
+          if (streaming.isNotEmpty) ...[
             const SizedBox(height: 24),
             const Text(
               'Streaming Now',
@@ -3176,11 +3870,20 @@ class _WatchProvidersSection extends StatelessWidget {
               spacing: 16,
               runSpacing: 16,
               children: [
-                for (var i = 0; i < providers.streaming.length; i++)
+                for (var i = 0; i < streaming.length; i++)
                   _ProviderLogo(
-                    provider: providers.streaming[i],
-                    focusNode: i == 0 ? entryFocusNode : null,
-                    onDirection: onDirection,
+                    provider: streaming[i],
+                    focusNode: i < _streamingNodes.length
+                        ? _streamingNodes[i]
+                        : null,
+                    onDirection: (direction) => _providerDirection(
+                      streaming: true,
+                      index: i,
+                      columns: columns,
+                      streamingCount: streaming.length,
+                      rentBuyCount: combined.length,
+                      direction: direction,
+                    ),
                   ),
               ],
             ),
@@ -3205,10 +3908,17 @@ class _WatchProvidersSection extends StatelessWidget {
                 for (var i = 0; i < combined.length; i++)
                   _ProviderLogo(
                     provider: combined[i],
-                    focusNode: (!firstIsStreaming && i == 0)
-                        ? entryFocusNode
+                    focusNode: i < _rentBuyNodes.length
+                        ? _rentBuyNodes[i]
                         : null,
-                    onDirection: onDirection,
+                    onDirection: (direction) => _providerDirection(
+                      streaming: false,
+                      index: i,
+                      columns: columns,
+                      streamingCount: streaming.length,
+                      rentBuyCount: combined.length,
+                      direction: direction,
+                    ),
                   ),
               ],
             ),
@@ -3255,41 +3965,71 @@ class _ProviderLogoState extends State<_ProviderLogo> {
         onDirection: widget.onDirection,
         onSelect: () {},
         tapToSelect: false,
-        builder: (context, state, child) => AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(12),
-            boxShadow: state.focused
-                ? [
-                    BoxShadow(
-                      color: WarpColors.accent.withAlpha(140),
-                      blurRadius: 18,
-                      spreadRadius: 2,
-                    ),
-                  ]
-                : null,
-          ),
-          child: AnimatedScale(
-            scale: _hovered ? 1.10 : 1.0,
-            duration: const Duration(milliseconds: 200),
-            child: imgUrl != null
-                ? ClipRRect(
+        builder: (context, state, child) => AnimatedScale(
+          scale: (_hovered || state.focused) ? 1.10 : 1.0,
+          duration: const Duration(milliseconds: 200),
+          child: Stack(
+            clipBehavior: Clip.none,
+            alignment: Alignment.center,
+            children: [
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 150),
+                padding: EdgeInsets.all(state.focused ? 4 : 0),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(16),
+                  border: state.focused
+                      ? Border.all(color: Colors.white, width: 2.5)
+                      : null,
+                  boxShadow: state.focused
+                      ? const [
+                          BoxShadow(
+                            color: Color(0xCC000000),
+                            blurRadius: 18,
+                            spreadRadius: 2,
+                          ),
+                        ]
+                      : null,
+                ),
+                child: Container(
+                  decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(12),
-                    child: CachedNetworkImage(
-                      imageUrl: imgUrl,
-                      width: 56,
-                      height: 56,
-                      fit: BoxFit.cover,
-                      placeholder: (_, _) => Container(
-                        width: 56,
-                        height: 56,
-                        color: Colors.white.withAlpha(13),
-                      ),
-                      errorWidget: (_, _, _) =>
-                          _ProviderFallback(name: p.providerName),
+                    border: state.focused
+                        ? Border.all(color: Colors.black, width: 2)
+                        : null,
+                  ),
+                  child: imgUrl != null
+                      ? ClipRRect(
+                          borderRadius: BorderRadius.circular(12),
+                          child: CachedNetworkImage(
+                            imageUrl: imgUrl,
+                            width: 56,
+                            height: 56,
+                            fit: BoxFit.cover,
+                            placeholder: (_, _) => Container(
+                              width: 56,
+                              height: 56,
+                              color: Colors.white.withAlpha(13),
+                            ),
+                            errorWidget: (_, _, _) =>
+                                _ProviderFallback(name: p.providerName),
+                          ),
+                        )
+                      : _ProviderFallback(name: p.providerName),
+                ),
+              ),
+              if (state.focused)
+                Positioned(
+                  bottom: -8,
+                  child: Container(
+                    width: 18,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(99),
                     ),
-                  )
-                : _ProviderFallback(name: p.providerName),
+                  ),
+                ),
+            ],
           ),
         ),
         child: const SizedBox.shrink(),
@@ -3327,7 +4067,7 @@ class _ProviderFallback extends StatelessWidget {
 // Local Sources Section
 // ─────────────────────────────────────────────────────────────────────────────
 
-class _LocalSourcesSection extends StatelessWidget {
+class _LocalSourcesSection extends StatefulWidget {
   final List<SourceRow> sources;
   final double hPad;
   final void Function(SourceRow) onPlay;
@@ -3337,6 +4077,7 @@ class _LocalSourcesSection extends StatelessWidget {
   // beam nav, and there's nothing below Local Sources.
   final FocusNode entryFocusNode;
   final DpadDirectionCallback onEntryUp;
+  final VoidCallback onFocusRail;
 
   const _LocalSourcesSection({
     required this.sources,
@@ -3344,13 +4085,69 @@ class _LocalSourcesSection extends StatelessWidget {
     required this.onPlay,
     required this.entryFocusNode,
     required this.onEntryUp,
+    required this.onFocusRail,
   });
+
+  @override
+  State<_LocalSourcesSection> createState() => _LocalSourcesSectionState();
+}
+
+class _LocalSourcesSectionState extends State<_LocalSourcesSection> {
+  List<FocusNode> _sourceFocusNodes = [];
+
+  @override
+  void dispose() {
+    for (var i = 1; i < _sourceFocusNodes.length; i++) {
+      _sourceFocusNodes[i].dispose();
+    }
+    super.dispose();
+  }
+
+  void _syncFocusNodes(int count) {
+    if (_sourceFocusNodes.length == count) return;
+    for (var i = 1; i < _sourceFocusNodes.length; i++) {
+      _sourceFocusNodes[i].dispose();
+    }
+    _sourceFocusNodes = List.generate(
+      count,
+      (i) => i == 0 ? widget.entryFocusNode : FocusNode(),
+    );
+  }
+
+  void _focusSource(int index) {
+    if (index < 0 || index >= _sourceFocusNodes.length) return;
+    Dpad.of(context).requestFocus(_sourceFocusNodes[index]);
+  }
 
   @override
   Widget build(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
+    _syncFocusNodes(widget.sources.length);
+
+    bool rowDirection(int index, TraversalDirection d) {
+      if (d == TraversalDirection.right) {
+        widget.onFocusRail();
+        return true;
+      }
+      if (d == TraversalDirection.up) {
+        if (index > 0) {
+          _focusSource(index - 1);
+          return true;
+        }
+        return widget.onEntryUp(d);
+      }
+      if (d == TraversalDirection.down) {
+        if (index + 1 < _sourceFocusNodes.length) {
+          _focusSource(index + 1);
+          return true;
+        }
+        return true;
+      }
+      return false;
+    }
+
     return Container(
-      padding: EdgeInsets.fromLTRB(hPad, 40, hPad, 40),
+      padding: EdgeInsets.fromLTRB(widget.hPad, 40, widget.hPad, 40),
       decoration: const BoxDecoration(
         color: Color(0xFF0A0A0A),
         border: Border(top: BorderSide(color: Color(0x0DFFFFFF))),
@@ -3367,14 +4164,16 @@ class _LocalSourcesSection extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 16),
-          for (var i = 0; i < sources.length; i++)
+          for (var i = 0; i < widget.sources.length; i++)
             Padding(
               padding: const EdgeInsets.only(bottom: 12),
               child: _SourceRow(
-                source: sources[i],
-                onPlay: () => onPlay(sources[i]),
-                focusNode: i == 0 ? entryFocusNode : null,
-                onDirection: i == 0 ? onEntryUp : null,
+                source: widget.sources[i],
+                onPlay: () => widget.onPlay(widget.sources[i]),
+                focusNode: i < _sourceFocusNodes.length
+                    ? _sourceFocusNodes[i]
+                    : null,
+                onDirection: (d) => rowDirection(i, d),
               ),
             ),
         ],
@@ -3408,6 +4207,84 @@ class _SourceRowState extends State<_SourceRow> {
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: Colors.white.withAlpha(_hovered ? 13 : 8),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: Colors.white.withAlpha(_hovered ? 35 : 20),
+            width: 1,
+          ),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.white.withAlpha(13),
+                borderRadius: BorderRadius.circular(5),
+              ),
+              child: Text(
+                (src.quality ?? src.sourceType).toUpperCase(),
+                style: const TextStyle(
+                  color: Color(0xB3FFFFFF),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                src.filePath ?? src.url,
+                style: const TextStyle(
+                  color: Color(0xE6FFFFFF),
+                  fontSize: 13,
+                  fontFamily: 'monospace',
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const SizedBox(width: 12),
+            _SourcePlayButton(
+              focusNode: widget.focusNode,
+              onDirection: widget.onDirection,
+              onPlay: widget.onPlay,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SourcePlayButton extends StatefulWidget {
+  final FocusNode? focusNode;
+  final DpadDirectionCallback? onDirection;
+  final VoidCallback onPlay;
+
+  const _SourcePlayButton({
+    required this.focusNode,
+    required this.onDirection,
+    required this.onPlay,
+  });
+
+  @override
+  State<_SourcePlayButton> createState() => _SourcePlayButtonState();
+}
+
+class _SourcePlayButtonState extends State<_SourcePlayButton> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      cursor: SystemMouseCursors.click,
       child: DpadFocusable(
         focusNode: widget.focusNode,
         onDirection: widget.onDirection,
@@ -3420,78 +4297,39 @@ class _SourceRowState extends State<_SourceRow> {
           },
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 150),
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             decoration: BoxDecoration(
-              color: Colors.white.withAlpha(_hovered ? 13 : 8),
+              color: state.focused || _hovered
+                  ? const Color(0xFFE50914)
+                  : Colors.white.withAlpha(25),
               borderRadius: BorderRadius.circular(8),
               border: Border.all(
                 color: state.focused
-                    ? WarpColors.accent
-                    : Colors.white.withAlpha(_hovered ? 35 : 20),
-                width: state.focused ? 2 : 1,
+                    ? Colors.white
+                    : Colors.white.withAlpha(51),
+                width: state.focused ? 2.5 : 1,
               ),
+              boxShadow: state.focused || _hovered
+                  ? const [
+                      BoxShadow(
+                        color: Color(0x4DE50914),
+                        blurRadius: 12,
+                        offset: Offset(0, 2),
+                      ),
+                    ]
+                  : null,
             ),
-            child: Row(
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withAlpha(13),
-                    borderRadius: BorderRadius.circular(5),
-                  ),
-                  child: Text(
-                    (src.quality ?? src.sourceType).toUpperCase(),
-                    style: const TextStyle(
-                      color: Color(0xB3FFFFFF),
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    src.filePath ?? src.url,
-                    style: const TextStyle(
-                      color: Color(0xE6FFFFFF),
-                      fontSize: 13,
-                      fontFamily: 'monospace',
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                GestureDetector(
-                  onTap: widget.onPlay,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 8,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withAlpha(25),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.white.withAlpha(51)),
-                    ),
-                    child: const Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.play_arrow, color: Colors.white, size: 14),
-                        SizedBox(width: 6),
-                        Text(
-                          'Play',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    ),
+                Icon(Icons.play_arrow, color: Colors.white, size: 14),
+                SizedBox(width: 6),
+                Text(
+                  'Play',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
               ],
@@ -3508,7 +4346,7 @@ class _SourceRowState extends State<_SourceRow> {
 // Resume Modal Overlay  (matches Tauri exactly)
 // ─────────────────────────────────────────────────────────────────────────────
 
-class _ResumeModal extends StatelessWidget {
+class _ResumeModal extends StatefulWidget {
   final double? resumePercent;
   final VoidCallback onContinue;
   final VoidCallback onStartOver;
@@ -3522,94 +4360,157 @@ class _ResumeModal extends StatelessWidget {
   });
 
   @override
+  State<_ResumeModal> createState() => _ResumeModalState();
+}
+
+class _ResumeModalState extends State<_ResumeModal> {
+  final _continueFocus = FocusNode(debugLabel: 'ResumeContinue');
+  final _startOverFocus = FocusNode(debugLabel: 'ResumeStartOver');
+  final _cancelFocus = FocusNode(debugLabel: 'ResumeCancel');
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (!Dpad.of(context).requestFocus(_continueFocus)) {
+        _continueFocus.requestFocus();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _continueFocus.dispose();
+    _startOverFocus.dispose();
+    _cancelFocus.dispose();
+    super.dispose();
+  }
+
+  bool _continueDirection(TraversalDirection d) {
+    if (d == TraversalDirection.down) {
+      Dpad.of(context).requestFocus(_startOverFocus);
+      return true;
+    }
+    if (d == TraversalDirection.up) return true;
+    return false;
+  }
+
+  bool _startOverDirection(TraversalDirection d) {
+    if (d == TraversalDirection.up) {
+      Dpad.of(context).requestFocus(_continueFocus);
+      return true;
+    }
+    if (d == TraversalDirection.down) {
+      Dpad.of(context).requestFocus(_cancelFocus);
+      return true;
+    }
+    return false;
+  }
+
+  bool _cancelDirection(TraversalDirection d) {
+    if (d == TraversalDirection.up) {
+      Dpad.of(context).requestFocus(_startOverFocus);
+      return true;
+    }
+    if (d == TraversalDirection.down) return true;
+    return false;
+  }
+
+  @override
   Widget build(BuildContext context) {
     // Tauri: fixed inset-0 z-60 flex items-center justify-center
     //   bg: rgba(0,0,0,0.75) backdrop-blur-[8px]
-    return GestureDetector(
-      onTap: onCancel,
-      child: Container(
-        color: const Color(0xBF000000),
-        child: Center(
-          child: GestureDetector(
-            onTap: () {}, // prevent dismiss on modal tap
-            child: Container(
-              width: 360,
-              padding: const EdgeInsets.all(32),
-              decoration: BoxDecoration(
-                color: const Color(0xFA0C0C10),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.white.withAlpha(25)),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Color(0x66000000),
-                    blurRadius: 40,
-                    spreadRadius: 4,
-                  ),
-                ],
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Resume Playback',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 20,
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.escape): widget.onCancel,
+        const SingleActivator(LogicalKeyboardKey.goBack): widget.onCancel,
+        const SingleActivator(LogicalKeyboardKey.browserBack): widget.onCancel,
+      },
+      child: GestureDetector(
+        onTap: widget.onCancel,
+        child: Container(
+          color: const Color(0xBF000000),
+          child: Center(
+            child: GestureDetector(
+              onTap: () {}, // prevent dismiss on modal tap
+              child: Container(
+                width: 360,
+                padding: const EdgeInsets.all(32),
+                decoration: BoxDecoration(
+                  color: const Color(0xFA0C0C10),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: Colors.white.withAlpha(25)),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Color(0x66000000),
+                      blurRadius: 40,
+                      spreadRadius: 4,
                     ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    resumePercent != null
-                        ? 'You were ${resumePercent!.round()}% through. Continue from where you left off or start over?'
-                        : 'Continue from where you left off or start over?',
-                    style: const TextStyle(
-                      color: Color(0x80FFFFFF),
-                      fontSize: 14,
-                      height: 1.6,
-                    ),
-                  ),
-                  const SizedBox(height: 24),
-
-                  // Continue Watching button
-                  _ResumeModalButton(
-                    label: 'Continue Watching',
-                    color: const Color(0xFFD97706),
-                    textColor: Colors.white,
-                    shadow: const Color(0x59D97706),
-                    onTap: onContinue,
-                  ),
-                  const SizedBox(height: 12),
-
-                  // Start Over button
-                  _ResumeModalButton(
-                    label: 'Start Over',
-                    color: Colors.white.withAlpha(10),
-                    textColor: Colors.white.withAlpha(165),
-                    shadow: Colors.transparent,
-                    borderColor: Colors.white.withAlpha(25),
-                    onTap: onStartOver,
-                  ),
-                  const SizedBox(height: 12),
-
-                  // Cancel (text only)
-                  Center(
-                    child: GestureDetector(
-                      onTap: onCancel,
-                      child: MouseRegion(
-                        cursor: SystemMouseCursors.click,
-                        child: Text(
-                          'Cancel',
-                          style: TextStyle(
-                            color: Colors.white.withAlpha(89),
-                            fontSize: 14,
-                          ),
+                  ],
+                ),
+                child: DpadRegion(
+                  memoryKey: 'detail-resume-modal',
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Resume Playback',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 20,
                         ),
                       ),
-                    ),
+                      const SizedBox(height: 8),
+                      Text(
+                        widget.resumePercent != null
+                            ? 'You were ${widget.resumePercent!.round()}% through. Continue from where you left off or start over?'
+                            : 'Continue from where you left off or start over?',
+                        style: const TextStyle(
+                          color: Color(0x80FFFFFF),
+                          fontSize: 14,
+                          height: 1.6,
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                      _ResumeModalButton(
+                        label: 'Continue Watching',
+                        focusNode: _continueFocus,
+                        autofocus: true,
+                        entry: true,
+                        onDirection: _continueDirection,
+                        color: const Color(0xFFD97706),
+                        inactiveColor: Colors.white.withAlpha(10),
+                        textColor: Colors.white,
+                        shadow: const Color(0x59D97706),
+                        borderColor: Colors.white.withAlpha(25),
+                        onTap: widget.onContinue,
+                      ),
+                      const SizedBox(height: 12),
+                      _ResumeModalButton(
+                        label: 'Start Over',
+                        focusNode: _startOverFocus,
+                        onDirection: _startOverDirection,
+                        color: const Color(0xFFE50914),
+                        inactiveColor: Colors.white.withAlpha(10),
+                        textColor: Colors.white,
+                        shadow: const Color(0x4DE50914),
+                        borderColor: Colors.white.withAlpha(25),
+                        onTap: widget.onStartOver,
+                      ),
+                      const SizedBox(height: 12),
+                      Center(
+                        child: _ResumeCancelButton(
+                          focusNode: _cancelFocus,
+                          onDirection: _cancelDirection,
+                          onTap: widget.onCancel,
+                        ),
+                      ),
+                    ],
                   ),
-                ],
+                ),
               ),
             ),
           ),
@@ -3621,7 +4522,12 @@ class _ResumeModal extends StatelessWidget {
 
 class _ResumeModalButton extends StatefulWidget {
   final String label;
+  final FocusNode? focusNode;
+  final DpadDirectionCallback? onDirection;
+  final bool autofocus;
+  final bool entry;
   final Color color;
+  final Color? inactiveColor;
   final Color textColor;
   final Color shadow;
   final Color? borderColor;
@@ -3629,7 +4535,12 @@ class _ResumeModalButton extends StatefulWidget {
 
   const _ResumeModalButton({
     required this.label,
+    this.focusNode,
+    this.onDirection,
+    this.autofocus = false,
+    this.entry = false,
     required this.color,
+    this.inactiveColor,
     required this.textColor,
     required this.shadow,
     this.borderColor,
@@ -3649,37 +4560,118 @@ class _ResumeModalButtonState extends State<_ResumeModalButton> {
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
       cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
-          width: double.infinity,
-          height: 40,
-          decoration: BoxDecoration(
-            color: _hovered ? widget.color.withAlpha(220) : widget.color,
-            borderRadius: BorderRadius.circular(12),
-            border: widget.borderColor != null
-                ? Border.all(color: widget.borderColor!)
-                : null,
-            boxShadow: [
-              BoxShadow(
-                color: widget.shadow,
-                blurRadius: 16,
-                offset: const Offset(0, 4),
+      child: DpadFocusable(
+        focusNode: widget.focusNode,
+        autofocus: widget.autofocus,
+        entry: widget.entry,
+        onDirection: widget.onDirection,
+        onSelect: widget.onTap,
+        tapToSelect: false,
+        builder: (context, state, child) {
+          final active = _hovered || state.focused;
+          return GestureDetector(
+            onTap: () {
+              widget.focusNode?.requestFocus();
+              widget.onTap();
+            },
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 150),
+              width: double.infinity,
+              height: 40,
+              decoration: BoxDecoration(
+                color: active
+                    ? widget.color.withAlpha(220)
+                    : (widget.inactiveColor ?? widget.color),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: state.focused
+                      ? WarpColors.accent
+                      : (widget.borderColor ?? Colors.transparent),
+                  width: state.focused ? 2 : 1,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: widget.shadow,
+                    blurRadius: 16,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
               ),
-            ],
-          ),
-          child: Center(
+              child: Center(
+                child: Text(
+                  widget.label,
+                  style: TextStyle(
+                    color: widget.textColor,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 16,
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+        child: const SizedBox.shrink(),
+      ),
+    );
+  }
+}
+
+class _ResumeCancelButton extends StatefulWidget {
+  final FocusNode focusNode;
+  final DpadDirectionCallback onDirection;
+  final VoidCallback onTap;
+
+  const _ResumeCancelButton({
+    required this.focusNode,
+    required this.onDirection,
+    required this.onTap,
+  });
+
+  @override
+  State<_ResumeCancelButton> createState() => _ResumeCancelButtonState();
+}
+
+class _ResumeCancelButtonState extends State<_ResumeCancelButton> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      cursor: SystemMouseCursors.click,
+      child: DpadFocusable(
+        focusNode: widget.focusNode,
+        onDirection: widget.onDirection,
+        onSelect: widget.onTap,
+        tapToSelect: false,
+        builder: (context, state, child) => GestureDetector(
+          onTap: () {
+            widget.focusNode.requestFocus();
+            widget.onTap();
+          },
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: state.focused ? WarpColors.accent : Colors.transparent,
+                width: 2,
+              ),
+            ),
             child: Text(
-              widget.label,
+              'Cancel',
               style: TextStyle(
-                color: widget.textColor,
-                fontWeight: FontWeight.w600,
-                fontSize: 16,
+                color: (_hovered || state.focused)
+                    ? Colors.white.withAlpha(180)
+                    : Colors.white.withAlpha(89),
+                fontSize: 14,
               ),
             ),
           ),
         ),
+        child: const SizedBox.shrink(),
       ),
     );
   }
