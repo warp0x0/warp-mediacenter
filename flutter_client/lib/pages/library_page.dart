@@ -18,6 +18,7 @@ import '../widgets/cards/poster_card.dart';
 import '../widgets/layout/backdrop_layer.dart';
 import '../widgets/media/scan_dialog.dart';
 import '../widgets/shared/dpad_controls.dart';
+import '../widgets/shared/modal_focus_restore.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared enums / helpers
@@ -584,11 +585,17 @@ class _SortButton extends StatelessWidget {
   }
 }
 
-class _SortDialog extends StatelessWidget {
+class _SortDialog extends StatefulWidget {
   final String current;
   final WarpTokens t;
   const _SortDialog({required this.current, required this.t});
 
+  @override
+  State<_SortDialog> createState() => _SortDialogState();
+}
+
+class _SortDialogState extends State<_SortDialog>
+    with WidgetsBindingObserver, ModalFocusRestore<_SortDialog> {
   @override
   Widget build(BuildContext context) {
     return Dialog(
@@ -620,19 +627,19 @@ class _SortDialog extends StatelessWidget {
                   Padding(
                     padding: const EdgeInsets.only(bottom: 6),
                     child: WarpDpadButton(
-                      tokens: t,
-                      autofocus: _SortOpt.all[i].value == current,
-                      entry: _SortOpt.all[i].value == current,
+                      tokens: widget.t,
+                      autofocus: _SortOpt.all[i].value == widget.current,
+                      entry: _SortOpt.all[i].value == widget.current,
                       onSelect: () =>
                           Navigator.of(context).pop(_SortOpt.all[i].value),
-                      backgroundColor: _SortOpt.all[i].value == current
+                      backgroundColor: _SortOpt.all[i].value == widget.current
                           ? const Color(0x220DB2E2)
                           : Colors.white.withAlpha(8),
                       child: Row(
                         children: [
                           SizedBox(
                             width: 20,
-                            child: _SortOpt.all[i].value == current
+                            child: _SortOpt.all[i].value == widget.current
                                 ? const Icon(
                                     Icons.check_circle,
                                     size: 15,

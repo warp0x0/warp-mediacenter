@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 
 import '../../theme/warp_theme.dart';
 import '../../theme/warp_tokens.dart';
+import 'modal_focus_restore.dart';
 
 class WarpContextMenuItem {
   const WarpContextMenuItem({
@@ -81,7 +82,8 @@ class _WarpContextMenuOverlay extends StatefulWidget {
       _WarpContextMenuOverlayState();
 }
 
-class _WarpContextMenuOverlayState extends State<_WarpContextMenuOverlay> {
+class _WarpContextMenuOverlayState extends State<_WarpContextMenuOverlay>
+    with WidgetsBindingObserver, ModalFocusRestore<_WarpContextMenuOverlay> {
   final _sentinelFocus = FocusNode(debugLabel: 'ContextMenuSentinel');
   late final List<FocusNode> _itemFocusNodes;
 

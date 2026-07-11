@@ -229,7 +229,7 @@ class PreloadSessionManager:
         title: Optional[str] = None,
         media_kind: Optional[str] = None,
         start_percent: float = 0.0,
-        metadata_timeout: float = 60.0,
+        metadata_timeout: float = 90.0,
     ) -> _LibtorrentSession:
         """Start a libtorrent download and expose it as a preload session.
 
@@ -247,7 +247,7 @@ class PreloadSessionManager:
         lt_session_id = lt_manager.start(magnet=magnet, start_percent=start_percent)
 
         # Poll until metadata arrives (state transitions to "downloading").
-        # This typically takes 5–30 s depending on tracker/peer availability.
+        # This can exceed 30s on low-peer torrents, especially episode packs.
         deadline = time.monotonic() + metadata_timeout
         while time.monotonic() < deadline:
             raw = lt_manager.status(lt_session_id)

@@ -37,11 +37,7 @@ class ApiClient {
 
     _dio.interceptors.addAll([
       _ErrorInterceptor(),
-      LogInterceptor(
-        requestBody: false,
-        responseBody: false,
-        error: true,
-      ),
+      LogInterceptor(requestBody: false, responseBody: false, error: true),
     ]);
   }
 
@@ -54,8 +50,8 @@ class ApiClient {
     return resp.data as T;
   }
 
-  Future<T> post<T>(String path, {Object? body}) async {
-    final resp = await _dio.post<T>(path, data: body);
+  Future<T> post<T>(String path, {Object? body, Options? options}) async {
+    final resp = await _dio.post<T>(path, data: body, options: options);
     return resp.data as T;
   }
 
@@ -108,7 +104,9 @@ class ApiClient {
           }
         }
       } on DioException catch (e) {
-        if (e.type == DioExceptionType.cancel) return; // cancelled intentionally
+        if (e.type == DioExceptionType.cancel) {
+          return; // cancelled intentionally
+        }
         // Network error — reconnect after backoff
         await Future.delayed(const Duration(seconds: 2));
       } catch (_) {
@@ -131,10 +129,10 @@ class ApiError implements Exception {
   @override
   String toString() => 'ApiError($statusCode): $message';
 
-  bool get isNotFound       => statusCode == 404;
-  bool get isUnauthorized   => statusCode == 401;
-  bool get isRateLimited    => statusCode == 429;
-  bool get isServerError    => statusCode >= 500;
+  bool get isNotFound => statusCode == 404;
+  bool get isUnauthorized => statusCode == 401;
+  bool get isRateLimited => statusCode == 429;
+  bool get isServerError => statusCode >= 500;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

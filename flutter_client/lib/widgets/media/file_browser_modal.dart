@@ -6,6 +6,7 @@ import '../../api/api_client.dart';
 import '../../models/files.dart';
 import '../../theme/warp_tokens.dart';
 import '../shared/dpad_controls.dart';
+import '../shared/modal_focus_restore.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FileBrowserModal — browse server filesystem via GET /api/v1/files/browse
@@ -37,7 +38,8 @@ class FileBrowserModal extends ConsumerStatefulWidget {
   ConsumerState<FileBrowserModal> createState() => _FileBrowserModalState();
 }
 
-class _FileBrowserModalState extends ConsumerState<FileBrowserModal> {
+class _FileBrowserModalState extends ConsumerState<FileBrowserModal>
+    with WidgetsBindingObserver, ModalFocusRestore<FileBrowserModal> {
   String _path = '/';
   List<FileBrowseEntry> _entries = [];
   String? _parent;
@@ -109,6 +111,10 @@ class _FileBrowserModalState extends ConsumerState<FileBrowserModal> {
       child: CallbackShortcuts(
         bindings: {
           const SingleActivator(LogicalKeyboardKey.escape): () =>
+              Navigator.of(context).pop(),
+          const SingleActivator(LogicalKeyboardKey.goBack): () =>
+              Navigator.of(context).pop(),
+          const SingleActivator(LogicalKeyboardKey.browserBack): () =>
               Navigator.of(context).pop(),
         },
         child: DpadRegion(
@@ -284,6 +290,20 @@ class _Header extends StatelessWidget {
             padding: const EdgeInsets.all(4),
             backgroundColor: Colors.transparent,
             borderColor: Colors.transparent,
+            focusBackgroundColor: const Color(0x330DB2E2),
+            focusBorderColor: Colors.white,
+            focusBoxShadow: [
+              BoxShadow(
+                color: Colors.white.withAlpha(130),
+                blurRadius: 10,
+                spreadRadius: 1,
+              ),
+              BoxShadow(
+                color: const Color(0xFF0DB2E2).withAlpha(140),
+                blurRadius: 22,
+                spreadRadius: 4,
+              ),
+            ],
             child: const Icon(Icons.close, color: Colors.white54, size: 20),
           ),
         ],

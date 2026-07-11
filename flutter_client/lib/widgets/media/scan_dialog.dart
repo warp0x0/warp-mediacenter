@@ -9,6 +9,7 @@ import '../../models/library.dart';
 import '../../providers/library_provider.dart';
 import '../../theme/warp_tokens.dart';
 import '../shared/dpad_controls.dart';
+import '../shared/modal_focus_restore.dart';
 import 'file_browser_modal.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -28,7 +29,8 @@ class ScanDialog extends ConsumerStatefulWidget {
   ConsumerState<ScanDialog> createState() => _ScanDialogState();
 }
 
-class _ScanDialogState extends ConsumerState<ScanDialog> {
+class _ScanDialogState extends ConsumerState<ScanDialog>
+    with WidgetsBindingObserver, ModalFocusRestore<ScanDialog> {
   String? _moviesFolder;
   String? _showsFolder;
   _ScanPanel? _activePanel;
@@ -157,6 +159,10 @@ class _ScanDialogState extends ConsumerState<ScanDialog> {
         bindings: {
           const SingleActivator(LogicalKeyboardKey.escape): () =>
               Navigator.of(context).pop(),
+          const SingleActivator(LogicalKeyboardKey.goBack): () =>
+              Navigator.of(context).pop(),
+          const SingleActivator(LogicalKeyboardKey.browserBack): () =>
+              Navigator.of(context).pop(),
         },
         child: DpadRegion(
           memoryKey: 'modal-scan',
@@ -199,6 +205,20 @@ class _ScanDialogState extends ConsumerState<ScanDialog> {
                         padding: const EdgeInsets.all(4),
                         backgroundColor: Colors.transparent,
                         borderColor: Colors.transparent,
+                        focusBackgroundColor: const Color(0x330DB2E2),
+                        focusBorderColor: Colors.white,
+                        focusBoxShadow: [
+                          BoxShadow(
+                            color: Colors.white.withAlpha(130),
+                            blurRadius: 10,
+                            spreadRadius: 1,
+                          ),
+                          BoxShadow(
+                            color: const Color(0xFF0DB2E2).withAlpha(140),
+                            blurRadius: 22,
+                            spreadRadius: 4,
+                          ),
+                        ],
                         child: const Icon(
                           Icons.close,
                           color: Colors.white54,

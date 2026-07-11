@@ -72,77 +72,78 @@ class _SubtitleDialogState extends ConsumerState<SubtitleDialog>
       insetPadding: const EdgeInsets.symmetric(horizontal: 22, vertical: 22),
       child: CallbackShortcuts(
         bindings: {
-          const SingleActivator(LogicalKeyboardKey.escape): () => Navigator.of(context).pop(),
+          const SingleActivator(LogicalKeyboardKey.escape): () =>
+              Navigator.of(context).pop(),
         },
         child: DpadRegion(
           memoryKey: 'modal-subtitle',
           horizontalEdge: DpadEdgeBehavior.stop,
           verticalEdge: DpadEdgeBehavior.stop,
           child: Center(
-        child: ConstrainedBox(
-          constraints: BoxConstraints(maxWidth: width, maxHeight: height),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(28),
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
-              child: Container(
-                width: width,
-                height: height,
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [Color(0xF20A0E14), Color(0xE5091A24)],
-                  ),
-                  borderRadius: BorderRadius.circular(28),
-                  border: Border.all(color: _accent.withAlpha(76)),
-                  boxShadow: const [
-                    BoxShadow(
-                      color: Colors.black87,
-                      blurRadius: 36,
-                      offset: Offset(0, 18),
-                    ),
-                  ],
-                ),
-                child: Column(
-                  children: [
-                    _DialogHeader(
-                      title: 'Subtitles',
-                      subtitle: _headerSubtitle(),
-                      onClose: () => Navigator.of(context).pop(),
-                      t: t,
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
-                      child: _Tabs(controller: _tabs, t: t),
-                    ),
-                    Expanded(
-                      child: TabBarView(
-                        controller: _tabs,
-                        children: [
-                          _SearchTab(
-                            player: widget.player,
-                            tmdbId: widget.tmdbId,
-                            mediaKind: widget.mediaKind == 'show'
-                                ? 'show'
-                                : 'movie',
-                            title: widget.title,
-                            season: widget.season,
-                            episode: widget.episode,
-                            sourceUrl: widget.sourceUrl,
-                            t: t,
-                          ),
-                          _BrowseTab(player: widget.player, t: t),
-                          _ActiveTracksTab(player: widget.player, t: t),
-                        ],
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: width, maxHeight: height),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(28),
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+                  child: Container(
+                    width: width,
+                    height: height,
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [Color(0xF20A0E14), Color(0xE5091A24)],
                       ),
+                      borderRadius: BorderRadius.circular(28),
+                      border: Border.all(color: _accent.withAlpha(76)),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Colors.black87,
+                          blurRadius: 36,
+                          offset: Offset(0, 18),
+                        ),
+                      ],
                     ),
-                  ],
+                    child: Column(
+                      children: [
+                        _DialogHeader(
+                          title: 'Subtitles',
+                          subtitle: _headerSubtitle(),
+                          onClose: () => Navigator.of(context).pop(),
+                          t: t,
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
+                          child: _Tabs(controller: _tabs, t: t),
+                        ),
+                        Expanded(
+                          child: TabBarView(
+                            controller: _tabs,
+                            children: [
+                              _SearchTab(
+                                player: widget.player,
+                                tmdbId: widget.tmdbId,
+                                mediaKind: widget.mediaKind == 'show'
+                                    ? 'show'
+                                    : 'movie',
+                                title: widget.title,
+                                season: widget.season,
+                                episode: widget.episode,
+                                sourceUrl: widget.sourceUrl,
+                                t: t,
+                              ),
+                              _BrowseTab(player: widget.player, t: t),
+                              _ActiveTracksTab(player: widget.player, t: t),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
               ),
             ),
-          ),
-        ),
           ),
         ),
       ),
@@ -225,13 +226,36 @@ class _DialogHeader extends StatelessWidget {
           builder: (context, state, child) => Container(
             decoration: BoxDecoration(
               shape: BoxShape.circle,
+              color: state.focused
+                  ? Colors.white.withAlpha(24)
+                  : Colors.transparent,
+              border: Border.all(
+                color: state.focused
+                    ? Colors.white.withAlpha(220)
+                    : Colors.transparent,
+                width: 2,
+              ),
               boxShadow: state.focused
-                  ? [BoxShadow(color: _accent.withAlpha(140), blurRadius: 18, spreadRadius: 2)]
+                  ? [
+                      BoxShadow(
+                        color: Colors.white.withAlpha(130),
+                        blurRadius: 10,
+                        spreadRadius: 1,
+                      ),
+                      BoxShadow(
+                        color: _accent.withAlpha(140),
+                        blurRadius: 22,
+                        spreadRadius: 4,
+                      ),
+                    ]
                   : null,
             ),
             child: IconButton(
               onPressed: onClose,
-              icon: const Icon(Icons.close, color: Colors.white70),
+              icon: Icon(
+                Icons.close,
+                color: state.focused ? Colors.white : Colors.white70,
+              ),
             ),
           ),
           child: const SizedBox.shrink(),
@@ -572,7 +596,9 @@ class _LangChip extends StatelessWidget {
           border: Border.all(
             color: state.focused
                 ? _accentLight
-                : (selected ? _accentLight.withAlpha(130) : Colors.white.withAlpha(26)),
+                : (selected
+                      ? _accentLight.withAlpha(130)
+                      : Colors.white.withAlpha(26)),
             width: state.focused ? 2 : 1,
           ),
         ),
@@ -830,65 +856,67 @@ class _SubtitleTrackRow extends StatelessWidget {
   Widget build(BuildContext context) => DpadFocusable(
     onSelect: onTap,
     builder: (context, state, child) => GestureDetector(
-    onTap: onTap,
-    child: AnimatedContainer(
-      duration: const Duration(milliseconds: 150),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: selected ? _accent.withAlpha(34) : Colors.white.withAlpha(12),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: state.focused
-              ? _accentLight
-              : (selected ? _accentLight.withAlpha(120) : Colors.white.withAlpha(22)),
-          width: state.focused ? 2 : 1,
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: selected ? _accent.withAlpha(34) : Colors.white.withAlpha(12),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: state.focused
+                ? _accentLight
+                : (selected
+                      ? _accentLight.withAlpha(120)
+                      : Colors.white.withAlpha(22)),
+            width: state.focused ? 2 : 1,
+          ),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: selected
+                    ? _accent.withAlpha(44)
+                    : Colors.white.withAlpha(14),
+                shape: BoxShape.circle,
+              ),
+              child: Center(
+                child: selected
+                    ? const Icon(Icons.check, color: _accentLight, size: 21)
+                    : const _GradientIcon(icon: Icons.subtitles, size: 21),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _subtitleTrackTitle(track),
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: t.fontSubtitle,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    _subtitleTrackSubtitle(track),
+                    style: TextStyle(
+                      color: Colors.white.withAlpha(145),
+                      fontSize: 12,
+                      height: 1.25,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
-      child: Row(
-        children: [
-          Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              color: selected
-                  ? _accent.withAlpha(44)
-                  : Colors.white.withAlpha(14),
-              shape: BoxShape.circle,
-            ),
-            child: Center(
-              child: selected
-                  ? const Icon(Icons.check, color: _accentLight, size: 21)
-                  : const _GradientIcon(icon: Icons.subtitles, size: 21),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  _subtitleTrackTitle(track),
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: t.fontSubtitle,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  _subtitleTrackSubtitle(track),
-                  style: TextStyle(
-                    color: Colors.white.withAlpha(145),
-                    fontSize: 12,
-                    height: 1.25,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    ),
     ),
     child: const SizedBox.shrink(),
   );
@@ -926,7 +954,10 @@ class _GlassButton extends StatelessWidget {
             ),
             borderRadius: BorderRadius.circular(14),
             boxShadow: [
-              BoxShadow(color: _accent.withAlpha(state.focused ? 130 : 48), blurRadius: state.focused ? 24 : 16),
+              BoxShadow(
+                color: _accent.withAlpha(state.focused ? 130 : 48),
+                blurRadius: state.focused ? 24 : 16,
+              ),
             ],
           ),
           child: Row(
@@ -980,7 +1011,13 @@ class _GlassIconButton extends StatelessWidget {
           borderRadius: BorderRadius.circular(14),
           border: Border.all(color: Colors.white.withAlpha(24)),
           boxShadow: state.focused
-              ? [BoxShadow(color: _accent.withAlpha(140), blurRadius: 18, spreadRadius: 2)]
+              ? [
+                  BoxShadow(
+                    color: _accent.withAlpha(140),
+                    blurRadius: 18,
+                    spreadRadius: 2,
+                  ),
+                ]
               : null,
         ),
         child: Center(child: _GradientIcon(icon: icon, size: 19)),

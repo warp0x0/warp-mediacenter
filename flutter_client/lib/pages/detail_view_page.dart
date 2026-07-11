@@ -876,9 +876,9 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
               ? movieDetail!.tagline
               : null);
     final runtime = _isShow ? null : movieDetail?.runtimeMinutes;
-    final trailerUrl =
-        movieDetail?.trailers.firstOrNull?.url ??
-        showDetail?.trailers.firstOrNull?.url;
+    final trailers =
+        movieDetail?.trailers ?? showDetail?.trailers ?? <Trailer>[];
+    final trailerUrl = trailers.firstOrNull?.url;
 
     final posterImg = item?.posterPath != null
         ? posterUrl(item!.posterPath, size: 'w500')
@@ -1061,6 +1061,7 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
                                             builder: (_) => TrailerDialog(
                                               trailerUrl: trailerUrl,
                                               title: title,
+                                              trailers: trailers,
                                             ),
                                           );
                                         },

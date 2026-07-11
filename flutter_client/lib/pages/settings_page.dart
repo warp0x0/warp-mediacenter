@@ -13,6 +13,7 @@ import '../providers/catalog_provider.dart';
 import '../providers/settings_provider.dart';
 import '../theme/warp_tokens.dart';
 import '../widgets/shared/dpad_controls.dart';
+import '../widgets/shared/modal_focus_restore.dart';
 
 // Settings API key names (must match backend)
 const _kTmdbApiKey = 'tmdb_api_key';
@@ -2524,7 +2525,8 @@ class _ConfigureWidgetDialog extends StatefulWidget {
   State<_ConfigureWidgetDialog> createState() => _ConfigureWidgetDialogState();
 }
 
-class _ConfigureWidgetDialogState extends State<_ConfigureWidgetDialog> {
+class _ConfigureWidgetDialogState extends State<_ConfigureWidgetDialog>
+    with WidgetsBindingObserver, ModalFocusRestore<_ConfigureWidgetDialog> {
   late String _providerTab; // 'tmdb' | 'trakt'
   final _closeFocusNode = FocusNode(debugLabel: 'SettingsCatalogDialogClose');
   final _tmdbFocusNode = FocusNode(debugLabel: 'SettingsCatalogDialogTmdb');
@@ -3005,6 +3007,20 @@ class _ConfigureWidgetDialogState extends State<_ConfigureWidgetDialog> {
                           padding: const EdgeInsets.all(6),
                           backgroundColor: Colors.white.withAlpha(20),
                           borderColor: Colors.transparent,
+                          focusBackgroundColor: const Color(0x330DB2E2),
+                          focusBorderColor: Colors.white,
+                          focusBoxShadow: [
+                            BoxShadow(
+                              color: Colors.white.withAlpha(130),
+                              blurRadius: 10,
+                              spreadRadius: 1,
+                            ),
+                            BoxShadow(
+                              color: const Color(0xFF0DB2E2).withAlpha(140),
+                              blurRadius: 22,
+                              spreadRadius: 4,
+                            ),
+                          ],
                           borderRadius: 6,
                           child: const Icon(
                             Icons.close,

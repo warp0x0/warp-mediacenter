@@ -1658,21 +1658,40 @@ class _SettingsDialogFrame extends StatelessWidget {
                           builder: (context, state, child) => Container(
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
+                              color: state.focused
+                                  ? Colors.white.withAlpha(24)
+                                  : Colors.transparent,
+                              border: Border.all(
+                                color: state.focused
+                                    ? Colors.white.withAlpha(220)
+                                    : Colors.transparent,
+                                width: 2,
+                              ),
                               boxShadow: state.focused
                                   ? [
                                       BoxShadow(
+                                        color: Colors.white.withAlpha(130),
+                                        blurRadius: 10,
+                                        spreadRadius: 1,
+                                      ),
+                                      BoxShadow(
                                         color: _uoscAccent.withAlpha(160),
-                                        blurRadius: 18,
-                                        spreadRadius: 2,
+                                        blurRadius: 22,
+                                        spreadRadius: 4,
                                       ),
                                     ]
                                   : null,
                             ),
                             child: GestureDetector(
                               onTap: () => Navigator.of(context).pop(),
-                              child: const Padding(
-                                padding: EdgeInsets.all(8),
-                                child: Icon(Icons.close, color: Colors.white70),
+                              child: Padding(
+                                padding: const EdgeInsets.all(8),
+                                child: Icon(
+                                  Icons.close,
+                                  color: state.focused
+                                      ? Colors.white
+                                      : Colors.white70,
+                                ),
                               ),
                             ),
                           ),

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:dpad/dpad.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -10,6 +11,7 @@ import '../../models/preload.dart';
 import '../../models/debrid.dart';
 import '../../theme/warp_tokens.dart';
 import '../shared/dpad_controls.dart';
+import '../shared/modal_focus_restore.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TorrentDialog — search → resolve → poll → stream → preload → navigate
@@ -62,12 +64,21 @@ class TorrentDialog extends ConsumerStatefulWidget {
   ConsumerState<TorrentDialog> createState() => _TorrentDialogState();
 }
 
-class _TorrentDialogState extends ConsumerState<TorrentDialog> {
+class _TorrentDialogState extends ConsumerState<TorrentDialog>
+    with WidgetsBindingObserver, ModalFocusRestore<TorrentDialog> {
   final _searchCtrl = TextEditingController();
   final _searchFieldFocus = FocusNode(debugLabel: 'TorrentSearchField');
   final _searchWrapperFocus = FocusNode(debugLabel: 'TorrentSearchWrapper');
   final _searchBtnFocus = FocusNode(debugLabel: 'TorrentSearchBtn');
+  final _bannerCancelFocus = FocusNode(debugLabel: 'TorrentBannerCancel');
+  final _resultScroll = ScrollController();
+  final _resultScrollRailFocus = FocusNode(
+    debugLabel: 'TorrentResultScrollRail',
+  );
   final _localConfirmCancelFocus = FocusNode(debugLabel: 'LocalConfirmCancel');
+  final _localConfirmDownloadFocus = FocusNode(
+    debugLabel: 'LocalConfirmDownload',
+  );
   List<FocusNode> _resultFocusNodes = [];
 
   List<TorrentResult> _results = [];
@@ -122,7 +133,11 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog> {
     _searchFieldFocus.dispose();
     _searchWrapperFocus.dispose();
     _searchBtnFocus.dispose();
+    _bannerCancelFocus.dispose();
+    _resultScroll.dispose();
+    _resultScrollRailFocus.dispose();
     _localConfirmCancelFocus.dispose();
+    _localConfirmDownloadFocus.dispose();
     for (final fn in _resultFocusNodes) {
       fn.dispose();
     }
@@ -163,6 +178,112 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog> {
     }
     if (direction == TraversalDirection.right) return true;
     return false;
+  }
+
+  bool _bannerCancelDirection(TraversalDirection direction) {
+    if (direction == TraversalDirection.up) {
+      Dpad.of(context).requestFocus(_searchWrapperFocus);
+      return true;
+    }
+    return false;
+  }
+
+  void _closeOrDismiss() {
+    if (_localConfirmResult != null) {
+      _dismissLocalConfirm();
+      return;
+    }
+    widget.onClose();
+  }
+
+  void _dismissLocalConfirm() {
+    setState(() {
+      _localConfirmResult = null;
+      _localConfirmReason = null;
+    });
+  }
+
+  void _showLocalConfirm(TorrentResult result, _LocalConfirmReason reason) {
+    setState(() {
+      _localConfirmResult = result;
+      _localConfirmReason = reason;
+      _banner = null;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _localConfirmResult == null) return;
+      Dpad.of(context).requestFocus(_localConfirmCancelFocus);
+    });
+  }
+
+  bool _localConfirmCancelDirection(TraversalDirection direction) {
+    if (direction == TraversalDirection.right) {
+      Dpad.of(context).requestFocus(_localConfirmDownloadFocus);
+      return true;
+    }
+    return direction == TraversalDirection.left ||
+        direction == TraversalDirection.up ||
+        direction == TraversalDirection.down;
+  }
+
+  bool _localConfirmDownloadDirection(TraversalDirection direction) {
+    if (direction == TraversalDirection.left) {
+      Dpad.of(context).requestFocus(_localConfirmCancelFocus);
+      return true;
+    }
+    return direction == TraversalDirection.right ||
+        direction == TraversalDirection.up ||
+        direction == TraversalDirection.down;
+  }
+
+  bool _resultDirection(int index, TraversalDirection direction) {
+    if (direction == TraversalDirection.right) {
+      Dpad.of(context).requestFocus(_resultScrollRailFocus);
+      return true;
+    }
+    if (direction == TraversalDirection.up && index == 0) {
+      Dpad.of(context).requestFocus(_searchWrapperFocus);
+      return true;
+    }
+    return false;
+  }
+
+  bool _resultScrollRailDirection(TraversalDirection direction) {
+    if (direction == TraversalDirection.left) {
+      _focusNearestVisibleResult();
+      return true;
+    }
+    if (direction == TraversalDirection.up ||
+        direction == TraversalDirection.down) {
+      _scrollResults(direction == TraversalDirection.down ? 180 : -180);
+      return true;
+    }
+    return true;
+  }
+
+  void _scrollResults(double delta) {
+    if (!_resultScroll.hasClients) return;
+    final position = _resultScroll.position;
+    final target = (position.pixels + delta)
+        .clamp(position.minScrollExtent, position.maxScrollExtent)
+        .toDouble();
+    _resultScroll.animateTo(
+      target,
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  void _focusNearestVisibleResult() {
+    if (_resultFocusNodes.isEmpty) {
+      Dpad.of(context).requestFocus(_searchBtnFocus);
+      return;
+    }
+    final offset = _resultScroll.hasClients ? _resultScroll.offset : 0.0;
+    final index = (offset / 72)
+        .round()
+        .clamp(0, _resultFocusNodes.length - 1)
+        .toInt();
+    Dpad.of(context).requestFocus(_resultFocusNodes[index]);
   }
 
   // ── Search ──────────────────────────────────────────────────────────────────
@@ -275,11 +396,7 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog> {
           msg.toLowerCase().contains('dmca') ||
           (e is ApiError && e.statusCode == 422);
       if (isBlocked) {
-        setState(() {
-          _localConfirmResult = result;
-          _localConfirmReason = _LocalConfirmReason.runtimeBlocked;
-          _banner = null;
-        });
+        _showLocalConfirm(result, _LocalConfirmReason.runtimeBlocked);
       } else {
         setState(
           () => _banner = _BannerState(
@@ -407,6 +524,7 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog> {
     try {
       final raw = await _client.post<Map<String, dynamic>>(
         '/api/v1/player/preload/session',
+        options: Options(receiveTimeout: const Duration(seconds: 100)),
         body: {
           'magnet': result.magnet,
           'title': widget.title,
@@ -665,7 +783,10 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog> {
       color: Colors.black.withAlpha(190),
       child: CallbackShortcuts(
         bindings: {
-          const SingleActivator(LogicalKeyboardKey.escape): widget.onClose,
+          const SingleActivator(LogicalKeyboardKey.escape): _closeOrDismiss,
+          const SingleActivator(LogicalKeyboardKey.goBack): _closeOrDismiss,
+          const SingleActivator(LogicalKeyboardKey.browserBack):
+              _closeOrDismiss,
         },
         child: DpadRegion(
           memoryKey: 'modal-torrent',
@@ -779,13 +900,27 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog> {
               width: 32,
               height: 32,
               decoration: BoxDecoration(
+                color: state.focused
+                    ? Colors.white.withAlpha(24)
+                    : Colors.transparent,
                 borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: state.focused
+                      ? Colors.white.withAlpha(220)
+                      : Colors.transparent,
+                  width: 2,
+                ),
                 boxShadow: state.focused
                     ? [
                         BoxShadow(
+                          color: Colors.white.withAlpha(130),
+                          blurRadius: 10,
+                          spreadRadius: 1,
+                        ),
+                        BoxShadow(
                           color: const Color(0xFF0DB2E2).withAlpha(140),
-                          blurRadius: 18,
-                          spreadRadius: 2,
+                          blurRadius: 22,
+                          spreadRadius: 4,
                         ),
                       ]
                     : null,
@@ -795,7 +930,9 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog> {
                 onTap: widget.onClose,
                 child: Icon(
                   Icons.close,
-                  color: Colors.white.withAlpha(90),
+                  color: state.focused
+                      ? Colors.white
+                      : Colors.white.withAlpha(90),
                   size: 16,
                 ),
               ),
@@ -870,10 +1007,14 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog> {
                   height: 46,
                   padding: const EdgeInsets.symmetric(horizontal: 20),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF0DB2E2),
+                    color: state.focused
+                        ? const Color(0xFF0DB2E2)
+                        : const Color(0xCC333232),
                     borderRadius: BorderRadius.circular(10),
                     border: Border.all(
-                      color: state.focused ? Colors.white : Colors.transparent,
+                      color: state.focused
+                          ? Colors.white
+                          : const Color(0xFF0DB2E2),
                       width: 2,
                     ),
                   ),
@@ -1002,6 +1143,8 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog> {
               ),
               if (b.kind == _BannerKind.progress)
                 DpadFocusable(
+                  focusNode: _bannerCancelFocus,
+                  onDirection: _bannerCancelDirection,
                   onSelect: _handleCancel,
                   builder: (context, state, child) => GestureDetector(
                     onTap: _handleCancel,
@@ -1115,34 +1258,46 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog> {
 
     return ScrollConfiguration(
       behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
-      child: ListView.builder(
-        shrinkWrap: true,
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
-        itemCount: _results.length,
-        itemBuilder: (_, i) {
-          final result = _results[i];
-          final isBlocked = !_rdSafeHashes.contains(result.hash);
-          return _ResultRow(
-            result: result,
-            isRdBlocked: isBlocked,
-            isBusy: _isBusy,
-            focusNode: i < _resultFocusNodes.length
-                ? _resultFocusNodes[i]
-                : null,
-            onTap: () {
-              if (_isBusy) return;
-              if (isBlocked) {
-                setState(() {
-                  _localConfirmResult = result;
-                  _localConfirmReason = _LocalConfirmReason.preBlocked;
-                });
-              } else {
-                _pickTorrent(result);
-              }
+      child: Stack(
+        children: [
+          ListView.builder(
+            controller: _resultScroll,
+            shrinkWrap: true,
+            padding: const EdgeInsets.fromLTRB(20, 0, 44, 16),
+            itemCount: _results.length,
+            itemBuilder: (_, i) {
+              final result = _results[i];
+              final isBlocked = !_rdSafeHashes.contains(result.hash);
+              return _ResultRow(
+                result: result,
+                isRdBlocked: isBlocked,
+                isBusy: _isBusy,
+                focusNode: i < _resultFocusNodes.length
+                    ? _resultFocusNodes[i]
+                    : null,
+                onDirection: (direction) => _resultDirection(i, direction),
+                onTap: () {
+                  if (_isBusy) return;
+                  if (isBlocked) {
+                    _showLocalConfirm(result, _LocalConfirmReason.preBlocked);
+                  } else {
+                    _pickTorrent(result);
+                  }
+                },
+                t: t,
+              );
             },
-            t: t,
-          );
-        },
+          ),
+          Positioned(
+            top: 0,
+            right: 10,
+            bottom: 16,
+            child: _TorrentScrollRail(
+              focusNode: _resultScrollRailFocus,
+              onDirection: _resultScrollRailDirection,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1233,34 +1388,37 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog> {
                     focusNode: _localConfirmCancelFocus,
                     autofocus: true,
                     entry: true,
-                    onSelect: () => setState(() {
-                      _localConfirmResult = null;
-                      _localConfirmReason = null;
-                    }),
+                    onDirection: _localConfirmCancelDirection,
+                    onSelect: _dismissLocalConfirm,
                     builder: (context, state, child) => GestureDetector(
-                      onTap: () => setState(() {
-                        _localConfirmResult = null;
-                        _localConfirmReason = null;
-                      }),
+                      onTap: _dismissLocalConfirm,
                       child: Container(
                         padding: const EdgeInsets.symmetric(
                           horizontal: 18,
                           vertical: 10,
                         ),
                         decoration: BoxDecoration(
+                          color: state.focused
+                              ? const Color(0xFF0DB2E2)
+                              : Colors.transparent,
                           border: Border.all(
                             color: state.focused
-                                ? const Color(0xFF0DB2E2)
+                                ? Colors.white
                                 : Colors.white.withAlpha(20),
-                            width: state.focused ? 2 : 1,
+                            width: 2,
                           ),
                           borderRadius: BorderRadius.circular(8),
                         ),
                         child: Text(
                           'Cancel',
                           style: TextStyle(
-                            color: Colors.white.withAlpha(127),
+                            color: state.focused
+                                ? Colors.white
+                                : Colors.white.withAlpha(127),
                             fontSize: 13,
+                            fontWeight: state.focused
+                                ? FontWeight.w600
+                                : FontWeight.w400,
                           ),
                         ),
                       ),
@@ -1269,6 +1427,8 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog> {
                   ),
                   const SizedBox(width: 10),
                   DpadFocusable(
+                    focusNode: _localConfirmDownloadFocus,
+                    onDirection: _localConfirmDownloadDirection,
                     onSelect: () => _pickLocalTorrent(result),
                     builder: (context, state, child) => GestureDetector(
                       onTap: () => _pickLocalTorrent(result),
@@ -1278,19 +1438,23 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog> {
                           vertical: 10,
                         ),
                         decoration: BoxDecoration(
-                          color: const Color(0xFF0DB2E2),
+                          color: state.focused
+                              ? const Color(0xFF0DB2E2)
+                              : const Color(0xCC333232),
                           borderRadius: BorderRadius.circular(8),
                           border: Border.all(
                             color: state.focused
                                 ? Colors.white
-                                : Colors.transparent,
+                                : const Color(0xFF0DB2E2),
                             width: 2,
                           ),
                         ),
-                        child: const Text(
+                        child: Text(
                           'Download Locally',
                           style: TextStyle(
-                            color: Colors.white,
+                            color: state.focused
+                                ? Colors.white
+                                : const Color(0xFF0DB2E2),
                             fontSize: 13,
                             fontWeight: FontWeight.w600,
                           ),
@@ -1311,11 +1475,60 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog> {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+class _TorrentScrollRail extends StatelessWidget {
+  final FocusNode focusNode;
+  final DpadDirectionCallback onDirection;
+
+  const _TorrentScrollRail({
+    required this.focusNode,
+    required this.onDirection,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 24,
+      child: Center(
+        child: DpadFocusable(
+          focusNode: focusNode,
+          onDirection: onDirection,
+          onSelect: () {},
+          tapToSelect: false,
+          builder: (context, state, child) => AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            width: state.focused ? 8 : 4,
+            height: 112,
+            decoration: BoxDecoration(
+              color: state.focused
+                  ? const Color(0xFF0DB2E2)
+                  : Colors.white.withAlpha(30),
+              borderRadius: BorderRadius.circular(999),
+              boxShadow: state.focused
+                  ? [
+                      BoxShadow(
+                        color: const Color(0xFF0DB2E2).withAlpha(120),
+                        blurRadius: 18,
+                        spreadRadius: 2,
+                      ),
+                    ]
+                  : null,
+            ),
+          ),
+          child: const SizedBox.shrink(),
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 class _ResultRow extends StatefulWidget {
   final TorrentResult result;
   final bool isRdBlocked;
   final bool isBusy;
   final VoidCallback onTap;
+  final DpadDirectionCallback onDirection;
   final WarpTokens t;
   final FocusNode? focusNode;
 
@@ -1324,6 +1537,7 @@ class _ResultRow extends StatefulWidget {
     required this.isRdBlocked,
     required this.isBusy,
     required this.onTap,
+    required this.onDirection,
     required this.t,
     this.focusNode,
   });
@@ -1346,6 +1560,7 @@ class _ResultRowState extends State<_ResultRow> {
       child: DpadFocusable(
         focusNode: widget.focusNode,
         enabled: !widget.isBusy,
+        onDirection: widget.onDirection,
         onSelect: widget.onTap,
         tapToSelect: false,
         builder: (context, state, child) => GestureDetector(

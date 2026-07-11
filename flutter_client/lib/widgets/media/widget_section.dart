@@ -247,10 +247,11 @@ class _WidgetSectionState extends ConsumerState<WidgetSection> {
     });
   }
 
-  void _openTrailer(String url, String titleStr) {
+  void _openTrailer(String url, String titleStr, List<Trailer> trailers) {
     showDialog(
       context: context,
-      builder: (_) => TrailerDialog(trailerUrl: url, title: titleStr),
+      builder: (_) =>
+          TrailerDialog(trailerUrl: url, title: titleStr, trailers: trailers),
     );
   }
 
@@ -384,6 +385,7 @@ class _WidgetSectionState extends ConsumerState<WidgetSection> {
                                 ? () => _openTrailer(
                                     firstTrailer.url,
                                     selected.title,
+                                    trailers,
                                   )
                                 : null,
                             onMoreInfo: () => context.push(

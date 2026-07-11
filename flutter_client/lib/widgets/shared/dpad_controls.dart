@@ -26,6 +26,7 @@ class WarpDpadButton extends StatefulWidget {
     this.focusBackgroundColor,
     this.borderColor,
     this.focusBorderColor,
+    this.focusBoxShadow,
     this.borderRadius,
   });
 
@@ -44,6 +45,7 @@ class WarpDpadButton extends StatefulWidget {
   final Color? focusBackgroundColor;
   final Color? borderColor;
   final Color? focusBorderColor;
+  final List<BoxShadow>? focusBoxShadow;
   final double? borderRadius;
 
   @override
@@ -96,6 +98,7 @@ class _WarpDpadButtonState extends State<WarpDpadButton> {
                       : (widget.borderColor ?? Colors.white.withAlpha(25)),
                   width: state.focused ? widget.tokens.focusRingWidth : 1,
                 ),
+                boxShadow: active ? widget.focusBoxShadow : null,
               ),
               child: Center(child: child),
             ),
