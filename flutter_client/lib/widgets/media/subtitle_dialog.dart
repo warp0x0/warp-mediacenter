@@ -11,6 +11,7 @@ import '../../api/api_client.dart';
 import '../../models/subtitle.dart' as subtitle_models;
 import '../../theme/warp_tokens.dart';
 import 'file_browser_modal.dart';
+import '../shared/modal_focus_restore.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SubtitleDialog — live media_kit subtitle search, file load, and track switcher
@@ -45,7 +46,10 @@ class SubtitleDialog extends ConsumerStatefulWidget {
 }
 
 class _SubtitleDialogState extends ConsumerState<SubtitleDialog>
-    with SingleTickerProviderStateMixin {
+    with
+        SingleTickerProviderStateMixin,
+        WidgetsBindingObserver,
+        ModalFocusRestore<SubtitleDialog> {
   late final TabController _tabs;
 
   @override
@@ -73,6 +77,12 @@ class _SubtitleDialogState extends ConsumerState<SubtitleDialog>
       child: CallbackShortcuts(
         bindings: {
           const SingleActivator(LogicalKeyboardKey.escape): () =>
+              Navigator.of(context).pop(),
+          const SingleActivator(LogicalKeyboardKey.backspace): () =>
+              Navigator.of(context).pop(),
+          const SingleActivator(LogicalKeyboardKey.goBack): () =>
+              Navigator.of(context).pop(),
+          const SingleActivator(LogicalKeyboardKey.browserBack): () =>
               Navigator.of(context).pop(),
         },
         child: DpadRegion(
@@ -120,6 +130,7 @@ class _SubtitleDialogState extends ConsumerState<SubtitleDialog>
                         Expanded(
                           child: TabBarView(
                             controller: _tabs,
+                            physics: const NeverScrollableScrollPhysics(),
                             children: [
                               _SearchTab(
                                 player: widget.player,
@@ -219,8 +230,6 @@ class _DialogHeader extends StatelessWidget {
           ),
         ),
         DpadFocusable(
-          autofocus: true,
-          entry: true,
           onSelect: onClose,
           tapToSelect: false,
           builder: (context, state, child) => Container(
@@ -265,11 +274,69 @@ class _DialogHeader extends StatelessWidget {
   );
 }
 
-class _Tabs extends StatelessWidget {
+class _Tabs extends StatefulWidget {
   final TabController controller;
   final WarpTokens t;
 
   const _Tabs({required this.controller, required this.t});
+
+  @override
+  State<_Tabs> createState() => _TabsState();
+}
+
+class _TabsState extends State<_Tabs> {
+  static const _labels = ['Search', 'Browse File', 'Tracks'];
+  late final List<FocusNode> _focusNodes;
+
+  @override
+  void initState() {
+    super.initState();
+    _focusNodes = List.generate(
+      _labels.length,
+      (i) => FocusNode(debugLabel: 'SubtitleTab-${_labels[i]}'),
+    );
+    widget.controller.addListener(_handleTabChanged);
+  }
+
+  @override
+  void didUpdateWidget(_Tabs oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller.removeListener(_handleTabChanged);
+      widget.controller.addListener(_handleTabChanged);
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_handleTabChanged);
+    for (final node in _focusNodes) {
+      node.dispose();
+    }
+    super.dispose();
+  }
+
+  void _handleTabChanged() {
+    if (mounted) setState(() {});
+  }
+
+  void _selectTab(int index) {
+    widget.controller.animateTo(index);
+  }
+
+  bool _tabDirection(int index, TraversalDirection direction) {
+    if (direction == TraversalDirection.left) {
+      if (index == 0) return true;
+      Dpad.of(context).requestFocus(_focusNodes[index - 1]);
+      return true;
+    }
+    if (direction == TraversalDirection.right) {
+      if (index == _focusNodes.length - 1) return true;
+      Dpad.of(context).requestFocus(_focusNodes[index + 1]);
+      return true;
+    }
+    return false;
+  }
 
   @override
   Widget build(BuildContext context) => Container(
@@ -279,34 +346,116 @@ class _Tabs extends StatelessWidget {
       borderRadius: BorderRadius.circular(18),
       border: Border.all(color: Colors.white.withAlpha(22)),
     ),
-    child: TabBar(
-      controller: controller,
-      dividerColor: Colors.transparent,
-      indicatorSize: TabBarIndicatorSize.tab,
-      indicator: BoxDecoration(
-        borderRadius: BorderRadius.circular(14),
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [_accent.withAlpha(135), _accentLight.withAlpha(95)],
-        ),
-        boxShadow: [BoxShadow(color: _accent.withAlpha(40), blurRadius: 18)],
-      ),
-      labelColor: Colors.white,
-      unselectedLabelColor: Colors.white.withAlpha(145),
-      labelStyle: TextStyle(
-        fontSize: t.fontSubtitle,
-        fontWeight: FontWeight.w800,
-      ),
-      unselectedLabelStyle: TextStyle(
-        fontSize: t.fontSubtitle,
-        fontWeight: FontWeight.w600,
-      ),
-      tabs: const [
-        Tab(text: 'Search'),
-        Tab(text: 'Browse File'),
-        Tab(text: 'Tracks'),
+    child: Row(
+      children: [
+        for (var i = 0; i < _labels.length; i++) ...[
+          Expanded(
+            child: _SubtitleTabPill(
+              label: _labels[i],
+              selected: widget.controller.index == i,
+              focusNode: _focusNodes[i],
+              autofocus: i == 0,
+              onTap: () => _selectTab(i),
+              onDirection: (direction) => _tabDirection(i, direction),
+              t: widget.t,
+            ),
+          ),
+          if (i != _labels.length - 1) const SizedBox(width: 4),
+        ],
       ],
+    ),
+  );
+}
+
+class _SubtitleTabPill extends StatefulWidget {
+  final String label;
+  final bool selected;
+  final FocusNode focusNode;
+  final bool autofocus;
+  final VoidCallback onTap;
+  final DpadDirectionCallback onDirection;
+  final WarpTokens t;
+
+  const _SubtitleTabPill({
+    required this.label,
+    required this.selected,
+    required this.focusNode,
+    required this.autofocus,
+    required this.onTap,
+    required this.onDirection,
+    required this.t,
+  });
+
+  @override
+  State<_SubtitleTabPill> createState() => _SubtitleTabPillState();
+}
+
+class _SubtitleTabPillState extends State<_SubtitleTabPill> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) => MouseRegion(
+    cursor: SystemMouseCursors.click,
+    onEnter: (_) => setState(() => _hovered = true),
+    onExit: (_) => setState(() => _hovered = false),
+    child: DpadFocusable(
+      focusNode: widget.focusNode,
+      autofocus: widget.autofocus,
+      entry: widget.autofocus,
+      onDirection: widget.onDirection,
+      onSelect: widget.onTap,
+      tapToSelect: false,
+      builder: (context, state, child) => GestureDetector(
+        onTap: () {
+          widget.focusNode.requestFocus();
+          widget.onTap();
+        },
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+          decoration: BoxDecoration(
+            color: widget.selected
+                ? _accent
+                : (_hovered ? Colors.white.withAlpha(20) : Colors.transparent),
+            borderRadius: BorderRadius.circular(14),
+            border: state.focused
+                ? Border.all(
+                    color: widget.selected ? Colors.white : _accentLight,
+                    width: 2.5,
+                  )
+                : (widget.selected
+                      ? null
+                      : Border.all(color: Colors.transparent)),
+            boxShadow: state.focused
+                ? const [
+                    BoxShadow(
+                      color: Color(0xCC000000),
+                      blurRadius: 12,
+                      spreadRadius: 1,
+                    ),
+                    BoxShadow(color: Color(0x9901B4E4), blurRadius: 18),
+                  ]
+                : widget.selected
+                ? const [BoxShadow(color: Color(0x5901B4E4), blurRadius: 14)]
+                : null,
+          ),
+          child: Center(
+            child: Text(
+              widget.label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: widget.selected
+                    ? Colors.black
+                    : Colors.white.withAlpha(_hovered ? 190 : 145),
+                fontSize: widget.t.fontSubtitle,
+                fontWeight: widget.selected ? FontWeight.w800 : FontWeight.w600,
+              ),
+            ),
+          ),
+        ),
+      ),
+      child: const SizedBox.shrink(),
     ),
   );
 }
@@ -630,66 +779,97 @@ class _SubtitleResultRow extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.all(14),
-    decoration: BoxDecoration(
-      color: Colors.white.withAlpha(12),
-      borderRadius: BorderRadius.circular(18),
-      border: Border.all(color: Colors.white.withAlpha(22)),
-    ),
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          width: 40,
-          height: 40,
-          decoration: BoxDecoration(
-            color: _accent.withAlpha(24),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: _accent.withAlpha(48)),
+  Widget build(BuildContext context) => DpadFocusable(
+    onSelect: loading ? () {} : onLoad,
+    tapToSelect: false,
+    builder: (context, state, child) => GestureDetector(
+      onTap: loading ? null : onLoad,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Colors.white.withAlpha(12),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: state.focused ? _accentLight : Colors.white.withAlpha(22),
+            width: state.focused ? 2 : 1,
           ),
-          child: const Center(
-            child: _GradientIcon(icon: Icons.subtitles, size: 21),
-          ),
+          boxShadow: state.focused
+              ? [
+                  BoxShadow(
+                    color: _accent.withAlpha(120),
+                    blurRadius: 18,
+                    spreadRadius: 2,
+                  ),
+                ]
+              : null,
         ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                result.release.isNotEmpty ? result.release : result.fileName,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: t.fontSubtitle,
-                  fontWeight: FontWeight.w800,
-                ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: _accent.withAlpha(24),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: _accent.withAlpha(48)),
               ),
-              const SizedBox(height: 7),
-              Wrap(
-                spacing: 6,
-                runSpacing: 6,
+              child: const Center(
+                child: _GradientIcon(icon: Icons.subtitles, size: 21),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _Tag(label: result.provider),
-                  _Tag(label: result.language.toUpperCase()),
-                  if (result.hearingImpaired)
-                    _Tag(label: 'HI', color: Colors.amber),
-                  _Tag(label: _scoreLabel(result.score), color: _accentLight),
+                  Text(
+                    result.release.isNotEmpty
+                        ? result.release
+                        : result.fileName,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: t.fontSubtitle,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 7),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: [
+                      _Tag(label: result.provider),
+                      _Tag(label: result.language.toUpperCase()),
+                      if (result.hearingImpaired)
+                        _Tag(label: 'HI', color: Colors.amber),
+                      _Tag(
+                        label: _scoreLabel(result.score),
+                        color: _accentLight,
+                      ),
+                    ],
+                  ),
                 ],
               ),
+            ),
+            if (loading) ...[
+              const SizedBox(width: 12),
+              SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(
+                  color: state.focused ? _accentLight : Colors.white70,
+                  strokeWidth: 2,
+                ),
+              ),
             ],
-          ),
+          ],
         ),
-        const SizedBox(width: 12),
-        _GlassButton(
-          label: loading ? 'Loading' : 'Load',
-          busy: loading,
-          onTap: loading ? null : onLoad,
-        ),
-      ],
+      ),
     ),
+    child: const SizedBox.shrink(),
   );
 }
 
@@ -944,15 +1124,16 @@ class _GlassButton extends StatelessWidget {
       child: AnimatedOpacity(
         opacity: onTap == null ? 0.65 : 1,
         duration: const Duration(milliseconds: 150),
-        child: Container(
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
           padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 10),
           decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [_accent, _accentLight],
-            ),
+            color: state.focused ? _accent : _glass,
             borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: state.focused ? _accentLight : _accent,
+              width: 1.2,
+            ),
             boxShadow: [
               BoxShadow(
                 color: _accent.withAlpha(state.focused ? 130 : 48),
@@ -964,21 +1145,25 @@ class _GlassButton extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               if (busy)
-                const SizedBox(
+                SizedBox(
                   width: 14,
                   height: 14,
                   child: CircularProgressIndicator(
-                    color: Colors.black,
+                    color: state.focused ? Colors.black : Colors.white,
                     strokeWidth: 2,
                   ),
                 )
               else if (icon != null)
-                Icon(icon, color: Colors.black, size: 16),
+                Icon(
+                  icon,
+                  color: state.focused ? Colors.black : Colors.white,
+                  size: 16,
+                ),
               if (busy || icon != null) const SizedBox(width: 8),
               Text(
                 label,
-                style: const TextStyle(
-                  color: Colors.black,
+                style: TextStyle(
+                  color: state.focused ? Colors.black : Colors.white,
                   fontWeight: FontWeight.w900,
                   fontSize: 12,
                 ),

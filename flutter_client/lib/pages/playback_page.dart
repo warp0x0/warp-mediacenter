@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 import 'dart:ui';
 import 'package:dpad/dpad.dart';
 import 'package:flutter/material.dart';
@@ -8,7 +7,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
-import 'package:window_manager/window_manager.dart';
 import '../api/api_client.dart';
 import '../providers/detail_provider.dart';
 import '../theme/warp_tokens.dart';
@@ -35,8 +33,7 @@ class PlaybackPage extends ConsumerStatefulWidget {
   ConsumerState<PlaybackPage> createState() => _PlaybackPageState();
 }
 
-class _PlaybackPageState extends ConsumerState<PlaybackPage>
-    with WindowListener {
+class _PlaybackPageState extends ConsumerState<PlaybackPage> {
   late final Player _player;
   late final VideoController _controller;
 
@@ -81,6 +78,8 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
     _volumeBarFocus,
   ].any((node) => node.hasFocus);
 
+  bool get _isCurrentRoute => ModalRoute.of(context)?.isCurrent ?? true;
+
   @override
   void initState() {
     super.initState();
@@ -105,10 +104,21 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
       }).ignore();
     }
 
-    _resetHideTimer();
+    for (final node in [
+      _seekBarFocus,
+      _menuFocus,
+      _subtitlesFocus,
+      _audioTracksFocus,
+      _playPauseRowFocus,
+      _fullscreenFocus,
+      _stopFocus,
+      _centerPlayFocus,
+      _volumeBarFocus,
+    ]) {
+      node.addListener(_handleOverlayFocusChanged);
+    }
 
-    // Track OS-level fullscreen changes (green button, Ctrl+Cmd+F, etc.)
-    windowManager.addListener(this);
+    _resetHideTimer();
 
     // Scrobble start after first progress tick
     _player.stream.position.listen(_onPosition);
@@ -118,6 +128,19 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
   @override
   void dispose() {
     _hideTimer?.cancel();
+    for (final node in [
+      _seekBarFocus,
+      _menuFocus,
+      _subtitlesFocus,
+      _audioTracksFocus,
+      _playPauseRowFocus,
+      _fullscreenFocus,
+      _stopFocus,
+      _centerPlayFocus,
+      _volumeBarFocus,
+    ]) {
+      node.removeListener(_handleOverlayFocusChanged);
+    }
     _seekBarFocus.dispose();
     _menuFocus.dispose();
     _subtitlesFocus.dispose();
@@ -127,35 +150,23 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
     _stopFocus.dispose();
     _centerPlayFocus.dispose();
     _volumeBarFocus.dispose();
-    windowManager.removeListener(this);
     _player.stop();
     _player.dispose();
     super.dispose();
   }
 
-  @override
-  void onWindowEnterFullScreen() {
-    if (mounted) setState(() => _isFullscreen = true);
-  }
-
-  @override
-  void onWindowLeaveFullScreen() {
-    if (mounted) setState(() => _isFullscreen = false);
-  }
-
   void _resetHideTimer() {
     _hideTimer?.cancel();
     if (!_showControls) setState(() => _showControls = true);
-    _hideTimer = Timer(const Duration(seconds: 4), () {
-      if (!mounted || !_player.state.playing) return;
-      if (_overlayHasFocus) {
-        _resetHideTimer();
-        return;
-      }
-      if (mounted) {
-        setState(() => _showControls = false);
-      }
+    _hideTimer = Timer(const Duration(seconds: 5), () {
+      if (!mounted || !_isCurrentRoute) return;
+      _hideControlsOverlay();
     });
+  }
+
+  void _handleOverlayFocusChanged() {
+    if (!_showControls || !_overlayHasFocus || _exiting) return;
+    _resetHideTimer();
   }
 
   Duration? _scrobbleStartedAt;
@@ -205,13 +216,6 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
     if (_exiting) return;
     _exiting = true;
     _hideTimer?.cancel();
-
-    // Restore windowed mode if we're in fullscreen
-    if (_isFullscreen) {
-      try {
-        await windowManager.setFullScreen(false);
-      } catch (_) {}
-    }
 
     final dur = _player.state.duration;
     final pos = completed ? dur : _player.state.position;
@@ -281,7 +285,7 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
     return PopScope<bool>(
       canPop: _allowPop,
       onPopInvokedWithResult: (didPop, result) {
-        if (!didPop) _exitPlayback();
+        if (!didPop) _handlePlaybackBack();
       },
       child: Scaffold(
         backgroundColor: Colors.black,
@@ -290,16 +294,18 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
         // CallbackShortcuts here sits as an ancestor of every DpadFocusable
         // on this screen, so it's checked before the event would otherwise
         // reach the app-root Dpad.wrap()'s generic back handling. This
-        // preserves the existing "Back = Stop playback" behavior exactly
-        // (backspace/goBack/browserBack/mediaStop all included, not just
-        // dpad's own narrower default back key set).
+        // Back clears visible controls first; only Back on the clean video
+        // surface stops playback.
         body: CallbackShortcuts(
           bindings: {
-            const SingleActivator(LogicalKeyboardKey.escape): _handleEscape,
-            const SingleActivator(LogicalKeyboardKey.backspace): _exitPlayback,
-            const SingleActivator(LogicalKeyboardKey.goBack): _exitPlayback,
+            const SingleActivator(LogicalKeyboardKey.escape):
+                _handlePlaybackBack,
+            const SingleActivator(LogicalKeyboardKey.backspace):
+                _handlePlaybackBack,
+            const SingleActivator(LogicalKeyboardKey.goBack):
+                _handlePlaybackBack,
             const SingleActivator(LogicalKeyboardKey.browserBack):
-                _exitPlayback,
+                _handlePlaybackBack,
             const SingleActivator(LogicalKeyboardKey.mediaStop): _exitPlayback,
             const SingleActivator(LogicalKeyboardKey.mediaPlayPause):
                 _togglePlay,
@@ -324,6 +330,7 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
                   Video(
                     controller: _controller,
                     controls: NoVideoControls,
+                    fit: _isFullscreen ? BoxFit.cover : BoxFit.contain,
                     subtitleViewConfiguration: const SubtitleViewConfiguration(
                       style: TextStyle(
                         height: 1.4,
@@ -368,15 +375,22 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
     );
   }
 
-  // Escape means "exit fullscreen" first, "stop playback" otherwise — kept
-  // as its own binding since it's distinct from the plain back/stop keys.
-  void _handleEscape() {
-    _resetHideTimer();
-    if (_isFullscreen) {
-      _toggleFullscreen();
-    } else {
-      _exitPlayback();
+  void _handlePlaybackBack() {
+    if (_showControls) {
+      _hideControlsOverlay();
+      return;
     }
+    _exitPlayback();
+  }
+
+  void _hideControlsOverlay() {
+    _hideTimer?.cancel();
+    if (!mounted) return;
+    Dpad.of(context).requestFocus(_seekBarFocus);
+    setState(() {
+      _showControls = false;
+      _adjustingVolume = false;
+    });
   }
 
   // ── D-pad navigation: shared onDirection callbacks ─────────────────────
@@ -507,20 +521,7 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
 
   void _toggleFullscreen() {
     _resetHideTimer();
-    if (!Platform.isMacOS && !Platform.isWindows && !Platform.isLinux) return;
-    unawaited(_setFullscreen(!_isFullscreen));
-  }
-
-  Future<void> _setFullscreen(bool enabled) async {
-    try {
-      if (enabled) {
-        await windowManager.setFullScreen(true);
-      } else {
-        await windowManager.setFullScreen(false);
-      }
-    } catch (_) {
-      // window_manager may not be initialized on all platforms.
-    }
+    setState(() => _isFullscreen = !_isFullscreen);
   }
 
   Future<void> _setMpvProperty(String property, String value) async {
@@ -563,6 +564,8 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
   void _openSubtitles() {
     _resetHideTimer();
     final mediaType = widget.payload['mediaType'] as String? ?? 'movie';
+    final wasPlaying = _player.state.playing;
+    if (wasPlaying) _player.pause();
     showDialog<void>(
       context: context,
       barrierDismissible: true,
@@ -575,7 +578,9 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
         episode: widget.payload['episode'] as int?,
         sourceUrl: widget.payload['source'] as String?,
       ),
-    );
+    ).whenComplete(() {
+      if (mounted && !_exiting && wasPlaying) _player.play();
+    });
   }
 
   void _openPlayerMenu() {
@@ -1136,35 +1141,27 @@ class _OverlayIconButton extends StatelessWidget {
           focusNode?.requestFocus();
           onTap();
         },
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(16),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
-            child: Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: _uoscGlass,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.white.withAlpha(26)),
-                // Icon-category focus indicator: prominent cyan halo.
-                boxShadow: [
-                  if (state.focused)
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: state.focused ? _uoscAccent : Colors.transparent,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: state.focused ? _uoscAccentLight : Colors.transparent,
+              width: 2,
+            ),
+            boxShadow: state.focused
+                ? [
                     BoxShadow(
-                      color: _uoscAccent.withAlpha(160),
+                      color: _uoscAccent.withAlpha(170),
                       blurRadius: 22,
                       spreadRadius: 3,
-                    )
-                  else
-                    const BoxShadow(
-                      color: Colors.black54,
-                      blurRadius: 18,
-                      offset: Offset(0, 8),
                     ),
-                ],
-              ),
-              child: _GradientIcon(icon: icon, size: 24),
-            ),
+                  ]
+                : null,
           ),
+          child: _GradientIcon(icon: icon, size: 24),
         ),
       ),
       child: const SizedBox.shrink(),
@@ -1431,6 +1428,12 @@ class _PlayerMenuDialog extends StatelessWidget {
       bindings: {
         const SingleActivator(LogicalKeyboardKey.escape): () =>
             Navigator.of(context).pop(),
+        const SingleActivator(LogicalKeyboardKey.backspace): () =>
+            Navigator.of(context).pop(),
+        const SingleActivator(LogicalKeyboardKey.goBack): () =>
+            Navigator.of(context).pop(),
+        const SingleActivator(LogicalKeyboardKey.browserBack): () =>
+            Navigator.of(context).pop(),
       },
       child: DpadRegion(
         memoryKey: 'player-menu',
@@ -1590,6 +1593,12 @@ class _SettingsDialogFrame extends StatelessWidget {
     child: CallbackShortcuts(
       bindings: {
         const SingleActivator(LogicalKeyboardKey.escape): () =>
+            Navigator.of(context).pop(),
+        const SingleActivator(LogicalKeyboardKey.backspace): () =>
+            Navigator.of(context).pop(),
+        const SingleActivator(LogicalKeyboardKey.goBack): () =>
+            Navigator.of(context).pop(),
+        const SingleActivator(LogicalKeyboardKey.browserBack): () =>
             Navigator.of(context).pop(),
       },
       child: DpadRegion(
@@ -1908,47 +1917,72 @@ class _SettingsSwitchRow extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-    decoration: BoxDecoration(
-      color: Colors.white.withAlpha(12),
-      borderRadius: BorderRadius.circular(18),
-      border: Border.all(color: Colors.white.withAlpha(22)),
-    ),
-    child: Row(
-      children: [
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w800,
-                  fontSize: 14,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                subtitle,
-                style: TextStyle(
-                  color: Colors.white.withAlpha(142),
-                  height: 1.25,
-                ),
-              ),
-            ],
+  Widget build(BuildContext context) => DpadFocusable(
+    onSelect: () => onChanged(!value),
+    tapToSelect: false,
+    builder: (context, state, child) => GestureDetector(
+      onTap: () => onChanged(!value),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: Colors.white.withAlpha(12),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: state.focused
+                ? _uoscAccentLight
+                : Colors.white.withAlpha(22),
+            width: state.focused ? 2 : 1,
           ),
+          boxShadow: state.focused
+              ? [
+                  BoxShadow(
+                    color: _uoscAccent.withAlpha(135),
+                    blurRadius: 18,
+                    spreadRadius: 2,
+                  ),
+                ]
+              : null,
         ),
-        Switch(
-          value: value,
-          onChanged: onChanged,
-          activeThumbColor: _uoscAccentLight,
-          inactiveThumbColor: Colors.white70,
-          inactiveTrackColor: Colors.white24,
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 14,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    subtitle,
+                    style: TextStyle(
+                      color: Colors.white.withAlpha(142),
+                      height: 1.25,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            IgnorePointer(
+              child: Switch(
+                value: value,
+                onChanged: onChanged,
+                activeThumbColor: _uoscAccentLight,
+                inactiveThumbColor: Colors.white70,
+                inactiveTrackColor: Colors.white24,
+              ),
+            ),
+          ],
         ),
-      ],
+      ),
     ),
+    child: const SizedBox.shrink(),
   );
 }
 

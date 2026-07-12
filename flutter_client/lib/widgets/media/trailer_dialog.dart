@@ -262,6 +262,9 @@ class _TrailerDialogState extends ConsumerState<TrailerDialog>
     if (_trailers.length <= 1) return;
     _syncSelectorFocusNodes();
     setState(() => _selectorOpen = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _scrollSelectedTrailerIntoView();
+    });
   }
 
   void _selectTrailer(int index) {
@@ -301,6 +304,28 @@ class _TrailerDialogState extends ConsumerState<TrailerDialog>
       target,
       duration: const Duration(milliseconds: 180),
       curve: Curves.easeOutCubic,
+    );
+  }
+
+  void _scrollSelectedTrailerIntoView() {
+    if (!_selectorScroll.hasClients || _trailers.isEmpty) return;
+    const rowExtent = 60.0;
+    final position = _selectorScroll.position;
+    final itemTop = _selectedIndex * rowExtent;
+    final itemBottom = itemTop + rowExtent;
+    final viewportTop = position.pixels;
+    final viewportBottom = viewportTop + position.viewportDimension;
+
+    double? target;
+    if (itemTop < viewportTop) {
+      target = itemTop;
+    } else if (itemBottom > viewportBottom) {
+      target = itemBottom - position.viewportDimension;
+    }
+    if (target == null) return;
+
+    _selectorScroll.jumpTo(
+      target.clamp(position.minScrollExtent, position.maxScrollExtent),
     );
   }
 

@@ -31,7 +31,8 @@ class SearchPage extends ConsumerStatefulWidget {
   ConsumerState<SearchPage> createState() => _SearchPageState();
 }
 
-class _SearchPageState extends ConsumerState<SearchPage> {
+class _SearchPageState extends ConsumerState<SearchPage>
+    with WidgetsBindingObserver {
   final _ctrl = TextEditingController();
   final _focus = FocusNode();
   // Outer D-pad-navigable wrapper around the search TextField — Select
@@ -62,6 +63,9 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   bool _searching = false;
   String? _error;
   String _activeQuery = '';
+  int _searchGeneration = 0;
+  FocusNode? _lastSearchFocus;
+  bool _appActive = true;
 
   bool get _hasResults =>
       _tmdbMovies.isNotEmpty || _tmdbShows.isNotEmpty || _traktItems.isNotEmpty;
@@ -69,6 +73,8 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    FocusManager.instance.addListener(_rememberSearchFocus);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) ref.read(backdropProvider.notifier).clear();
     });
@@ -87,6 +93,8 @@ class _SearchPageState extends ConsumerState<SearchPage> {
 
   @override
   void dispose() {
+    FocusManager.instance.removeListener(_rememberSearchFocus);
+    WidgetsBinding.instance.removeObserver(this);
     _ctrl.dispose();
     _focus.removeListener(_onEditFocusChange);
     _focus.dispose();
@@ -100,6 +108,35 @@ class _SearchPageState extends ConsumerState<SearchPage> {
       fn.dispose();
     }
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _appActive = state == AppLifecycleState.resumed;
+    if (_appActive) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final node = _lastSearchFocus;
+        if (mounted && node?.context != null) node?.requestFocus();
+      });
+    }
+  }
+
+  void _rememberSearchFocus() {
+    if (!_appActive || !mounted) return;
+    final node = FocusManager.instance.primaryFocus;
+    final nodeContext = node?.context;
+    if (node == null || node is FocusScopeNode || nodeContext == null) return;
+    final pageBox = context.findRenderObject();
+    final focusBox = nodeContext.findRenderObject();
+    if (pageBox == null || focusBox == null) return;
+    var current = focusBox.parent;
+    while (current != null) {
+      if (identical(current, pageBox)) {
+        _lastSearchFocus = node;
+        return;
+      }
+      current = current.parent;
+    }
   }
 
   // Focuses the search bar and reliably scrolls the page back to the top —
@@ -346,6 +383,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   Future<void> _doSearch(String query, {bool addToHistory = true}) async {
     final q = query.trim();
     if (q.isEmpty) return;
+    final generation = ++_searchGeneration;
 
     setState(() {
       _activeQuery = q;
@@ -375,7 +413,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
           .catchError((_) => <String, dynamic>{}),
     ]);
 
-    if (!mounted) return;
+    if (!mounted || generation != _searchGeneration) return;
 
     final tmdbRaw = results[0];
     final traktRaw = results[1];
@@ -500,10 +538,30 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   // return there directly.
   void _exitToPreviousTab() => context.go(LastTabRoute.value);
 
-  // Escape/goBack/browserBack are a 2-level hierarchy on this page: while
+  bool get _hasActiveSearchLayer =>
+      _activeQuery.isNotEmpty || _searching || _error != null || _hasResults;
+
+  void _clearActiveSearchLayer() {
+    _searchGeneration++;
+    setState(() {
+      _activeQuery = '';
+      _searching = false;
+      _error = null;
+      _tmdbMovies = [];
+      _tmdbShows = [];
+      _traktItems = [];
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _focusSearchBar();
+    });
+  }
+
+  // Escape/goBack/browserBack are a 3-level hierarchy on this page: while
   // the search TextField is genuinely being edited, the first press only
   // backs out of edit mode (to the wrapper) — it does NOT leave the page.
-  // Only once out of edit mode does the same key leave to the previous tab.
+  // With results/error/no-results/loading visible, the next press clears
+  // that active search layer and returns to the search bar. Only once the
+  // page is idle does the same key leave to the previous tab.
   //
   // Backspace is deliberately NOT part of this while editing — it needs to
   // reach the TextField as a real character-delete. Outside edit mode
@@ -513,6 +571,8 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   void _handleBackKey() {
     if (_focus.hasFocus) {
       Dpad.of(context).requestFocus(_searchBarNode);
+    } else if (_hasActiveSearchLayer) {
+      _clearActiveSearchLayer();
     } else {
       _exitToPreviousTab();
     }
@@ -873,19 +933,20 @@ class _SearchBtnState extends State<_SearchBtn> {
 
   @override
   Widget build(BuildContext context) {
-    // The only state that legitimately makes this button non-interactive
-    // is an in-flight search — an empty query is still fully focusable
-    // and tappable, just visually muted until there's something to search.
-    final focusable = !widget.isLoading;
+    // Keep the button focusable even during loading. Removing it from the
+    // focus graph while it has focus can strand focus when a search resolves
+    // to an error or no-results state and no result card mounts to replace it.
     return MouseRegion(
-      cursor: focusable ? SystemMouseCursors.click : SystemMouseCursors.basic,
+      cursor: widget.isLoading
+          ? SystemMouseCursors.basic
+          : SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
       child: DpadFocusable(
         focusNode: widget.focusNode,
-        enabled: focusable,
+        enabled: true,
         onDirection: widget.onDirection,
-        onSelect: widget.onTap,
+        onSelect: widget.isLoading ? () {} : widget.onTap,
         tapToSelect: false,
         builder: (context, state, child) {
           final focused = state.focused;
@@ -893,12 +954,10 @@ class _SearchBtnState extends State<_SearchBtn> {
           // default, filled cyan only when focused.
           final showAccent = focused || _hovered;
           return GestureDetector(
-            onTap: focusable
-                ? () {
-                    widget.focusNode.requestFocus();
-                    widget.onTap();
-                  }
-                : null,
+            onTap: () {
+              widget.focusNode.requestFocus();
+              if (!widget.isLoading) widget.onTap();
+            },
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 150),
               height: widget.height,
