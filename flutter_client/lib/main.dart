@@ -18,6 +18,10 @@ Future<void> main() async {
   // Initialize window manager for desktop fullscreen support
   if (Platform.isMacOS || Platform.isWindows || Platform.isLinux) {
     await windowManager.ensureInitialized();
+    await windowManager.waitUntilReadyToShow(const WindowOptions(), () async {
+      await windowManager.show();
+      await windowManager.focus();
+    });
   }
 
   // Initialize media_kit (libmpv) before any Player is created

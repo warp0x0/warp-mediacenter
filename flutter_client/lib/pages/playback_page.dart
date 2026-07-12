@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:ui';
 import 'package:dpad/dpad.dart';
 import 'package:flutter/material.dart';
@@ -7,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+import 'package:window_manager/window_manager.dart';
 import '../api/api_client.dart';
 import '../providers/detail_provider.dart';
 import '../theme/warp_tokens.dart';
@@ -33,7 +35,8 @@ class PlaybackPage extends ConsumerStatefulWidget {
   ConsumerState<PlaybackPage> createState() => _PlaybackPageState();
 }
 
-class _PlaybackPageState extends ConsumerState<PlaybackPage> {
+class _PlaybackPageState extends ConsumerState<PlaybackPage>
+    with WindowListener, WidgetsBindingObserver {
   late final Player _player;
   late final VideoController _controller;
 
@@ -80,9 +83,14 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
 
   bool get _isCurrentRoute => ModalRoute.of(context)?.isCurrent ?? true;
 
+  bool get _isDesktop =>
+      Platform.isMacOS || Platform.isWindows || Platform.isLinux;
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    if (_isDesktop) windowManager.addListener(this);
     _player = Player();
     _controller = VideoController(_player);
 
@@ -128,6 +136,8 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
   @override
   void dispose() {
     _hideTimer?.cancel();
+    if (_isDesktop) windowManager.removeListener(this);
+    WidgetsBinding.instance.removeObserver(this);
     for (final node in [
       _seekBarFocus,
       _menuFocus,
@@ -153,6 +163,25 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
     _player.stop();
     _player.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_recoverPlaybackFocus());
+    }
+  }
+
+  @override
+  void onWindowEnterFullScreen() {
+    if (mounted) setState(() => _isFullscreen = true);
+    unawaited(_recoverFocusAfterFullscreenTransition());
+  }
+
+  @override
+  void onWindowLeaveFullScreen() {
+    if (mounted) setState(() => _isFullscreen = false);
+    unawaited(_recoverFocusAfterFullscreenTransition());
   }
 
   void _resetHideTimer() {
@@ -216,6 +245,12 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
     if (_exiting) return;
     _exiting = true;
     _hideTimer?.cancel();
+
+    if (_isDesktop && _isFullscreen) {
+      try {
+        await windowManager.setFullScreen(false);
+      } catch (_) {}
+    }
 
     final dur = _player.state.duration;
     final pos = completed ? dur : _player.state.position;
@@ -322,15 +357,31 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,
               onTap: _resetHideTimer,
-              onDoubleTap: _toggleFullscreen,
+              onDoubleTap: _resetHideTimer,
               child: Stack(
                 fit: StackFit.expand,
                 children: [
                   // ── Video surface ─────────────────────────────────────────────
                   Video(
                     controller: _controller,
-                    controls: NoVideoControls,
-                    fit: _isFullscreen ? BoxFit.cover : BoxFit.contain,
+                    controls: (_) => _ControlsShortcuts(
+                      onBack: _handlePlaybackBack,
+                      onStop: _exitPlayback,
+                      onPlayPause: _togglePlay,
+                      onPlay: _play,
+                      onPause: _pause,
+                      onRewind: () => _seek(-10),
+                      onFastForward: () => _seek(10),
+                      child: IgnorePointer(
+                        ignoring: !_showControls,
+                        child: AnimatedOpacity(
+                          opacity: _showControls ? 1.0 : 0.0,
+                          duration: const Duration(milliseconds: 250),
+                          child: _buildControlsOverlay(t, title),
+                        ),
+                      ),
+                    ),
+                    fit: BoxFit.contain,
                     subtitleViewConfiguration: const SubtitleViewConfiguration(
                       style: TextStyle(
                         height: 1.4,
@@ -354,16 +405,6 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
                         ],
                       ),
                       padding: EdgeInsets.fromLTRB(24.0, 0.0, 24.0, 48.0),
-                    ),
-                  ),
-
-                  // ── Controls overlay ──────────────────────────────────────────
-                  IgnorePointer(
-                    ignoring: !_showControls,
-                    child: AnimatedOpacity(
-                      opacity: _showControls ? 1.0 : 0.0,
-                      duration: const Duration(milliseconds: 250),
-                      child: _buildControlsOverlay(t, title),
                     ),
                   ),
                 ],
@@ -521,7 +562,47 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
 
   void _toggleFullscreen() {
     _resetHideTimer();
-    setState(() => _isFullscreen = !_isFullscreen);
+    if (!_isDesktop) return;
+    unawaited(_setWindowFullscreen(!_isFullscreen));
+  }
+
+  Future<void> _setWindowFullscreen(bool enabled) async {
+    try {
+      await windowManager.setFullScreen(enabled);
+      final actual = await _waitForWindowFullscreen(enabled);
+      if (!mounted) return;
+      setState(() => _isFullscreen = actual);
+      await _recoverFocusAfterFullscreenTransition();
+    } catch (_) {}
+  }
+
+  Future<bool> _waitForWindowFullscreen(bool expected) async {
+    for (var i = 0; i < 12; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      final value = await windowManager.isFullScreen();
+      if (value == expected) return value;
+    }
+    return windowManager.isFullScreen();
+  }
+
+  Future<void> _recoverFocusAfterFullscreenTransition() async {
+    await Future<void>.delayed(const Duration(milliseconds: 350));
+    await _recoverPlaybackFocus();
+  }
+
+  Future<void> _recoverPlaybackFocus() async {
+    if (!mounted || _exiting || !_isCurrentRoute) return;
+    if (_isDesktop) {
+      try {
+        await windowManager.focus();
+      } catch (_) {}
+    }
+    FocusManager.instance.primaryFocus?.unfocus();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _exiting || !_isCurrentRoute) return;
+      Dpad.of(context).requestFocus(_seekBarFocus);
+      _resetHideTimer();
+    });
   }
 
   Future<void> _setMpvProperty(String property, String value) async {
@@ -986,6 +1067,45 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
 const _uoscAccent = Color(0xFF0DB2E2);
 const _uoscAccentLight = Color(0xFF78F4FF);
 const _uoscGlass = Color(0xB30B1118);
+
+class _ControlsShortcuts extends StatelessWidget {
+  final VoidCallback onBack;
+  final VoidCallback onStop;
+  final VoidCallback onPlayPause;
+  final VoidCallback onPlay;
+  final VoidCallback onPause;
+  final VoidCallback onRewind;
+  final VoidCallback onFastForward;
+  final Widget child;
+
+  const _ControlsShortcuts({
+    required this.onBack,
+    required this.onStop,
+    required this.onPlayPause,
+    required this.onPlay,
+    required this.onPause,
+    required this.onRewind,
+    required this.onFastForward,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) => CallbackShortcuts(
+    bindings: {
+      const SingleActivator(LogicalKeyboardKey.escape): onBack,
+      const SingleActivator(LogicalKeyboardKey.backspace): onBack,
+      const SingleActivator(LogicalKeyboardKey.goBack): onBack,
+      const SingleActivator(LogicalKeyboardKey.browserBack): onBack,
+      const SingleActivator(LogicalKeyboardKey.mediaStop): onStop,
+      const SingleActivator(LogicalKeyboardKey.mediaPlayPause): onPlayPause,
+      const SingleActivator(LogicalKeyboardKey.mediaPlay): onPlay,
+      const SingleActivator(LogicalKeyboardKey.mediaPause): onPause,
+      const SingleActivator(LogicalKeyboardKey.mediaRewind): onRewind,
+      const SingleActivator(LogicalKeyboardKey.mediaFastForward): onFastForward,
+    },
+    child: child,
+  );
+}
 
 class _SeekBar extends StatelessWidget {
   final double value;
