@@ -228,7 +228,7 @@ class _PowerPageState extends ConsumerState<PowerPage>
         padding: const EdgeInsets.all(24),
         child: Center(
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 860),
+            constraints: const BoxConstraints(maxWidth: 1400),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -294,13 +294,14 @@ class _HeaderCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scaler = MediaQuery.textScalerOf(context);
     return _Card(
       t: t,
       child: Row(
         children: [
           Container(
-            width: 56,
-            height: 56,
+            width: scaler.scale(56),
+            height: scaler.scale(56),
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               color: const Color(0xFF0DB2E2).withAlpha(30),
@@ -309,13 +310,13 @@ class _HeaderCard extends StatelessWidget {
                 width: 1,
               ),
             ),
-            child: const Icon(
+            child: Icon(
               Icons.power_settings_new,
-              color: Color(0xFF0DB2E2),
-              size: 28,
+              color: const Color(0xFF0DB2E2),
+              size: scaler.scale(28),
             ),
           ),
-          const SizedBox(width: 20),
+          SizedBox(width: scaler.scale(20)),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -538,10 +539,11 @@ class _StatusRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scaler = MediaQuery.textScalerOf(context);
     return Row(
       children: [
-        Icon(Icons.circle, size: 7, color: dotColor),
-        const SizedBox(width: 10),
+        Icon(Icons.circle, size: scaler.scale(7), color: dotColor),
+        SizedBox(width: scaler.scale(10)),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -668,10 +670,11 @@ class _InfoRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scaler = MediaQuery.textScalerOf(context);
     return Row(
       children: [
         SizedBox(
-          width: 120,
+          width: scaler.scale(120),
           child: Text(
             label,
             style: TextStyle(color: Colors.white38, fontSize: t.fontSubtitle),
@@ -789,6 +792,7 @@ class _Card extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scaler = MediaQuery.textScalerOf(context);
     return Container(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(12),
@@ -801,10 +805,12 @@ class _Card extends StatelessWidget {
           children: [
             Padding(
               padding: EdgeInsets.fromLTRB(
-                24,
-                topAccent ? 26 : 24, // extra top padding for accent line
-                24,
-                24,
+                scaler.scale(24),
+                scaler.scale(
+                  topAccent ? 26 : 24,
+                ), // extra top padding for accent line
+                scaler.scale(24),
+                scaler.scale(24),
               ),
               child: child,
             ),
@@ -834,10 +840,11 @@ class _CardHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scaler = MediaQuery.textScalerOf(context);
     return Row(
       children: [
-        Icon(icon, size: 14, color: const Color(0xFF0DB2E2)),
-        const SizedBox(width: 8),
+        Icon(icon, size: scaler.scale(14), color: const Color(0xFF0DB2E2)),
+        SizedBox(width: scaler.scale(8)),
         Text(
           label,
           style: TextStyle(

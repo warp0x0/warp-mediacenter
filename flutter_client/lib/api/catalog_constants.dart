@@ -162,5 +162,8 @@ String posterUrl(String? path, {String size = 'w300'}) {
 
 String backdropUrl(String? path, {String size = 'w1280'}) {
   if (path == null || path.isEmpty) return '';
+  if (path.startsWith('http://') || path.startsWith('https://')) {
+    return path.replaceFirst(RegExp(r'/original/'), '/w1280/');
+  }
   return '$kImageBase/$size$path';
 }

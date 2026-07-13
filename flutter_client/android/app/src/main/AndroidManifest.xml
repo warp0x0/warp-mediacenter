@@ -1,10 +1,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <!-- ── Android TV / Leanback ─────────────────────────────────────────── -->
-    <!-- required="false" keeps the app installable on phones/tablets too    -->
     <uses-feature android:name="android.software.leanback"
-        android:required="false" />
+        android:required="true" />
     <uses-feature android:name="android.hardware.type.television"
-        android:required="false" />
+        android:required="true" />
     <!-- TV has no touchscreen — declare not required so it isn't filtered   -->
     <uses-feature android:name="android.hardware.touchscreen"
         android:required="false" />
@@ -13,10 +14,12 @@
         android:label="Warp MediaCenter"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
-        android:banner="@mipmap/ic_launcher">
+        android:banner="@mipmap/ic_launcher"
+        android:usesCleartextTraffic="true">
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:screenOrientation="landscape"
             android:launchMode="singleTop"
             android:taskAffinity=""
             android:theme="@style/LaunchTheme"

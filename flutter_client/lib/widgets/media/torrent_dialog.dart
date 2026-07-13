@@ -12,6 +12,7 @@ import '../../models/debrid.dart';
 import '../../theme/warp_tokens.dart';
 import '../shared/dpad_controls.dart';
 import '../shared/modal_focus_restore.dart';
+import '../shared/tv_modal_chrome_scale.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TorrentDialog — search → resolve → poll → stream → preload → navigate
@@ -796,41 +797,43 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
             children: [
               // Main dialog
               Center(
-                child: Container(
-                  width: (size.width * 0.62).clamp(520.0, 900.0),
-                  constraints: BoxConstraints(maxHeight: size.height * 0.82),
-                  decoration: BoxDecoration(
-                    color: const Color(0xF7000000).withAlpha(247),
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: Colors.white.withAlpha(23)),
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(16),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        // Accent top stripe
-                        Container(
-                          height: 3,
-                          decoration: const BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: [Color(0xFF0DB2E2), Color(0x1F0DB2E2)],
+                child: TvModalChromeScale(
+                  child: Container(
+                    width: (size.width * 0.62).clamp(520.0, 900.0),
+                    constraints: BoxConstraints(maxHeight: size.height * 0.82),
+                    decoration: BoxDecoration(
+                      color: const Color(0xF7000000).withAlpha(247),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: Colors.white.withAlpha(23)),
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(16),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          // Accent top stripe
+                          Container(
+                            height: 3,
+                            decoration: const BoxDecoration(
+                              gradient: LinearGradient(
+                                colors: [Color(0xFF0DB2E2), Color(0x1F0DB2E2)],
+                              ),
                             ),
                           ),
-                        ),
 
-                        // Header
-                        _buildHeader(t, episodeTag),
+                          // Header
+                          _buildHeader(t, episodeTag),
 
-                        // Search bar
-                        _buildSearchBar(t),
+                          // Search bar
+                          _buildSearchBar(t),
 
-                        // Banner
-                        if (_banner != null) _buildBanner(_banner!, t),
+                          // Banner
+                          if (_banner != null) _buildBanner(_banner!, t),
 
-                        // Scrollable body
-                        Flexible(child: _buildBody(t)),
-                      ],
+                          // Scrollable body
+                          Flexible(child: _buildBody(t)),
+                        ],
+                      ),
                     ),
                   ),
                 ),
@@ -1310,162 +1313,164 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
       child: Container(
         color: const Color(0xE10A0A0E),
         alignment: Alignment.center,
-        child: Container(
-          width: 460,
-          padding: const EdgeInsets.all(28),
-          decoration: BoxDecoration(
-            color: const Color(0xFA121218),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: Colors.white.withAlpha(25)),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Container(
-                    width: 38,
-                    height: 38,
-                    decoration: BoxDecoration(
-                      color: const Color(0x1FF59E0B),
-                      borderRadius: BorderRadius.circular(8),
+        child: TvModalChromeScale(
+          child: Container(
+            width: 460,
+            padding: const EdgeInsets.all(28),
+            decoration: BoxDecoration(
+              color: const Color(0xFA121218),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: Colors.white.withAlpha(25)),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      width: 38,
+                      height: 38,
+                      decoration: BoxDecoration(
+                        color: const Color(0x1FF59E0B),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      alignment: Alignment.center,
+                      child: const Icon(
+                        Icons.warning_amber_rounded,
+                        size: 20,
+                        color: Color(0xFFFBBF24),
+                      ),
                     ),
-                    alignment: Alignment.center,
-                    child: const Icon(
-                      Icons.warning_amber_rounded,
-                      size: 20,
-                      color: Color(0xFFFBBF24),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            reason == _LocalConfirmReason.runtimeBlocked
+                                ? 'Rejected by Real-Debrid'
+                                : 'Blocked by Real-Debrid',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            reason == _LocalConfirmReason.runtimeBlocked
+                                ? 'Real-Debrid rejected this torrent due to copyright or legal restrictions. Download locally via libtorrent instead?'
+                                : 'This source is filtered by Real-Debrid and will fail if sent through it. Download locally via libtorrent instead?',
+                            style: TextStyle(
+                              color: Colors.white.withAlpha(127),
+                              fontSize: 12,
+                              height: 1.5,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            result.name,
+                            style: TextStyle(
+                              color: Colors.white.withAlpha(64),
+                              fontSize: 11,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          reason == _LocalConfirmReason.runtimeBlocked
-                              ? 'Rejected by Real-Debrid'
-                              : 'Blocked by Real-Debrid',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
+                  ],
+                ),
+                const SizedBox(height: 20),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    DpadFocusable(
+                      focusNode: _localConfirmCancelFocus,
+                      autofocus: true,
+                      entry: true,
+                      onDirection: _localConfirmCancelDirection,
+                      onSelect: _dismissLocalConfirm,
+                      builder: (context, state, child) => GestureDetector(
+                        onTap: _dismissLocalConfirm,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 18,
+                            vertical: 10,
                           ),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          reason == _LocalConfirmReason.runtimeBlocked
-                              ? 'Real-Debrid rejected this torrent due to copyright or legal restrictions. Download locally via libtorrent instead?'
-                              : 'This source is filtered by Real-Debrid and will fail if sent through it. Download locally via libtorrent instead?',
-                          style: TextStyle(
-                            color: Colors.white.withAlpha(127),
-                            fontSize: 12,
-                            height: 1.5,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          result.name,
-                          style: TextStyle(
-                            color: Colors.white.withAlpha(64),
-                            fontSize: 11,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 20),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  DpadFocusable(
-                    focusNode: _localConfirmCancelFocus,
-                    autofocus: true,
-                    entry: true,
-                    onDirection: _localConfirmCancelDirection,
-                    onSelect: _dismissLocalConfirm,
-                    builder: (context, state, child) => GestureDetector(
-                      onTap: _dismissLocalConfirm,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 18,
-                          vertical: 10,
-                        ),
-                        decoration: BoxDecoration(
-                          color: state.focused
-                              ? const Color(0xFF0DB2E2)
-                              : Colors.transparent,
-                          border: Border.all(
+                          decoration: BoxDecoration(
                             color: state.focused
-                                ? Colors.white
-                                : Colors.white.withAlpha(20),
-                            width: 2,
+                                ? const Color(0xFF0DB2E2)
+                                : Colors.transparent,
+                            border: Border.all(
+                              color: state.focused
+                                  ? Colors.white
+                                  : Colors.white.withAlpha(20),
+                              width: 2,
+                            ),
+                            borderRadius: BorderRadius.circular(8),
                           ),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Text(
-                          'Cancel',
-                          style: TextStyle(
-                            color: state.focused
-                                ? Colors.white
-                                : Colors.white.withAlpha(127),
-                            fontSize: 13,
-                            fontWeight: state.focused
-                                ? FontWeight.w600
-                                : FontWeight.w400,
+                          child: Text(
+                            'Cancel',
+                            style: TextStyle(
+                              color: state.focused
+                                  ? Colors.white
+                                  : Colors.white.withAlpha(127),
+                              fontSize: 13,
+                              fontWeight: state.focused
+                                  ? FontWeight.w600
+                                  : FontWeight.w400,
+                            ),
                           ),
                         ),
                       ),
+                      child: const SizedBox.shrink(),
                     ),
-                    child: const SizedBox.shrink(),
-                  ),
-                  const SizedBox(width: 10),
-                  DpadFocusable(
-                    focusNode: _localConfirmDownloadFocus,
-                    onDirection: _localConfirmDownloadDirection,
-                    onSelect: () => _pickLocalTorrent(result),
-                    builder: (context, state, child) => GestureDetector(
-                      onTap: () => _pickLocalTorrent(result),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 18,
-                          vertical: 10,
-                        ),
-                        decoration: BoxDecoration(
-                          color: state.focused
-                              ? const Color(0xFF0DB2E2)
-                              : const Color(0xCC333232),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(
-                            color: state.focused
-                                ? Colors.white
-                                : const Color(0xFF0DB2E2),
-                            width: 2,
+                    const SizedBox(width: 10),
+                    DpadFocusable(
+                      focusNode: _localConfirmDownloadFocus,
+                      onDirection: _localConfirmDownloadDirection,
+                      onSelect: () => _pickLocalTorrent(result),
+                      builder: (context, state, child) => GestureDetector(
+                        onTap: () => _pickLocalTorrent(result),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 18,
+                            vertical: 10,
                           ),
-                        ),
-                        child: Text(
-                          'Download Locally',
-                          style: TextStyle(
+                          decoration: BoxDecoration(
                             color: state.focused
-                                ? Colors.white
-                                : const Color(0xFF0DB2E2),
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
+                                ? const Color(0xFF0DB2E2)
+                                : const Color(0xCC333232),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: state.focused
+                                  ? Colors.white
+                                  : const Color(0xFF0DB2E2),
+                              width: 2,
+                            ),
+                          ),
+                          child: Text(
+                            'Download Locally',
+                            style: TextStyle(
+                              color: state.focused
+                                  ? Colors.white
+                                  : const Color(0xFF0DB2E2),
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
                           ),
                         ),
                       ),
+                      child: const SizedBox.shrink(),
                     ),
-                    child: const SizedBox.shrink(),
-                  ),
-                ],
-              ),
-            ],
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
       ),

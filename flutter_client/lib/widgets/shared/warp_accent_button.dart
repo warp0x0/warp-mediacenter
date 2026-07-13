@@ -57,6 +57,7 @@ class WarpAccentButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scaler = MediaQuery.textScalerOf(context);
     return DpadFocusable(
       focusNode: focusNode,
       onSelect: onSelect,
@@ -68,8 +69,8 @@ class WarpAccentButton extends StatelessWidget {
         return AnimatedContainer(
           duration: const Duration(milliseconds: 150),
           padding: EdgeInsets.symmetric(
-            horizontal: paddingHorizontal,
-            vertical: paddingVertical,
+            horizontal: scaler.scale(paddingHorizontal),
+            vertical: scaler.scale(paddingVertical),
           ),
           decoration: BoxDecoration(
             color: focused ? accentColor : _darkBg,
@@ -83,8 +84,12 @@ class WarpAccentButton extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               if (icon != null) ...[
-                Icon(icon, color: Colors.white, size: fontSize + 2),
-                SizedBox(width: fontSize * 0.4),
+                Icon(
+                  icon,
+                  color: Colors.white,
+                  size: scaler.scale(fontSize + 2),
+                ),
+                SizedBox(width: scaler.scale(fontSize * 0.4)),
               ],
               Text(
                 label,

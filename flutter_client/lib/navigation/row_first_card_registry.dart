@@ -20,11 +20,29 @@ import 'package:flutter/widgets.dart';
 // ─────────────────────────────────────────────────────────────────────────────
 
 class RowFirstCardRegistry {
-  final _entries = <int, FocusNode>{};
+  final _entries = <int, RowFirstCardEntry>{};
 
-  void register(int rowIndex, FocusNode node) => _entries[rowIndex] = node;
+  void register(
+    int rowIndex,
+    FocusNode node, {
+    Future<void> Function()? revealFirstCard,
+  }) => _entries[rowIndex] = RowFirstCardEntry(
+    node: node,
+    revealFirstCard: revealFirstCard,
+  );
 
   void unregister(int rowIndex) => _entries.remove(rowIndex);
 
-  FocusNode? entryFor(int rowIndex) => _entries[rowIndex];
+  FocusNode? entryFor(int rowIndex) => _entries[rowIndex]?.node;
+
+  Future<void> revealFirstCard(int rowIndex) async {
+    await _entries[rowIndex]?.revealFirstCard?.call();
+  }
+}
+
+class RowFirstCardEntry {
+  final FocusNode node;
+  final Future<void> Function()? revealFirstCard;
+
+  const RowFirstCardEntry({required this.node, this.revealFirstCard});
 }

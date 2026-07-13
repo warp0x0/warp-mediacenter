@@ -12,6 +12,7 @@ import '../../models/media.dart';
 import '../../theme/warp_theme.dart';
 import '../../theme/warp_tokens.dart';
 import '../shared/modal_focus_restore.dart';
+import '../shared/tv_modal_chrome_scale.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TrailerDialog — plays YouTube trailers via media_kit (libmpv).
@@ -368,105 +369,114 @@ class _TrailerDialogState extends ConsumerState<TrailerDialog>
             memoryKey: 'modal-trailer',
             horizontalEdge: DpadEdgeBehavior.stop,
             verticalEdge: DpadEdgeBehavior.stop,
-            child: Center(
-              child: Stack(
-                children: [
-                  Container(
-                    width: w,
-                    height: h,
-                    decoration: BoxDecoration(
-                      color: Colors.black,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.white.withAlpha(20)),
-                    ),
-                    child: Column(
-                      children: [
-                        SizedBox(
-                          height: 48,
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 16),
-                            child: Row(
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    widget.title,
+            child: TvModalChromeScale(
+              child: Center(
+                child: Stack(
+                  children: [
+                    Container(
+                      width: w,
+                      height: h,
+                      decoration: BoxDecoration(
+                        color: Colors.black,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.white.withAlpha(20)),
+                      ),
+                      child: Column(
+                        children: [
+                          SizedBox(
+                            height: 48,
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                              ),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      widget.title,
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: t.fontBody,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                  Text(
+                                    hasMultipleTrailers
+                                        ? 'Hold Select: Trailers'
+                                        : 'Select: Play/Pause',
                                     style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: t.fontBody,
-                                      fontWeight: FontWeight.w600,
+                                      color: Colors.white.withAlpha(120),
+                                      fontSize: t.fontSubtitle.clamp(
+                                        11.0,
+                                        13.0,
+                                      ),
                                     ),
-                                    overflow: TextOverflow.ellipsis,
                                   ),
-                                ),
-                                Text(
-                                  hasMultipleTrailers
-                                      ? 'Hold Select: Trailers'
-                                      : 'Select: Play/Pause',
-                                  style: TextStyle(
-                                    color: Colors.white.withAlpha(120),
-                                    fontSize: t.fontSubtitle.clamp(11.0, 13.0),
-                                  ),
-                                ),
-                              ],
+                                ],
+                              ),
                             ),
                           ),
-                        ),
-                        Expanded(
-                          child: ClipRRect(
-                            borderRadius: const BorderRadius.vertical(
-                              bottom: Radius.circular(12),
-                            ),
-                            child: DpadFocusable(
-                              focusNode: _surfaceFocus,
-                              autofocus: true,
-                              entry: true,
-                              onDirection: _surfaceDirection,
-                              onSelect: _togglePlayPause,
-                              onLongSelect: _openSelector,
-                              tapToSelect: false,
-                              builder: (context, state, child) =>
-                                  AnimatedContainer(
-                                    duration: const Duration(milliseconds: 150),
-                                    decoration: BoxDecoration(
-                                      border: Border.all(
-                                        color: state.focused
-                                            ? WarpColors.accent.withAlpha(190)
-                                            : Colors.transparent,
-                                        width: 2,
+                          Expanded(
+                            child: ClipRRect(
+                              borderRadius: const BorderRadius.vertical(
+                                bottom: Radius.circular(12),
+                              ),
+                              child: DpadFocusable(
+                                focusNode: _surfaceFocus,
+                                autofocus: true,
+                                entry: true,
+                                onDirection: _surfaceDirection,
+                                onSelect: _togglePlayPause,
+                                onLongSelect: _openSelector,
+                                tapToSelect: false,
+                                builder: (context, state, child) =>
+                                    AnimatedContainer(
+                                      duration: const Duration(
+                                        milliseconds: 150,
                                       ),
+                                      decoration: BoxDecoration(
+                                        border: Border.all(
+                                          color: state.focused
+                                              ? WarpColors.accent.withAlpha(190)
+                                              : Colors.transparent,
+                                          width: 2,
+                                        ),
+                                      ),
+                                      child: child,
                                     ),
-                                    child: child,
-                                  ),
-                              child: _loading
-                                  ? const Center(
-                                      child: CircularProgressIndicator(
-                                        color: Color(0xFF0DB2E2),
-                                        strokeWidth: 2,
+                                child: _loading
+                                    ? const Center(
+                                        child: CircularProgressIndicator(
+                                          color: Color(0xFF0DB2E2),
+                                          strokeWidth: 2,
+                                        ),
+                                      )
+                                    : _error != null
+                                    ? _ErrorBody(
+                                        message: _error!,
+                                        url: _trailers[_selectedIndex].url,
+                                        t: t,
+                                      )
+                                    : GestureDetector(
+                                        behavior: HitTestBehavior.opaque,
+                                        onTap: _togglePlayPause,
+                                        onLongPress: _openSelector,
+                                        child: Video(
+                                          controller: _controller,
+                                          controls: NoVideoControls,
+                                        ),
                                       ),
-                                    )
-                                  : _error != null
-                                  ? _ErrorBody(
-                                      message: _error!,
-                                      url: _trailers[_selectedIndex].url,
-                                      t: t,
-                                    )
-                                  : GestureDetector(
-                                      behavior: HitTestBehavior.opaque,
-                                      onTap: _togglePlayPause,
-                                      onLongPress: _openSelector,
-                                      child: Video(
-                                        controller: _controller,
-                                        controls: NoVideoControls,
-                                      ),
-                                    ),
+                              ),
                             ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
-                  if (_selectorOpen) _buildSelectorOverlay(t),
-                ],
+                    if (_selectorOpen) _buildSelectorOverlay(t),
+                  ],
+                ),
               ),
             ),
           ),

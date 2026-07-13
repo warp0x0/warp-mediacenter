@@ -187,10 +187,11 @@ class _WarpTabBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final screenW = MediaQuery.sizeOf(context).width;
     final screenH = MediaQuery.sizeOf(context).height;
+    final scaler = MediaQuery.textScalerOf(context);
     // CSS: --tabbar-height: clamp(72px, 12vh, 100px)
-    final barH = (screenH * 0.12).clamp(72.0, 100.0);
+    final barH = scaler.scale((screenH * 0.12).clamp(72.0, 100.0));
     // CSS: gap: clamp(16px, 2vw, 40px)
-    final gap = (screenW * 0.02).clamp(16.0, 40.0);
+    final gap = scaler.scale((screenW * 0.02).clamp(16.0, 40.0));
 
     return ClipRect(
       child: BackdropFilter(
@@ -278,12 +279,13 @@ class _TabPillState extends ConsumerState<_TabPill> {
   @override
   Widget build(BuildContext context) {
     final screenW = MediaQuery.sizeOf(context).width;
+    final scaler = MediaQuery.textScalerOf(context);
 
     // CSS: font-size: clamp(15px, 1vw, 18px)
     final fontSize = (screenW * 0.01).clamp(15.0, 18.0);
     // CSS: padding: clamp(8px,0.63vw,14px) clamp(14px,1.46vw,24px)
-    final padV = (screenW * 0.0063).clamp(8.0, 14.0);
-    final padH = (screenW * 0.0146).clamp(14.0, 24.0);
+    final padV = scaler.scale((screenW * 0.0063).clamp(8.0, 14.0));
+    final padH = scaler.scale((screenW * 0.0146).clamp(14.0, 24.0));
 
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
@@ -320,10 +322,10 @@ class _TabPillState extends ConsumerState<_TabPill> {
               children: [
                 Icon(
                   widget.tab.icon,
-                  size: 16,
+                  size: scaler.scale(16),
                   color: active ? Colors.white : const Color(0x99FFFFFF),
                 ),
-                const SizedBox(width: 6),
+                SizedBox(width: scaler.scale(6)),
                 Text(
                   widget.tab.label,
                   style: TextStyle(

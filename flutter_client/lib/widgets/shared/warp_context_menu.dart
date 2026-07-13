@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import '../../theme/warp_theme.dart';
 import '../../theme/warp_tokens.dart';
 import 'modal_focus_restore.dart';
+import 'tv_modal_chrome_scale.dart';
 
 class WarpContextMenuItem {
   const WarpContextMenuItem({
@@ -163,55 +164,57 @@ class _WarpContextMenuOverlayState extends State<_WarpContextMenuOverlay>
                 width: menuWidth,
                 child: GestureDetector(
                   onTap: () {},
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: widget.centerInViewport
-                          ? const Color(0xFF1C1C1C)
-                          : const Color(0xF20C0C12),
-                      borderRadius: BorderRadius.circular(
-                        widget.centerInViewport ? 12 : 14,
-                      ),
-                      border: Border.all(
-                        color: Colors.white.withAlpha(
-                          widget.centerInViewport ? 25 : 28,
+                  child: TvModalChromeScale(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: widget.centerInViewport
+                            ? const Color(0xFF1C1C1C)
+                            : const Color(0xF20C0C12),
+                        borderRadius: BorderRadius.circular(
+                          widget.centerInViewport ? 12 : 14,
                         ),
-                      ),
-                      boxShadow: widget.centerInViewport
-                          ? null
-                          : const [
-                              BoxShadow(
-                                color: Colors.black87,
-                                blurRadius: 30,
-                                offset: Offset(0, 16),
-                              ),
-                            ],
-                    ),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 6),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          SizedBox(
-                            width: 1,
-                            height: 1,
-                            child: DpadFocusable(
-                              effects: const [],
-                              focusNode: _sentinelFocus,
-                              autofocus: true,
-                              entry: true,
-                              onDirection: _sentinelDirection,
-                              onSelect: () {},
-                              child: const SizedBox.shrink(),
-                            ),
+                        border: Border.all(
+                          color: Colors.white.withAlpha(
+                            widget.centerInViewport ? 25 : 28,
                           ),
-                          for (var i = 0; i < widget.items.length; i++)
-                            _ContextMenuRow(
-                              item: widget.items[i],
-                              focusNode: _itemFocusNodes[i],
-                              tokens: tokens,
-                              onSelect: () => _select(widget.items[i]),
+                        ),
+                        boxShadow: widget.centerInViewport
+                            ? null
+                            : const [
+                                BoxShadow(
+                                  color: Colors.black87,
+                                  blurRadius: 30,
+                                  offset: Offset(0, 16),
+                                ),
+                              ],
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 6),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            SizedBox(
+                              width: 1,
+                              height: 1,
+                              child: DpadFocusable(
+                                effects: const [],
+                                focusNode: _sentinelFocus,
+                                autofocus: true,
+                                entry: true,
+                                onDirection: _sentinelDirection,
+                                onSelect: () {},
+                                child: const SizedBox.shrink(),
+                              ),
                             ),
-                        ],
+                            for (var i = 0; i < widget.items.length; i++)
+                              _ContextMenuRow(
+                                item: widget.items[i],
+                                focusNode: _itemFocusNodes[i],
+                                tokens: tokens,
+                                onSelect: () => _select(widget.items[i]),
+                              ),
+                          ],
+                        ),
                       ),
                     ),
                   ),

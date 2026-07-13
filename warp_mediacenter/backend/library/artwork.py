@@ -34,7 +34,7 @@ def download_artwork(
     http = session or HttpSession()
 
     poster_path = _download_single(http, poster_url, dest_dir, preferred_size="w342") if poster_url else None
-    backdrop_path = _download_single(http, backdrop_url, dest_dir, preferred_size="w780") if backdrop_url else None
+    backdrop_path = _download_single(http, backdrop_url, dest_dir, preferred_size="w1280") if backdrop_url else None
 
     return poster_path, backdrop_path
 

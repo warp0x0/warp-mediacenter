@@ -2,11 +2,13 @@ import 'package:dpad/dpad.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../api/catalog_constants.dart';
 import '../models/catalog.dart';
 import '../providers/catalog_provider.dart';
 import '../providers/detail_provider.dart';
 import '../navigation/row_first_card_registry.dart';
+import '../navigation/tab_bar_focus_registry.dart';
 import '../widgets/media/widget_section.dart';
 
 class MoviesPage extends ConsumerStatefulWidget {
@@ -17,6 +19,8 @@ class MoviesPage extends ConsumerStatefulWidget {
 }
 
 class _MoviesPageState extends ConsumerState<MoviesPage> {
+  static const _rowSnapDuration = Duration(milliseconds: 320);
+
   final _pageCtrl = PageController();
   // Page-local registry — Movies/Shows/Search each own their own instance so
   // row indices (0, 1, 2, ...) never collide across pages.
@@ -24,6 +28,7 @@ class _MoviesPageState extends ConsumerState<MoviesPage> {
   List<WidgetConfig> _widgets = kDefaultMovieWidgets;
   bool _snapping = false;
   int? _pendingDpadFocusRow;
+  bool _focusedTabOnCatalogError = false;
   // Trackpad pan/zoom accumulator — cleared on gesture start and after each snap.
   double _trackpadAccum = 0.0;
 
@@ -55,19 +60,22 @@ class _MoviesPageState extends ConsumerState<MoviesPage> {
     if (target == page) return;
     _snapping = true;
     _pageCtrl
-        .animateToPage(target,
-            duration: const Duration(milliseconds: 500),
-            curve: Curves.easeInOutCubic)
+        .animateToPage(
+          target,
+          duration: _rowSnapDuration,
+          curve: Curves.easeOutCubic,
+        )
         .then((_) {
           if (!mounted) return;
           _snapping = false;
           _trackpadAccum = 0.0;
-          final node = _rowRegistry.entryFor(target);
-          if (node != null) Dpad.of(context).requestFocus(node);
+          _focusRowFirstCard(target);
         });
   }
 
-  bool _tryFocusRow(int rowIndex) {
+  Future<bool> _focusRowFirstCard(int rowIndex) async {
+    await _rowRegistry.revealFirstCard(rowIndex);
+    if (!mounted) return false;
     final node = _rowRegistry.entryFor(rowIndex);
     if (node == null) return false;
     return Dpad.of(context).requestFocus(node);
@@ -75,9 +83,19 @@ class _MoviesPageState extends ConsumerState<MoviesPage> {
 
   void _onFirstCardRegistered(int rowIndex) {
     if (_pendingDpadFocusRow != rowIndex) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted || _pendingDpadFocusRow != rowIndex) return;
-      if (_tryFocusRow(rowIndex)) _pendingDpadFocusRow = null;
+      if (await _focusRowFirstCard(rowIndex)) _pendingDpadFocusRow = null;
+    });
+  }
+
+  void _focusTabOnCatalogError(int rowIndex) {
+    if (rowIndex != 0 || _focusedTabOnCatalogError) return;
+    _focusedTabOnCatalogError = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || GoRouterState.of(context).uri.path != '/') return;
+      final tab = ref.read(tabBarFocusRegistryProvider).forRoute('/');
+      if (tab != null) Dpad.of(context).requestFocus(tab);
     });
   }
 
@@ -90,17 +108,17 @@ class _MoviesPageState extends ConsumerState<MoviesPage> {
         _snapping = true;
         await _pageCtrl.animateToPage(
           rowIndex,
-          duration: const Duration(milliseconds: 500),
-          curve: Curves.easeInOutCubic,
+          duration: _rowSnapDuration,
+          curve: Curves.easeOutCubic,
         );
         if (!mounted) return;
         _snapping = false;
         _trackpadAccum = 0.0;
       }
     }
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted || _pendingDpadFocusRow != rowIndex) return;
-      if (_tryFocusRow(rowIndex)) _pendingDpadFocusRow = null;
+      if (await _focusRowFirstCard(rowIndex)) _pendingDpadFocusRow = null;
     });
   }
 
@@ -162,49 +180,54 @@ class _MoviesPageState extends ConsumerState<MoviesPage> {
               ),
             );
 
-            return catalogAsync.when(
-              loading: () => WidgetSection(
-                title: w.title,
-                items: const [],
-                isLoading: true,
-                rowIndex: idx,
-                rowCount: _widgets.length,
-                ownRoute: '/',
-                rowRegistry: _rowRegistry,
-                mediaType: 'movie',
-                provider: w.provider,
-                category: w.category,
-                initialFocus: idx == 0,
-                onRowFocusRequested: _focusRowByDpad,
-                onFirstCardRegistered: _onFirstCardRegistered,
-              ),
-              error: (_, _) => WidgetSection(
-                title: w.title,
-                items: const [],
-                rowIndex: idx,
-                rowCount: _widgets.length,
-                ownRoute: '/',
-                rowRegistry: _rowRegistry,
-                mediaType: 'movie',
-                provider: w.provider,
-                category: w.category,
-                onRowFocusRequested: _focusRowByDpad,
-                onFirstCardRegistered: _onFirstCardRegistered,
-              ),
-              data: (catalog) => WidgetSection(
-                key: ValueKey('movies-$idx-${w.category}'),
-                title: w.title,
-                items: catalog.items,
-                rowIndex: idx,
-                rowCount: _widgets.length,
-                ownRoute: '/',
-                rowRegistry: _rowRegistry,
-                mediaType: 'movie',
-                provider: w.provider,
-                category: w.category,
-                initialFocus: idx == 0,
-                onRowFocusRequested: _focusRowByDpad,
-                onFirstCardRegistered: _onFirstCardRegistered,
+            return RepaintBoundary(
+              child: catalogAsync.when(
+                loading: () => WidgetSection(
+                  title: w.title,
+                  items: const [],
+                  isLoading: true,
+                  rowIndex: idx,
+                  rowCount: _widgets.length,
+                  ownRoute: '/',
+                  rowRegistry: _rowRegistry,
+                  mediaType: 'movie',
+                  provider: w.provider,
+                  category: w.category,
+                  initialFocus: idx == 0,
+                  onRowFocusRequested: _focusRowByDpad,
+                  onFirstCardRegistered: _onFirstCardRegistered,
+                ),
+                error: (_, _) {
+                  _focusTabOnCatalogError(idx);
+                  return WidgetSection(
+                    title: w.title,
+                    items: const [],
+                    rowIndex: idx,
+                    rowCount: _widgets.length,
+                    ownRoute: '/',
+                    rowRegistry: _rowRegistry,
+                    mediaType: 'movie',
+                    provider: w.provider,
+                    category: w.category,
+                    onRowFocusRequested: _focusRowByDpad,
+                    onFirstCardRegistered: _onFirstCardRegistered,
+                  );
+                },
+                data: (catalog) => WidgetSection(
+                  key: ValueKey('movies-$idx-${w.category}'),
+                  title: w.title,
+                  items: catalog.items,
+                  rowIndex: idx,
+                  rowCount: _widgets.length,
+                  ownRoute: '/',
+                  rowRegistry: _rowRegistry,
+                  mediaType: 'movie',
+                  provider: w.provider,
+                  category: w.category,
+                  initialFocus: idx == 0,
+                  onRowFocusRequested: _focusRowByDpad,
+                  onFirstCardRegistered: _onFirstCardRegistered,
+                ),
               ),
             );
           },

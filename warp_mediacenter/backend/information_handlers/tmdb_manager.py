@@ -578,7 +578,7 @@ class TMDbManager:
         }.get(category, "poster_sizes")
 
         sizes: Sequence[str] = self._image_config.get(size_key) or []
-        preferred = self._preferred_size(sizes)
+        preferred = self._preferred_size(sizes, category=category)
         full_url = f"{base_url}/{preferred}{path}"
 
         try:
@@ -586,10 +586,14 @@ class TMDbManager:
         except ValidationError:
             return None
 
-    def _preferred_size(self, sizes: Sequence[str]) -> str:
+    def _preferred_size(self, sizes: Sequence[str], *, category: str) -> str:
         if not sizes:
             return "original"
-        preferred_order = ("w780", "w500", "w342", "w300", "w185", "original")
+        preferred_order = (
+            ("w1280", "w780", "original")
+            if category == "backdrop"
+            else ("w780", "w500", "w342", "w300", "w185", "original")
+        )
         for candidate in preferred_order:
             if candidate in sizes:
                 return candidate

@@ -154,11 +154,13 @@ class _PosterCardState extends ConsumerState<PosterCard> {
         : false;
 
     // Clamp font sizes to match Tauri PosterCard
-    final w = MediaQuery.sizeOf(context).width;
+    final media = MediaQuery.of(context);
+    final w = media.size.width;
+    double scaled(num value) => media.textScaler.scale(value.toDouble());
     final titleFs = (w * 0.0073).clamp(12.0, 15.0);
     final yearFs = (w * 0.0063).clamp(10.0, 13.0);
     final ratingFs = (w * 0.0068).clamp(11.0, 14.0);
-    final btnSize = (w * 0.015).clamp(20.0, 26.0);
+    final btnSize = scaled((w * 0.015).clamp(20.0, 26.0));
 
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
@@ -259,11 +261,11 @@ class _PosterCardState extends ConsumerState<PosterCard> {
                         // Rating badge — top right (mirrors Tauri: width:50px, height:25px)
                         if (rating != null && rating > 0)
                           Positioned(
-                            top: (w * 0.0031).clamp(4.0, 8.0),
-                            right: (w * 0.0031).clamp(4.0, 8.0),
+                            top: scaled((w * 0.0031).clamp(4.0, 8.0)),
+                            right: scaled((w * 0.0031).clamp(4.0, 8.0)),
                             child: Container(
-                              width: 50,
-                              height: 25,
+                              width: scaled(50),
+                              height: scaled(25),
                               decoration: BoxDecoration(
                                 color: Colors.black.withAlpha(179),
                                 borderRadius: BorderRadius.circular(6),
@@ -273,10 +275,10 @@ class _PosterCardState extends ConsumerState<PosterCard> {
                                 children: [
                                   Icon(
                                     Icons.star_rounded,
-                                    size: ratingFs + 1,
+                                    size: scaled(ratingFs + 1),
                                     color: const Color(0xFFFBBF24),
                                   ),
-                                  const SizedBox(width: 2),
+                                  SizedBox(width: scaled(2)),
                                   Text(
                                     rating.toStringAsFixed(1),
                                     style: TextStyle(
@@ -296,8 +298,8 @@ class _PosterCardState extends ConsumerState<PosterCard> {
                         // Active (liked/wishlisted) buttons always visible.
                         if (tmdbId != null && tmdbId.isNotEmpty)
                           Positioned(
-                            top: (w * 0.0031).clamp(4.0, 8.0),
-                            left: (w * 0.0031).clamp(4.0, 8.0),
+                            top: scaled((w * 0.0031).clamp(4.0, 8.0)),
+                            left: scaled((w * 0.0031).clamp(4.0, 8.0)),
                             child: Column(
                               children: [
                                 AnimatedOpacity(
@@ -314,7 +316,9 @@ class _PosterCardState extends ConsumerState<PosterCard> {
                                     onTap: () => toggleLiked(ref, widget.item),
                                   ),
                                 ),
-                                SizedBox(height: (w * 0.0026).clamp(3.0, 5.0)),
+                                SizedBox(
+                                  height: scaled((w * 0.0026).clamp(3.0, 5.0)),
+                                ),
                                 AnimatedOpacity(
                                   duration: const Duration(milliseconds: 150),
                                   opacity: wishlisted || _hovered ? 1.0 : 0.0,

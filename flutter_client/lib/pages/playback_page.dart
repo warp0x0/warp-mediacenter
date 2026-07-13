@@ -13,6 +13,7 @@ import '../api/api_client.dart';
 import '../providers/detail_provider.dart';
 import '../theme/warp_tokens.dart';
 import '../widgets/media/subtitle_dialog.dart';
+import '../widgets/shared/tv_modal_chrome_scale.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PlaybackPage — full-screen media_kit video player
@@ -437,10 +438,10 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
   // ── D-pad navigation: shared onDirection callbacks ─────────────────────
   //
   // Progress bar (autofocus) <-> LHS icons (Menu/Subtitles/AudioTracks)
-  // <-> center Play/Pause <-> volume bar <-> RHS icons (Play-Pause-in-row/
-  // Fullscreen/Stop). Left/Right within the icon row is plain default beam
-  // traversal; only the cross-row Up/Down jumps and the volume bar's
-  // adjust-mode need explicit overrides.
+  // <-> center Play/Pause <-> volume bar <-> RHS icons. Desktop includes a
+  // fullscreen icon; Android TV is already immersive, so it omits that dead
+  // control. Left/Right within the icon row is plain default beam traversal;
+  // only the cross-row Up/Down jumps and volume adjust-mode need overrides.
 
   bool _seekBarDirection(TraversalDirection d) {
     _resetHideTimer();
@@ -1000,18 +1001,20 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
                                   onDirection: _rhsIconDirection,
                                 ),
                               ),
-                              const SizedBox(width: 10),
-                              _OverlayIconButton(
-                                icon: _isFullscreen
-                                    ? Icons.fullscreen_exit
-                                    : Icons.fullscreen,
-                                tooltip: _isFullscreen
-                                    ? 'Exit Fullscreen'
-                                    : 'Fullscreen',
-                                onTap: _toggleFullscreen,
-                                focusNode: _fullscreenFocus,
-                                onDirection: _rhsIconDirection,
-                              ),
+                              if (_isDesktop) ...[
+                                const SizedBox(width: 10),
+                                _OverlayIconButton(
+                                  icon: _isFullscreen
+                                      ? Icons.fullscreen_exit
+                                      : Icons.fullscreen,
+                                  tooltip: _isFullscreen
+                                      ? 'Exit Fullscreen'
+                                      : 'Fullscreen',
+                                  onTap: _toggleFullscreen,
+                                  focusNode: _fullscreenFocus,
+                                  onDirection: _rhsIconDirection,
+                                ),
+                              ],
                               const SizedBox(width: 10),
                               _OverlayIconButton(
                                 icon: Icons.stop,
@@ -1564,42 +1567,44 @@ class _PlayerMenuDialog extends StatelessWidget {
             alignment: Alignment.bottomLeft,
             child: Padding(
               padding: const EdgeInsets.fromLTRB(28, 0, 0, 124),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(22),
-                child: BackdropFilter(
-                  filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-                  child: Container(
-                    width: 300,
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: _uoscGlass,
-                      borderRadius: BorderRadius.circular(22),
-                      border: Border.all(color: _uoscAccent.withAlpha(72)),
-                      boxShadow: const [
-                        BoxShadow(
-                          color: Colors.black87,
-                          blurRadius: 28,
-                          offset: Offset(0, 16),
-                        ),
-                      ],
-                    ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        _MenuTile(
-                          icon: Icons.subtitles,
-                          title: 'Subtitle Settings',
-                          subtitle: 'Delay or hasten subtitle timing',
-                          onTap: onSubtitleSettings,
-                          autofocus: true,
-                        ),
-                        _MenuTile(
-                          icon: Icons.volume_up,
-                          title: 'Audio Settings',
-                          subtitle: 'Amplification, passthrough, Dolby',
-                          onTap: onAudioSettings,
-                        ),
-                      ],
+              child: TvModalChromeScale(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(22),
+                  child: BackdropFilter(
+                    filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+                    child: Container(
+                      width: 300,
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: _uoscGlass,
+                        borderRadius: BorderRadius.circular(22),
+                        border: Border.all(color: _uoscAccent.withAlpha(72)),
+                        boxShadow: const [
+                          BoxShadow(
+                            color: Colors.black87,
+                            blurRadius: 28,
+                            offset: Offset(0, 16),
+                          ),
+                        ],
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _MenuTile(
+                            icon: Icons.subtitles,
+                            title: 'Subtitle Settings',
+                            subtitle: 'Delay or hasten subtitle timing',
+                            onTap: onSubtitleSettings,
+                            autofocus: true,
+                          ),
+                          _MenuTile(
+                            icon: Icons.volume_up,
+                            title: 'Audio Settings',
+                            subtitle: 'Amplification, passthrough, Dolby',
+                            onTap: onAudioSettings,
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
@@ -1710,127 +1715,129 @@ class _SettingsDialogFrame extends StatelessWidget {
   Widget build(BuildContext context) => Dialog(
     backgroundColor: Colors.transparent,
     insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
-    child: CallbackShortcuts(
-      bindings: {
-        const SingleActivator(LogicalKeyboardKey.escape): () =>
-            Navigator.of(context).pop(),
-        const SingleActivator(LogicalKeyboardKey.backspace): () =>
-            Navigator.of(context).pop(),
-        const SingleActivator(LogicalKeyboardKey.goBack): () =>
-            Navigator.of(context).pop(),
-        const SingleActivator(LogicalKeyboardKey.browserBack): () =>
-            Navigator.of(context).pop(),
-      },
-      child: DpadRegion(
-        memoryKey: 'player-settings-dialog',
-        horizontalEdge: DpadEdgeBehavior.stop,
-        verticalEdge: DpadEdgeBehavior.stop,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 540),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(26),
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
-              child: Container(
-                padding: const EdgeInsets.all(22),
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [Color(0xF20A0E14), Color(0xE50A1A24)],
-                  ),
-                  borderRadius: BorderRadius.circular(26),
-                  border: Border.all(color: _uoscAccent.withAlpha(76)),
-                  boxShadow: const [
-                    BoxShadow(
-                      color: Colors.black87,
-                      blurRadius: 36,
-                      offset: Offset(0, 18),
+    child: TvModalChromeScale(
+      child: CallbackShortcuts(
+        bindings: {
+          const SingleActivator(LogicalKeyboardKey.escape): () =>
+              Navigator.of(context).pop(),
+          const SingleActivator(LogicalKeyboardKey.backspace): () =>
+              Navigator.of(context).pop(),
+          const SingleActivator(LogicalKeyboardKey.goBack): () =>
+              Navigator.of(context).pop(),
+          const SingleActivator(LogicalKeyboardKey.browserBack): () =>
+              Navigator.of(context).pop(),
+        },
+        child: DpadRegion(
+          memoryKey: 'player-settings-dialog',
+          horizontalEdge: DpadEdgeBehavior.stop,
+          verticalEdge: DpadEdgeBehavior.stop,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 540),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(26),
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+                child: Container(
+                  padding: const EdgeInsets.all(22),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [Color(0xF20A0E14), Color(0xE50A1A24)],
                     ),
-                  ],
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Container(
-                          width: 44,
-                          height: 44,
-                          decoration: BoxDecoration(
-                            color: _uoscAccent.withAlpha(30),
-                            borderRadius: BorderRadius.circular(15),
-                            border: Border.all(
-                              color: _uoscAccent.withAlpha(60),
-                            ),
-                          ),
-                          child: Center(
-                            child: _GradientIcon(icon: icon, size: 23),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Text(
-                            title,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 20,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                        ),
-                        DpadFocusable(
-                          autofocus: true,
-                          entry: true,
-                          onSelect: () => Navigator.of(context).pop(),
-                          builder: (context, state, child) => Container(
+                    borderRadius: BorderRadius.circular(26),
+                    border: Border.all(color: _uoscAccent.withAlpha(76)),
+                    boxShadow: const [
+                      BoxShadow(
+                        color: Colors.black87,
+                        blurRadius: 36,
+                        offset: Offset(0, 18),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            width: 44,
+                            height: 44,
                             decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: state.focused
-                                  ? Colors.white.withAlpha(24)
-                                  : Colors.transparent,
+                              color: _uoscAccent.withAlpha(30),
+                              borderRadius: BorderRadius.circular(15),
                               border: Border.all(
-                                color: state.focused
-                                    ? Colors.white.withAlpha(220)
-                                    : Colors.transparent,
-                                width: 2,
+                                color: _uoscAccent.withAlpha(60),
                               ),
-                              boxShadow: state.focused
-                                  ? [
-                                      BoxShadow(
-                                        color: Colors.white.withAlpha(130),
-                                        blurRadius: 10,
-                                        spreadRadius: 1,
-                                      ),
-                                      BoxShadow(
-                                        color: _uoscAccent.withAlpha(160),
-                                        blurRadius: 22,
-                                        spreadRadius: 4,
-                                      ),
-                                    ]
-                                  : null,
                             ),
-                            child: GestureDetector(
-                              onTap: () => Navigator.of(context).pop(),
-                              child: Padding(
-                                padding: const EdgeInsets.all(8),
-                                child: Icon(
-                                  Icons.close,
+                            child: Center(
+                              child: _GradientIcon(icon: icon, size: 23),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              title,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 20,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                          DpadFocusable(
+                            autofocus: true,
+                            entry: true,
+                            onSelect: () => Navigator.of(context).pop(),
+                            builder: (context, state, child) => Container(
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: state.focused
+                                    ? Colors.white.withAlpha(24)
+                                    : Colors.transparent,
+                                border: Border.all(
                                   color: state.focused
-                                      ? Colors.white
-                                      : Colors.white70,
+                                      ? Colors.white.withAlpha(220)
+                                      : Colors.transparent,
+                                  width: 2,
+                                ),
+                                boxShadow: state.focused
+                                    ? [
+                                        BoxShadow(
+                                          color: Colors.white.withAlpha(130),
+                                          blurRadius: 10,
+                                          spreadRadius: 1,
+                                        ),
+                                        BoxShadow(
+                                          color: _uoscAccent.withAlpha(160),
+                                          blurRadius: 22,
+                                          spreadRadius: 4,
+                                        ),
+                                      ]
+                                    : null,
+                              ),
+                              child: GestureDetector(
+                                onTap: () => Navigator.of(context).pop(),
+                                child: Padding(
+                                  padding: const EdgeInsets.all(8),
+                                  child: Icon(
+                                    Icons.close,
+                                    color: state.focused
+                                        ? Colors.white
+                                        : Colors.white70,
+                                  ),
                                 ),
                               ),
                             ),
+                            child: const SizedBox.shrink(),
                           ),
-                          child: const SizedBox.shrink(),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 22),
-                    child,
-                  ],
+                        ],
+                      ),
+                      const SizedBox(height: 22),
+                      child,
+                    ],
+                  ),
                 ),
               ),
             ),

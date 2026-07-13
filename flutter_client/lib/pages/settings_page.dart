@@ -14,6 +14,7 @@ import '../providers/settings_provider.dart';
 import '../theme/warp_tokens.dart';
 import '../widgets/shared/dpad_controls.dart';
 import '../widgets/shared/modal_focus_restore.dart';
+import '../widgets/shared/tv_modal_chrome_scale.dart';
 
 // Settings API key names (must match backend)
 const _kTmdbApiKey = 'tmdb_api_key';
@@ -360,10 +361,11 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
     final t = WarpTokens.watch(context, ref);
     final size = MediaQuery.sizeOf(context);
     final meta = _sections.firstWhere((s) => s.id == _section);
+    final scaler = MediaQuery.textScalerOf(context);
 
-    final sidebarW = (size.width * 0.175).clamp(240.0, 310.0);
-    final hPadSide = (size.width * 0.012).clamp(16.0, 22.0);
-    final vPadSide = (size.height * 0.015).clamp(14.0, 22.0);
+    final sidebarW = scaler.scale((size.width * 0.175).clamp(240.0, 310.0));
+    final hPadSide = scaler.scale((size.width * 0.012).clamp(16.0, 22.0));
+    final vPadSide = scaler.scale((size.height * 0.015).clamp(14.0, 22.0));
     final bodyPad = (size.width * 0.0167).clamp(16.0, 28.0);
 
     return ColoredBox(
@@ -407,19 +409,23 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
                         child: Row(
                           children: [
                             Container(
-                              width: (size.width * 0.021).clamp(32.0, 40.0),
-                              height: (size.width * 0.021).clamp(32.0, 40.0),
+                              width: scaler.scale(
+                                (size.width * 0.021).clamp(32.0, 40.0),
+                              ),
+                              height: scaler.scale(
+                                (size.width * 0.021).clamp(32.0, 40.0),
+                              ),
                               decoration: BoxDecoration(
                                 color: const Color(0xFF0DB2E2).withAlpha(51),
                                 borderRadius: BorderRadius.circular(8),
                               ),
-                              child: const Icon(
+                              child: Icon(
                                 Icons.settings,
-                                color: Color(0xFF0DB2E2),
-                                size: 15,
+                                color: const Color(0xFF0DB2E2),
+                                size: scaler.scale(15),
                               ),
                             ),
-                            const SizedBox(width: 12),
+                            SizedBox(width: scaler.scale(12)),
                             Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
@@ -664,13 +670,16 @@ class _NavItemState extends State<_NavItem> {
   @override
   Widget build(BuildContext context) {
     final w = widget.screenSize.width;
+    final scaler = MediaQuery.textScalerOf(context);
     final selected = widget.selected;
     final meta = widget.meta;
-    final iconBoxSize = (w * 0.025).clamp(36.0, 46.0);
+    final iconBoxSize = scaler.scale((w * 0.025).clamp(36.0, 46.0));
     final labelFs = (w * 0.010).clamp(15.0, 17.0);
     final descFs = (w * 0.007).clamp(11.5, 13.0);
-    final vPad = (widget.screenSize.height * 0.012).clamp(10.0, 16.0);
-    final hPad = (w * 0.012).clamp(14.0, 22.0);
+    final vPad = scaler.scale(
+      (widget.screenSize.height * 0.012).clamp(10.0, 16.0),
+    );
+    final hPad = scaler.scale((w * 0.012).clamp(14.0, 22.0));
 
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
@@ -743,7 +752,7 @@ class _NavItemState extends State<_NavItem> {
                     ),
                     child: Icon(
                       meta.icon,
-                      size: 16,
+                      size: MediaQuery.textScalerOf(context).scale(16),
                       color: selected
                           ? const Color(0xFF0DB2E2)
                           : (active
@@ -751,7 +760,7 @@ class _NavItemState extends State<_NavItem> {
                                 : Colors.white.withAlpha(102)),
                     ),
                   ),
-                  const SizedBox(width: 12),
+                  SizedBox(width: MediaQuery.textScalerOf(context).scale(12)),
                   // Label + description
                   Expanded(
                     child: Column(
@@ -2910,285 +2919,295 @@ class _ConfigureWidgetDialogState extends State<_ConfigureWidgetDialog>
         horizontal: ((size.width - 760) / 2).clamp(24.0, double.infinity),
         vertical: (size.height * 0.06).clamp(32.0, 60.0),
       ),
-      child: CallbackShortcuts(
-        bindings: {
-          const SingleActivator(LogicalKeyboardKey.escape): () =>
-              Navigator.of(context).pop(),
-          const SingleActivator(LogicalKeyboardKey.goBack): () =>
-              Navigator.of(context).pop(),
-          const SingleActivator(LogicalKeyboardKey.browserBack): () =>
-              Navigator.of(context).pop(),
-        },
-        child: DpadRegion(
-          memoryKey: 'settings-catalog-config-dialog',
-          horizontalEdge: DpadEdgeBehavior.stop,
-          verticalEdge: DpadEdgeBehavior.stop,
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              maxWidth: 760,
-              maxHeight: size.height * 0.88,
-            ),
-            child: Container(
-              decoration: BoxDecoration(
-                color: const Color(0xFF1A1A24),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.white.withAlpha(20)),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withAlpha(180),
-                    blurRadius: 40,
-                    spreadRadius: 4,
-                  ),
-                ],
+      child: TvModalChromeScale(
+        child: CallbackShortcuts(
+          bindings: {
+            const SingleActivator(LogicalKeyboardKey.escape): () =>
+                Navigator.of(context).pop(),
+            const SingleActivator(LogicalKeyboardKey.goBack): () =>
+                Navigator.of(context).pop(),
+            const SingleActivator(LogicalKeyboardKey.browserBack): () =>
+                Navigator.of(context).pop(),
+          },
+          child: DpadRegion(
+            memoryKey: 'settings-catalog-config-dialog',
+            horizontalEdge: DpadEdgeBehavior.stop,
+            verticalEdge: DpadEdgeBehavior.stop,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: 760,
+                maxHeight: size.height * 0.88,
               ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  // Dialog header
-                  Container(
-                    padding: const EdgeInsets.fromLTRB(22, 20, 16, 18),
-                    decoration: BoxDecoration(
-                      border: Border(
-                        bottom: BorderSide(color: Colors.white.withAlpha(18)),
-                      ),
-                      gradient: const LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: [Color(0xFF0DB2E2), Color(0xFF0A8FBA)],
-                      ),
-                      borderRadius: const BorderRadius.only(
-                        topLeft: Radius.circular(16),
-                        topRight: Radius.circular(16),
-                      ),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1A1A24),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: Colors.white.withAlpha(20)),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withAlpha(180),
+                      blurRadius: 40,
+                      spreadRadius: 4,
                     ),
-                    child: Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(7),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withAlpha(25),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: const Icon(
-                            Icons.tune,
-                            color: Colors.white,
-                            size: 16,
-                          ),
+                  ],
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // Dialog header
+                    Container(
+                      padding: const EdgeInsets.fromLTRB(22, 20, 16, 18),
+                      decoration: BoxDecoration(
+                        border: Border(
+                          bottom: BorderSide(color: Colors.white.withAlpha(18)),
                         ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'Configure Widget ${widget.widgetIndex + 1}',
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                              Text(
-                                '${widget.mediaType == 'movies' ? 'Movie' : 'Show'} catalog — click any source to assign it',
-                                style: TextStyle(
-                                  color: Colors.white.withAlpha(180),
-                                  fontSize: 12,
-                                ),
-                              ),
-                            ],
-                          ),
+                        gradient: const LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [Color(0xFF0DB2E2), Color(0xFF0A8FBA)],
                         ),
-                        WarpDpadButton(
-                          tokens: widget.t,
-                          focusNode: _closeFocusNode,
-                          onDirection: _closeDirection,
-                          onSelect: () => Navigator.of(context).pop(),
-                          padding: const EdgeInsets.all(6),
-                          backgroundColor: Colors.white.withAlpha(20),
-                          borderColor: Colors.transparent,
-                          focusBackgroundColor: const Color(0x330DB2E2),
-                          focusBorderColor: Colors.white,
-                          focusBoxShadow: [
-                            BoxShadow(
-                              color: Colors.white.withAlpha(130),
-                              blurRadius: 10,
-                              spreadRadius: 1,
+                        borderRadius: const BorderRadius.only(
+                          topLeft: Radius.circular(16),
+                          topRight: Radius.circular(16),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(7),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withAlpha(25),
+                              borderRadius: BorderRadius.circular(8),
                             ),
-                            BoxShadow(
-                              color: const Color(0xFF0DB2E2).withAlpha(140),
-                              blurRadius: 22,
-                              spreadRadius: 4,
+                            child: const Icon(
+                              Icons.tune,
+                              color: Colors.white,
+                              size: 16,
                             ),
-                          ],
-                          borderRadius: 6,
-                          child: const Icon(
-                            Icons.close,
-                            color: Colors.white,
-                            size: 16,
                           ),
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  // TMDb / Trakt tab toggle
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
-                    child: Row(
-                      children:
-                          ['tmdb', 'trakt']
-                              .map((tab) {
-                                final isActive = _providerTab == tab;
-                                final label = tab == 'tmdb'
-                                    ? 'TMDb Catalogs'
-                                    : 'Trakt Catalogs';
-                                return Expanded(
-                                  child: WarpDpadButton(
-                                    tokens: widget.t,
-                                    focusNode: tab == 'tmdb'
-                                        ? _tmdbFocusNode
-                                        : _traktFocusNode,
-                                    autofocus: tab == _providerTab,
-                                    entry: tab == _providerTab,
-                                    onDirection: (d) =>
-                                        _providerDirection(tab, positions, d),
-                                    onSelect: () =>
-                                        setState(() => _providerTab = tab),
-                                    padding: const EdgeInsets.symmetric(
-                                      vertical: 10,
-                                    ),
-                                    backgroundColor: isActive
-                                        ? const Color(0xFF0DB2E2).withAlpha(30)
-                                        : Colors.white.withAlpha(8),
-                                    borderColor: isActive
-                                        ? const Color(0xFF0DB2E2).withAlpha(100)
-                                        : Colors.white.withAlpha(15),
-                                    borderRadius: 10,
-                                    child: Text(
-                                      label,
-                                      textAlign: TextAlign.center,
-                                      style: TextStyle(
-                                        color: isActive
-                                            ? const Color(0xFF0DB2E2)
-                                            : Colors.white.withAlpha(120),
-                                        fontSize: 13,
-                                        fontWeight: isActive
-                                            ? FontWeight.w600
-                                            : FontWeight.w400,
-                                      ),
-                                    ),
-                                  ),
-                                );
-                              })
-                              .expand((w) => [w, const SizedBox(width: 8)])
-                              .toList()
-                            ..removeLast(),
-                    ),
-                  ),
-
-                  // Grouped catalog grid — scrollable
-                  Flexible(
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: SingleChildScrollView(
-                            controller: _dialogScrollController,
-                            padding: const EdgeInsets.all(20),
+                          const SizedBox(width: 12),
+                          Expanded(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
-                              children: groups.entries.map((entry) {
-                                final group = entry.key;
-                                final items = entry.value;
-                                final label =
-                                    kCatalogGroupLabels[group] ??
-                                    group.name.toUpperCase();
-                                return Padding(
-                                  padding: const EdgeInsets.only(bottom: 20),
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      // Group header
-                                      Padding(
-                                        padding: const EdgeInsets.only(
-                                          bottom: 10,
-                                        ),
-                                        child: Text(
-                                          '$label(${items.length})',
-                                          style: TextStyle(
-                                            color: Colors.white.withAlpha(100),
-                                            fontSize: 11,
-                                            fontWeight: FontWeight.w600,
-                                            letterSpacing: 1.1,
-                                          ),
-                                        ),
-                                      ),
-                                      // 2-column grid
-                                      GridView.builder(
-                                        shrinkWrap: true,
-                                        physics:
-                                            const NeverScrollableScrollPhysics(),
-                                        gridDelegate:
-                                            const SliverGridDelegateWithFixedCrossAxisCount(
-                                              crossAxisCount: 2,
-                                              crossAxisSpacing: 8,
-                                              mainAxisSpacing: 8,
-                                              childAspectRatio: 5.5,
-                                            ),
-                                        itemCount: items.length,
-                                        itemBuilder: (_, i) {
-                                          final globalIndex = _catalogs
-                                              .indexWhere(
-                                                (def) => def.id == items[i].id,
-                                              );
-                                          final safeIndex = globalIndex < 0
-                                              ? 0
-                                              : globalIndex;
-                                          return _CatalogCard(
-                                            def: items[i],
-                                            isSelected:
-                                                widget.current.provider ==
-                                                    _providerTab &&
-                                                widget.current.category ==
-                                                    items[i].id,
-                                            onTap: () => _select(items[i]),
-                                            t: widget.t,
-                                            focusNode:
-                                                safeIndex <
-                                                    _cardFocusNodes.length
-                                                ? _cardFocusNodes[safeIndex]
-                                                : null,
-                                            onDirection: (d) => _cardDirection(
-                                              safeIndex,
-                                              positions,
-                                              d,
-                                            ),
-                                          );
-                                        },
-                                      ),
-                                    ],
+                              children: [
+                                Text(
+                                  'Configure Widget ${widget.widgetIndex + 1}',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w700,
                                   ),
-                                );
-                              }).toList(),
+                                ),
+                                Text(
+                                  '${widget.mediaType == 'movies' ? 'Movie' : 'Show'} catalog — click any source to assign it',
+                                  style: TextStyle(
+                                    color: Colors.white.withAlpha(180),
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
-                        ),
-                        _SettingsScrollRail(
-                          focusNode: _dialogScrollRailFocusNode,
-                          tokens: widget.t,
-                          onDirection: (d) =>
-                              _dialogScrollRailDirection(positions, d),
-                        ),
-                      ],
+                          WarpDpadButton(
+                            tokens: widget.t,
+                            focusNode: _closeFocusNode,
+                            onDirection: _closeDirection,
+                            onSelect: () => Navigator.of(context).pop(),
+                            padding: const EdgeInsets.all(6),
+                            backgroundColor: Colors.white.withAlpha(20),
+                            borderColor: Colors.transparent,
+                            focusBackgroundColor: const Color(0x330DB2E2),
+                            focusBorderColor: Colors.white,
+                            focusBoxShadow: [
+                              BoxShadow(
+                                color: Colors.white.withAlpha(130),
+                                blurRadius: 10,
+                                spreadRadius: 1,
+                              ),
+                              BoxShadow(
+                                color: const Color(0xFF0DB2E2).withAlpha(140),
+                                blurRadius: 22,
+                                spreadRadius: 4,
+                              ),
+                            ],
+                            borderRadius: 6,
+                            child: const Icon(
+                              Icons.close,
+                              color: Colors.white,
+                              size: 16,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                ],
+
+                    // TMDb / Trakt tab toggle
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+                      child: Row(
+                        children:
+                            ['tmdb', 'trakt']
+                                .map((tab) {
+                                  final isActive = _providerTab == tab;
+                                  final label = tab == 'tmdb'
+                                      ? 'TMDb Catalogs'
+                                      : 'Trakt Catalogs';
+                                  return Expanded(
+                                    child: WarpDpadButton(
+                                      tokens: widget.t,
+                                      focusNode: tab == 'tmdb'
+                                          ? _tmdbFocusNode
+                                          : _traktFocusNode,
+                                      autofocus: tab == _providerTab,
+                                      entry: tab == _providerTab,
+                                      onDirection: (d) =>
+                                          _providerDirection(tab, positions, d),
+                                      onSelect: () =>
+                                          setState(() => _providerTab = tab),
+                                      padding: const EdgeInsets.symmetric(
+                                        vertical: 10,
+                                      ),
+                                      backgroundColor: isActive
+                                          ? const Color(
+                                              0xFF0DB2E2,
+                                            ).withAlpha(30)
+                                          : Colors.white.withAlpha(8),
+                                      borderColor: isActive
+                                          ? const Color(
+                                              0xFF0DB2E2,
+                                            ).withAlpha(100)
+                                          : Colors.white.withAlpha(15),
+                                      borderRadius: 10,
+                                      child: Text(
+                                        label,
+                                        textAlign: TextAlign.center,
+                                        style: TextStyle(
+                                          color: isActive
+                                              ? const Color(0xFF0DB2E2)
+                                              : Colors.white.withAlpha(120),
+                                          fontSize: 13,
+                                          fontWeight: isActive
+                                              ? FontWeight.w600
+                                              : FontWeight.w400,
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                })
+                                .expand((w) => [w, const SizedBox(width: 8)])
+                                .toList()
+                              ..removeLast(),
+                      ),
+                    ),
+
+                    // Grouped catalog grid — scrollable
+                    Flexible(
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: SingleChildScrollView(
+                              controller: _dialogScrollController,
+                              padding: const EdgeInsets.all(20),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: groups.entries.map((entry) {
+                                  final group = entry.key;
+                                  final items = entry.value;
+                                  final label =
+                                      kCatalogGroupLabels[group] ??
+                                      group.name.toUpperCase();
+                                  return Padding(
+                                    padding: const EdgeInsets.only(bottom: 20),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        // Group header
+                                        Padding(
+                                          padding: const EdgeInsets.only(
+                                            bottom: 10,
+                                          ),
+                                          child: Text(
+                                            '$label(${items.length})',
+                                            style: TextStyle(
+                                              color: Colors.white.withAlpha(
+                                                100,
+                                              ),
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.w600,
+                                              letterSpacing: 1.1,
+                                            ),
+                                          ),
+                                        ),
+                                        // 2-column grid
+                                        GridView.builder(
+                                          shrinkWrap: true,
+                                          physics:
+                                              const NeverScrollableScrollPhysics(),
+                                          gridDelegate:
+                                              const SliverGridDelegateWithFixedCrossAxisCount(
+                                                crossAxisCount: 2,
+                                                crossAxisSpacing: 8,
+                                                mainAxisSpacing: 8,
+                                                childAspectRatio: 5.5,
+                                              ),
+                                          itemCount: items.length,
+                                          itemBuilder: (_, i) {
+                                            final globalIndex = _catalogs
+                                                .indexWhere(
+                                                  (def) =>
+                                                      def.id == items[i].id,
+                                                );
+                                            final safeIndex = globalIndex < 0
+                                                ? 0
+                                                : globalIndex;
+                                            return _CatalogCard(
+                                              def: items[i],
+                                              isSelected:
+                                                  widget.current.provider ==
+                                                      _providerTab &&
+                                                  widget.current.category ==
+                                                      items[i].id,
+                                              onTap: () => _select(items[i]),
+                                              t: widget.t,
+                                              focusNode:
+                                                  safeIndex <
+                                                      _cardFocusNodes.length
+                                                  ? _cardFocusNodes[safeIndex]
+                                                  : null,
+                                              onDirection: (d) =>
+                                                  _cardDirection(
+                                                    safeIndex,
+                                                    positions,
+                                                    d,
+                                                  ),
+                                            );
+                                          },
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                }).toList(),
+                              ),
+                            ),
+                          ),
+                          _SettingsScrollRail(
+                            focusNode: _dialogScrollRailFocusNode,
+                            tokens: widget.t,
+                            onDirection: (d) =>
+                                _dialogScrollRailDirection(positions, d),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
         ),
-      ), // ConstrainedBox
+      ),
     );
   }
 

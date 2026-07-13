@@ -19,6 +19,7 @@ import '../widgets/layout/backdrop_layer.dart';
 import '../widgets/media/scan_dialog.dart';
 import '../widgets/shared/dpad_controls.dart';
 import '../widgets/shared/modal_focus_restore.dart';
+import '../widgets/shared/tv_modal_chrome_scale.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared enums / helpers
@@ -348,8 +349,9 @@ class _SubTabNav extends StatelessWidget {
   Widget build(BuildContext context) {
     final w = screenSize.width;
     final h = screenSize.height;
-    final gap = (w * 0.012).clamp(10.0, 24.0);
-    final padV = (h * 0.012).clamp(12.0, 20.0);
+    final scaler = MediaQuery.textScalerOf(context);
+    final gap = scaler.scale((w * 0.012).clamp(10.0, 24.0));
+    final padV = scaler.scale((h * 0.012).clamp(12.0, 20.0));
     final fs = (w * 0.009).clamp(14.0, 17.0);
 
     return Padding(
@@ -368,8 +370,8 @@ class _SubTabNav extends StatelessWidget {
                   label: _tabs[i].label,
                   isActive: selected == _tabs[i].tab,
                   onTap: () => onSelect(_tabs[i].tab),
-                  padV: (h * 0.007).clamp(7.0, 12.0),
-                  padH: (w * 0.013).clamp(13.0, 22.0),
+                  padV: scaler.scale((h * 0.007).clamp(7.0, 12.0)),
+                  padH: scaler.scale((w * 0.013).clamp(13.0, 22.0)),
                   fontSize: fs,
                   t: t,
                   entry: selected == _tabs[i].tab,
@@ -411,33 +413,40 @@ class _Pill extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) => WarpDpadButton(
-    tokens: t,
-    focusNode: focusNode,
-    entry: entry,
-    onDirection: onDirection,
-    onSelect: onTap,
-    padding: EdgeInsets.symmetric(horizontal: padH, vertical: padV),
-    backgroundColor: isActive ? const Color(0x26FFFFFF) : Colors.transparent,
-    borderColor: isActive ? const Color(0x33FFFFFF) : Colors.transparent,
-    focusBackgroundColor: const Color(0x26FFFFFF),
-    borderRadius: 999,
-    child: Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, size: 15, color: isActive ? Colors.white : Colors.white60),
-        const SizedBox(width: 6),
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: fontSize,
-            fontWeight: FontWeight.w500,
+  Widget build(BuildContext context) {
+    final scaler = MediaQuery.textScalerOf(context);
+    return WarpDpadButton(
+      tokens: t,
+      focusNode: focusNode,
+      entry: entry,
+      onDirection: onDirection,
+      onSelect: onTap,
+      padding: EdgeInsets.symmetric(horizontal: padH, vertical: padV),
+      backgroundColor: isActive ? const Color(0x26FFFFFF) : Colors.transparent,
+      borderColor: isActive ? const Color(0x33FFFFFF) : Colors.transparent,
+      focusBackgroundColor: const Color(0x26FFFFFF),
+      borderRadius: 999,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            icon,
+            size: scaler.scale(15),
             color: isActive ? Colors.white : Colors.white60,
           ),
-        ),
-      ],
-    ),
-  );
+          SizedBox(width: scaler.scale(6)),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: fontSize,
+              fontWeight: FontWeight.w500,
+              color: isActive ? Colors.white : Colors.white60,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -600,65 +609,67 @@ class _SortDialogState extends State<_SortDialog>
   Widget build(BuildContext context) {
     return Dialog(
       backgroundColor: Colors.transparent,
-      child: CallbackShortcuts(
-        bindings: {
-          const SingleActivator(LogicalKeyboardKey.escape): () =>
-              Navigator.of(context).pop(),
-          const SingleActivator(LogicalKeyboardKey.goBack): () =>
-              Navigator.of(context).pop(),
-          const SingleActivator(LogicalKeyboardKey.browserBack): () =>
-              Navigator.of(context).pop(),
-        },
-        child: DpadRegion(
-          memoryKey: 'library-sort-dialog',
-          verticalEdge: DpadEdgeBehavior.stop,
-          child: Container(
-            width: 320,
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: const Color(0xFF1C1C1C),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.white.withAlpha(25)),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                for (var i = 0; i < _SortOpt.all.length; i++)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 6),
-                    child: WarpDpadButton(
-                      tokens: widget.t,
-                      autofocus: _SortOpt.all[i].value == widget.current,
-                      entry: _SortOpt.all[i].value == widget.current,
-                      onSelect: () =>
-                          Navigator.of(context).pop(_SortOpt.all[i].value),
-                      backgroundColor: _SortOpt.all[i].value == widget.current
-                          ? const Color(0x220DB2E2)
-                          : Colors.white.withAlpha(8),
-                      child: Row(
-                        children: [
-                          SizedBox(
-                            width: 20,
-                            child: _SortOpt.all[i].value == widget.current
-                                ? const Icon(
-                                    Icons.check_circle,
-                                    size: 15,
-                                    color: Color(0xFF0DB2E2),
-                                  )
-                                : null,
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              _SortOpt.all[i].label,
-                              style: const TextStyle(color: Colors.white),
+      child: TvModalChromeScale(
+        child: CallbackShortcuts(
+          bindings: {
+            const SingleActivator(LogicalKeyboardKey.escape): () =>
+                Navigator.of(context).pop(),
+            const SingleActivator(LogicalKeyboardKey.goBack): () =>
+                Navigator.of(context).pop(),
+            const SingleActivator(LogicalKeyboardKey.browserBack): () =>
+                Navigator.of(context).pop(),
+          },
+          child: DpadRegion(
+            memoryKey: 'library-sort-dialog',
+            verticalEdge: DpadEdgeBehavior.stop,
+            child: Container(
+              width: 320,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1C1C1C),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.white.withAlpha(25)),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (var i = 0; i < _SortOpt.all.length; i++)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: WarpDpadButton(
+                        tokens: widget.t,
+                        autofocus: _SortOpt.all[i].value == widget.current,
+                        entry: _SortOpt.all[i].value == widget.current,
+                        onSelect: () =>
+                            Navigator.of(context).pop(_SortOpt.all[i].value),
+                        backgroundColor: _SortOpt.all[i].value == widget.current
+                            ? const Color(0x220DB2E2)
+                            : Colors.white.withAlpha(8),
+                        child: Row(
+                          children: [
+                            SizedBox(
+                              width: 20,
+                              child: _SortOpt.all[i].value == widget.current
+                                  ? const Icon(
+                                      Icons.check_circle,
+                                      size: 15,
+                                      color: Color(0xFF0DB2E2),
+                                    )
+                                  : null,
                             ),
-                          ),
-                        ],
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                _SortOpt.all[i].label,
+                                style: const TextStyle(color: Colors.white),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-                  ),
-              ],
+                ],
+              ),
             ),
           ),
         ),

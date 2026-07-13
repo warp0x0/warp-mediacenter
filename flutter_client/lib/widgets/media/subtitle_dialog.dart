@@ -12,6 +12,7 @@ import '../../models/subtitle.dart' as subtitle_models;
 import '../../theme/warp_tokens.dart';
 import 'file_browser_modal.dart';
 import '../shared/modal_focus_restore.dart';
+import '../shared/tv_modal_chrome_scale.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SubtitleDialog — live media_kit subtitle search, file load, and track switcher
@@ -74,82 +75,84 @@ class _SubtitleDialogState extends ConsumerState<SubtitleDialog>
     return Dialog(
       backgroundColor: Colors.transparent,
       insetPadding: const EdgeInsets.symmetric(horizontal: 22, vertical: 22),
-      child: CallbackShortcuts(
-        bindings: {
-          const SingleActivator(LogicalKeyboardKey.escape): () =>
-              Navigator.of(context).pop(),
-          const SingleActivator(LogicalKeyboardKey.backspace): () =>
-              Navigator.of(context).pop(),
-          const SingleActivator(LogicalKeyboardKey.goBack): () =>
-              Navigator.of(context).pop(),
-          const SingleActivator(LogicalKeyboardKey.browserBack): () =>
-              Navigator.of(context).pop(),
-        },
-        child: DpadRegion(
-          memoryKey: 'modal-subtitle',
-          horizontalEdge: DpadEdgeBehavior.stop,
-          verticalEdge: DpadEdgeBehavior.stop,
-          child: Center(
-            child: ConstrainedBox(
-              constraints: BoxConstraints(maxWidth: width, maxHeight: height),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(28),
-                child: BackdropFilter(
-                  filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
-                  child: Container(
-                    width: width,
-                    height: height,
-                    decoration: BoxDecoration(
-                      gradient: const LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: [Color(0xF20A0E14), Color(0xE5091A24)],
-                      ),
-                      borderRadius: BorderRadius.circular(28),
-                      border: Border.all(color: _accent.withAlpha(76)),
-                      boxShadow: const [
-                        BoxShadow(
-                          color: Colors.black87,
-                          blurRadius: 36,
-                          offset: Offset(0, 18),
+      child: TvModalChromeScale(
+        child: CallbackShortcuts(
+          bindings: {
+            const SingleActivator(LogicalKeyboardKey.escape): () =>
+                Navigator.of(context).pop(),
+            const SingleActivator(LogicalKeyboardKey.backspace): () =>
+                Navigator.of(context).pop(),
+            const SingleActivator(LogicalKeyboardKey.goBack): () =>
+                Navigator.of(context).pop(),
+            const SingleActivator(LogicalKeyboardKey.browserBack): () =>
+                Navigator.of(context).pop(),
+          },
+          child: DpadRegion(
+            memoryKey: 'modal-subtitle',
+            horizontalEdge: DpadEdgeBehavior.stop,
+            verticalEdge: DpadEdgeBehavior.stop,
+            child: Center(
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: width, maxHeight: height),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(28),
+                  child: BackdropFilter(
+                    filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+                    child: Container(
+                      width: width,
+                      height: height,
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [Color(0xF20A0E14), Color(0xE5091A24)],
                         ),
-                      ],
-                    ),
-                    child: Column(
-                      children: [
-                        _DialogHeader(
-                          title: 'Subtitles',
-                          subtitle: _headerSubtitle(),
-                          onClose: () => Navigator.of(context).pop(),
-                          t: t,
-                        ),
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
-                          child: _Tabs(controller: _tabs, t: t),
-                        ),
-                        Expanded(
-                          child: TabBarView(
-                            controller: _tabs,
-                            physics: const NeverScrollableScrollPhysics(),
-                            children: [
-                              _SearchTab(
-                                player: widget.player,
-                                tmdbId: widget.tmdbId,
-                                mediaKind: widget.mediaKind == 'show'
-                                    ? 'show'
-                                    : 'movie',
-                                title: widget.title,
-                                season: widget.season,
-                                episode: widget.episode,
-                                sourceUrl: widget.sourceUrl,
-                                t: t,
-                              ),
-                              _BrowseTab(player: widget.player, t: t),
-                              _ActiveTracksTab(player: widget.player, t: t),
-                            ],
+                        borderRadius: BorderRadius.circular(28),
+                        border: Border.all(color: _accent.withAlpha(76)),
+                        boxShadow: const [
+                          BoxShadow(
+                            color: Colors.black87,
+                            blurRadius: 36,
+                            offset: Offset(0, 18),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
+                      child: Column(
+                        children: [
+                          _DialogHeader(
+                            title: 'Subtitles',
+                            subtitle: _headerSubtitle(),
+                            onClose: () => Navigator.of(context).pop(),
+                            t: t,
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
+                            child: _Tabs(controller: _tabs, t: t),
+                          ),
+                          Expanded(
+                            child: TabBarView(
+                              controller: _tabs,
+                              physics: const NeverScrollableScrollPhysics(),
+                              children: [
+                                _SearchTab(
+                                  player: widget.player,
+                                  tmdbId: widget.tmdbId,
+                                  mediaKind: widget.mediaKind == 'show'
+                                      ? 'show'
+                                      : 'movie',
+                                  title: widget.title,
+                                  season: widget.season,
+                                  episode: widget.episode,
+                                  sourceUrl: widget.sourceUrl,
+                                  t: t,
+                                ),
+                                _BrowseTab(player: widget.player, t: t),
+                                _ActiveTracksTab(player: widget.player, t: t),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),

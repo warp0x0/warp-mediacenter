@@ -68,7 +68,8 @@ class WidgetSection extends ConsumerStatefulWidget {
   ConsumerState<WidgetSection> createState() => _WidgetSectionState();
 }
 
-class _WidgetSectionState extends ConsumerState<WidgetSection> {
+class _WidgetSectionState extends ConsumerState<WidgetSection>
+    with AutomaticKeepAliveClientMixin {
   int _selectedIdx = 0;
   late final ScrollController _ribbonScroll;
   late final ScrollController _synopsisScroll;
@@ -92,6 +93,12 @@ class _WidgetSectionState extends ConsumerState<WidgetSection> {
 
   FocusNode get _heroEntryFocusNode =>
       _hasTrailer ? _playTrailerFocusNode : _moreInfoFocusNode;
+
+  bool get _rowHasFocus =>
+      _playTrailerFocusNode.hasFocus ||
+      _moreInfoFocusNode.hasFocus ||
+      _seeMoreFocusNode.hasFocus ||
+      _focusNodes.any((node) => node.hasFocus);
 
   String get _regionPrefix =>
       '${widget.ownRoute.replaceAll('/', '_')}-${widget.mediaType}-${widget.rowIndex}';
@@ -203,11 +210,21 @@ class _WidgetSectionState extends ConsumerState<WidgetSection> {
 
   void _selectItem(int idx) {
     if (idx < 0 || idx >= widget.items.length) return;
+    if (idx == _selectedIdx) {
+      _centerCard(idx);
+      _setBackdropForIndex(idx);
+      return;
+    }
     setState(() => _selectedIdx = idx);
     _centerCard(idx);
+    _setBackdropForIndex(idx);
+    _resetSynopsis();
+  }
+
+  void _setBackdropForIndex(int idx) {
+    if (idx < 0 || idx >= widget.items.length) return;
     final url = backdropUrl(widget.items[idx].backdropPath);
     if (url.isNotEmpty) ref.read(backdropProvider.notifier).set(url);
-    _resetSynopsis();
   }
 
   void _rebuildFocusNodes() {
@@ -225,8 +242,25 @@ class _WidgetSectionState extends ConsumerState<WidgetSection> {
       widget.rowRegistry.unregister(widget.rowIndex);
       return;
     }
-    widget.rowRegistry.register(widget.rowIndex, _focusNodes[0]);
+    widget.rowRegistry.register(
+      widget.rowIndex,
+      _focusNodes[0],
+      revealFirstCard: _revealFirstCard,
+    );
     widget.onFirstCardRegistered?.call(widget.rowIndex);
+  }
+
+  Future<void> _revealFirstCard() async {
+    if (!mounted || widget.items.isEmpty) return;
+    if (_ribbonScroll.hasClients && _ribbonScroll.offset != 0) {
+      _ribbonScroll.jumpTo(0);
+    }
+    if (_selectedIdx != 0) {
+      setState(() => _selectedIdx = 0);
+      _resetSynopsis();
+    }
+    _setBackdropForIndex(0);
+    await WidgetsBinding.instance.endOfFrame;
   }
 
   // Reset synopsis scroll and start the 3-second auto-scroll timer.
@@ -258,13 +292,19 @@ class _WidgetSectionState extends ConsumerState<WidgetSection> {
   @override
   void didUpdateWidget(WidgetSection old) {
     super.didUpdateWidget(old);
+    final hadFocus = _rowHasFocus;
     if (old.items.length != widget.items.length) {
       for (final fn in _focusNodes) {
         fn.dispose();
       }
-      _selectedIdx = 0;
+      _selectedIdx = widget.items.isEmpty
+          ? 0
+          : _selectedIdx.clamp(0, widget.items.length - 1);
       _rebuildFocusNodes();
       _registerFirstCard();
+    }
+    if (hadFocus && widget.items.isNotEmpty) {
+      _setBackdropForIndex(_selectedIdx.clamp(0, widget.items.length - 1));
     }
   }
 
@@ -285,19 +325,33 @@ class _WidgetSectionState extends ConsumerState<WidgetSection> {
 
   void _centerCard(int idx) {
     if (!_ribbonScroll.hasClients) return;
-    final t = WarpTokens(UiDensity.desktop, MediaQuery.sizeOf(context));
+    final t = WarpTokens(
+      ref.read(uiDensityProvider),
+      MediaQuery.sizeOf(context),
+    );
     final cardW = t.ribbonPosterWidth + t.cardGap;
     final viewW = _ribbonScroll.position.viewportDimension;
     final target = (cardW * idx) - (viewW / 2 - t.ribbonPosterWidth / 2);
+    final nextOffset = target.clamp(
+      0.0,
+      _ribbonScroll.position.maxScrollExtent,
+    );
+    if ((_ribbonScroll.offset - nextOffset).abs() < t.cardGap) return;
     _ribbonScroll.animateTo(
-      target.clamp(0.0, _ribbonScroll.position.maxScrollExtent),
-      duration: const Duration(milliseconds: 300),
+      nextOffset,
+      duration: t.isTV
+          ? const Duration(milliseconds: 140)
+          : const Duration(milliseconds: 300),
       curve: Curves.easeOutCubic,
     );
   }
 
   @override
+  bool get wantKeepAlive => true;
+
+  @override
   Widget build(BuildContext context) {
+    super.build(context);
     final t = WarpTokens.watch(context, ref);
     final size = MediaQuery.sizeOf(context);
 
@@ -367,7 +421,9 @@ class _WidgetSectionState extends ConsumerState<WidgetSection> {
                         // Hero info block
                         ConstrainedBox(
                           constraints: BoxConstraints(
-                            maxWidth: (size.width * 0.504).clamp(384.0, 816.0),
+                            maxWidth: t.isTV
+                                ? size.width * 0.5
+                                : (size.width * 1.008).clamp(768.0, 1632.0),
                           ),
                           child: _HeroInfo(
                             item: selected,
@@ -526,6 +582,7 @@ class _HeroInfo extends StatelessWidget {
     final titleSize = (w * 0.035).clamp(32.0, 56.0);
     // CSS: clamp(16px, 1.2vw, 22px)
     final bodySize = (w * 0.012).clamp(16.0, 22.0);
+    final scaledBodySize = MediaQuery.textScalerOf(context).scale(bodySize);
     // CSS: clamp(14px, 0.9vw, 18px)
     final metaSize = (w * 0.009).clamp(14.0, 18.0);
     // CSS: clamp(17px, 1.2vw, 22px)
@@ -563,7 +620,7 @@ class _HeroInfo extends StatelessWidget {
         if (item.overview != null && item.overview!.isNotEmpty) ...[
           SizedBox(
             // 3 lines × lineHeight 1.6 × fontSize
-            height: bodySize * 1.6 * 3,
+            height: scaledBodySize * 1.6 * 3,
             child: SingleChildScrollView(
               controller: synopsisScroll,
               physics: const NeverScrollableScrollPhysics(),

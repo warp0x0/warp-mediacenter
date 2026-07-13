@@ -1238,7 +1238,7 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
                                           // Title clamp(32px, 3.5vw, 56px) — 50px wider than overview
                                           ConstrainedBox(
                                             constraints: const BoxConstraints(
-                                              maxWidth: 800,
+                                              maxWidth: 1600,
                                             ),
                                             child: Text(
                                               title,
@@ -1356,7 +1356,7 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
                                             const SizedBox(height: 16),
                                             ConstrainedBox(
                                               constraints: const BoxConstraints(
-                                                maxWidth: 700,
+                                                maxWidth: 1400,
                                               ),
                                               child: Text(
                                                 overview,
@@ -1734,6 +1734,7 @@ class _BackButtonState extends State<_BackButton> {
 
   @override
   Widget build(BuildContext context) {
+    final scaler = MediaQuery.textScalerOf(context);
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
@@ -1752,8 +1753,8 @@ class _BackButtonState extends State<_BackButton> {
             },
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 200),
-              width: 100,
-              height: 40,
+              width: scaler.scale(100),
+              height: scaler.scale(40),
               decoration: BoxDecoration(
                 color: active ? _backColor : const Color(0xCC333232),
                 borderRadius: BorderRadius.circular(8),
@@ -1768,12 +1769,16 @@ class _BackButtonState extends State<_BackButton> {
                       ]
                     : null,
               ),
-              child: const Row(
+              child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.arrow_back, color: Colors.white, size: 18),
-                  SizedBox(width: 8),
-                  Text(
+                  Icon(
+                    Icons.arrow_back,
+                    color: Colors.white,
+                    size: scaler.scale(18),
+                  ),
+                  SizedBox(width: scaler.scale(8)),
+                  const Text(
                     'Back',
                     style: TextStyle(
                       color: Colors.white,
@@ -1817,6 +1822,7 @@ class _PlayTrailerButtonState extends State<_PlayTrailerButton> {
 
   @override
   Widget build(BuildContext context) {
+    final scaler = MediaQuery.textScalerOf(context);
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
@@ -1842,8 +1848,8 @@ class _PlayTrailerButtonState extends State<_PlayTrailerButton> {
               offset: _hovered ? const Offset(0, -2) : Offset.zero,
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 150),
-                width: 150,
-                height: 40,
+                width: scaler.scale(150),
+                height: scaler.scale(40),
                 decoration: BoxDecoration(
                   color: active ? WarpColors.accent : const Color(0xCC333232),
                   borderRadius: BorderRadius.circular(8),
@@ -1861,12 +1867,12 @@ class _PlayTrailerButtonState extends State<_PlayTrailerButton> {
                               color: Colors.white,
                             ),
                           )
-                        : const Icon(
+                        : Icon(
                             Icons.play_arrow,
                             color: Colors.white,
-                            size: 18,
+                            size: scaler.scale(18),
                           ),
-                    const SizedBox(width: 8),
+                    SizedBox(width: scaler.scale(8)),
                     const Text(
                       'Play Trailer',
                       style: TextStyle(
@@ -1941,6 +1947,7 @@ class _PlayResumeButtonState extends State<_PlayResumeButton> {
 
   @override
   Widget build(BuildContext context) {
+    final scaler = MediaQuery.textScalerOf(context);
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
@@ -1961,9 +1968,9 @@ class _PlayResumeButtonState extends State<_PlayResumeButton> {
               offset: _hovered ? const Offset(0, -2) : Offset.zero,
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 200),
-                constraints: const BoxConstraints(minWidth: 150),
-                height: 40,
-                padding: const EdgeInsets.symmetric(horizontal: 16),
+                constraints: BoxConstraints(minWidth: scaler.scale(150)),
+                height: scaler.scale(40),
+                padding: EdgeInsets.symmetric(horizontal: scaler.scale(16)),
                 decoration: BoxDecoration(
                   color: active ? _color : const Color(0xCC333232),
                   borderRadius: BorderRadius.circular(8),
@@ -1985,13 +1992,13 @@ class _PlayResumeButtonState extends State<_PlayResumeButton> {
                   mainAxisSize: MainAxisSize.min,
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const Icon(
+                    Icon(
                       Icons.play_arrow,
                       color: Colors.white,
-                      size: 18,
+                      size: scaler.scale(18),
                       fill: 1,
                     ),
-                    const SizedBox(width: 8),
+                    SizedBox(width: scaler.scale(8)),
                     Text(
                       _label,
                       style: const TextStyle(
@@ -2046,6 +2053,7 @@ class _CircleActionButtonState extends State<_CircleActionButton> {
 
   @override
   Widget build(BuildContext context) {
+    final scaler = MediaQuery.textScalerOf(context);
     // Tauri: w-12 h-12 (48×48) rounded-full backdrop-blur-3xl hover:scale-110
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
@@ -2070,7 +2078,7 @@ class _CircleActionButtonState extends State<_CircleActionButton> {
               children: [
                 AnimatedContainer(
                   duration: const Duration(milliseconds: 150),
-                  padding: EdgeInsets.all(state.focused ? 4 : 0),
+                  padding: EdgeInsets.all(state.focused ? scaler.scale(4) : 0),
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     border: state.focused
@@ -2091,8 +2099,8 @@ class _CircleActionButtonState extends State<_CircleActionButton> {
                       filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
                       child: AnimatedContainer(
                         duration: const Duration(milliseconds: 200),
-                        width: 48,
-                        height: 48,
+                        width: scaler.scale(48),
+                        height: scaler.scale(48),
                         decoration: BoxDecoration(
                           color: widget.active
                               ? Color.alphaBlend(
@@ -2115,7 +2123,7 @@ class _CircleActionButtonState extends State<_CircleActionButton> {
                           color: widget.active
                               ? widget.activeIconColor
                               : Colors.white,
-                          size: 20,
+                          size: scaler.scale(20),
                         ),
                       ),
                     ),
@@ -2123,10 +2131,10 @@ class _CircleActionButtonState extends State<_CircleActionButton> {
                 ),
                 if (state.focused)
                   Positioned(
-                    bottom: -8,
+                    bottom: -scaler.scale(8),
                     child: Container(
-                      width: 18,
-                      height: 4,
+                      width: scaler.scale(18),
+                      height: scaler.scale(4),
                       decoration: BoxDecoration(
                         color: Colors.white,
                         borderRadius: BorderRadius.circular(99),
@@ -2487,6 +2495,7 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
   @override
   Widget build(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
+    final scaler = MediaQuery.textScalerOf(context);
     final seasons = widget.seasons.seasons;
     final selected = seasons.isNotEmpty ? seasons[widget.selectedIdx] : null;
     final epCount = selected?.episodeCount;
@@ -2547,7 +2556,7 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
               Expanded(
                 child: SizedBox(
                   key: _seasonViewportKey,
-                  height: 40,
+                  height: scaler.scale(40),
                   child: ScrollConfiguration(
                     behavior: ScrollConfiguration.of(
                       context,
@@ -2569,7 +2578,7 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
                               onDirection: (d) => _pillDirection(i, d),
                             ),
                             if (i != seasons.length - 1)
-                              const SizedBox(width: 8),
+                              SizedBox(width: scaler.scale(8)),
                           ],
                         ],
                       ),
@@ -2716,6 +2725,7 @@ class _SeasonChevronState extends State<_SeasonChevron> {
 
   @override
   Widget build(BuildContext context) {
+    final scaler = MediaQuery.textScalerOf(context);
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
@@ -2724,8 +2734,8 @@ class _SeasonChevronState extends State<_SeasonChevron> {
         onTap: widget.onTap,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 150),
-          width: 32,
-          height: 32,
+          width: scaler.scale(32),
+          height: scaler.scale(32),
           decoration: BoxDecoration(
             color: _hovered ? Colors.white.withAlpha(25) : Colors.transparent,
             shape: BoxShape.circle,
@@ -2733,7 +2743,7 @@ class _SeasonChevronState extends State<_SeasonChevron> {
           child: Icon(
             widget.icon,
             color: Colors.white.withAlpha(140),
-            size: 25,
+            size: scaler.scale(25),
           ),
         ),
       ),
@@ -2768,6 +2778,7 @@ class _SeasonPillState extends State<_SeasonPill> {
   @override
   Widget build(BuildContext context) {
     final active = widget.active;
+    final scaler = MediaQuery.textScalerOf(context);
     // Tauri: active pill uses var(--accent) = #0DB2E2, text #000
     //        inactive: rgba(255,255,255,0.06) bg, border rgba(255,255,255,0.10)
     return MouseRegion(
@@ -2786,7 +2797,10 @@ class _SeasonPillState extends State<_SeasonPill> {
           },
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 150),
-            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 7),
+            padding: EdgeInsets.symmetric(
+              horizontal: scaler.scale(18),
+              vertical: scaler.scale(7),
+            ),
             decoration: BoxDecoration(
               color: active
                   ? const Color(0xFF0DB2E2)
@@ -2831,7 +2845,7 @@ class _SeasonPillState extends State<_SeasonPill> {
                   ),
                 ),
                 if (widget.episodeCount != null) ...[
-                  const SizedBox(width: 4),
+                  SizedBox(width: scaler.scale(4)),
                   Text(
                     '· ${widget.episodeCount}ep',
                     style: TextStyle(

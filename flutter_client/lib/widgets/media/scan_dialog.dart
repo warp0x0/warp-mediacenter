@@ -10,6 +10,7 @@ import '../../providers/library_provider.dart';
 import '../../theme/warp_tokens.dart';
 import '../shared/dpad_controls.dart';
 import '../shared/modal_focus_restore.dart';
+import '../shared/tv_modal_chrome_scale.dart';
 import 'file_browser_modal.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -155,219 +156,222 @@ class _ScanDialogState extends ConsumerState<ScanDialog>
 
     return Dialog(
       backgroundColor: Colors.transparent,
-      child: CallbackShortcuts(
-        bindings: {
-          const SingleActivator(LogicalKeyboardKey.escape): () =>
-              Navigator.of(context).pop(),
-          const SingleActivator(LogicalKeyboardKey.goBack): () =>
-              Navigator.of(context).pop(),
-          const SingleActivator(LogicalKeyboardKey.browserBack): () =>
-              Navigator.of(context).pop(),
-        },
-        child: DpadRegion(
-          memoryKey: 'modal-scan',
-          horizontalEdge: DpadEdgeBehavior.stop,
-          verticalEdge: DpadEdgeBehavior.stop,
-          child: Center(
-            child: Container(
-              width: w,
-              padding: const EdgeInsets.all(24),
-              decoration: BoxDecoration(
-                color: const Color(0xFF1A1A2E),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.white.withAlpha(20)),
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // ── Header ─────────────────────────────────────────────────────
-                  Row(
-                    children: [
-                      const Icon(
-                        Icons.manage_search,
-                        color: Color(0xFF0DB2E2),
-                        size: 22,
-                      ),
-                      const SizedBox(width: 10),
-                      Text(
-                        'Library Scan',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: t.fontHeading,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      const Spacer(),
-                      WarpDpadButton(
-                        tokens: t,
-                        onSelect: () => Navigator.of(context).pop(),
-                        padding: const EdgeInsets.all(4),
-                        backgroundColor: Colors.transparent,
-                        borderColor: Colors.transparent,
-                        focusBackgroundColor: const Color(0x330DB2E2),
-                        focusBorderColor: Colors.white,
-                        focusBoxShadow: [
-                          BoxShadow(
-                            color: Colors.white.withAlpha(130),
-                            blurRadius: 10,
-                            spreadRadius: 1,
-                          ),
-                          BoxShadow(
-                            color: const Color(0xFF0DB2E2).withAlpha(140),
-                            blurRadius: 22,
-                            spreadRadius: 4,
-                          ),
-                        ],
-                        child: const Icon(
-                          Icons.close,
-                          color: Colors.white54,
-                          size: 20,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 20),
-
-                  // ── Dual panels ─────────────────────────────────────────────────
-                  IntrinsicHeight(
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
+      child: TvModalChromeScale(
+        child: CallbackShortcuts(
+          bindings: {
+            const SingleActivator(LogicalKeyboardKey.escape): () =>
+                Navigator.of(context).pop(),
+            const SingleActivator(LogicalKeyboardKey.goBack): () =>
+                Navigator.of(context).pop(),
+            const SingleActivator(LogicalKeyboardKey.browserBack): () =>
+                Navigator.of(context).pop(),
+          },
+          child: DpadRegion(
+            memoryKey: 'modal-scan',
+            horizontalEdge: DpadEdgeBehavior.stop,
+            verticalEdge: DpadEdgeBehavior.stop,
+            child: Center(
+              child: Container(
+                width: w,
+                padding: const EdgeInsets.all(24),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1A1A2E),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: Colors.white.withAlpha(20)),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // ── Header ─────────────────────────────────────────────────────
+                    Row(
                       children: [
-                        Expanded(
-                          child: _PanelWidget(
-                            label: 'Movies',
-                            icon: Icons.movie_outlined,
-                            folder: _moviesFolder,
-                            isActive:
-                                _activePanel == _ScanPanel.movies && _scanning,
-                            canScan: _moviesFolder != null && !_scanning,
-                            onSelectFolder: () =>
-                                _selectFolder(_ScanPanel.movies),
-                            onScan: () => _startScan(_ScanPanel.movies),
-                            autofocusFolder: true,
-                            t: t,
+                        const Icon(
+                          Icons.manage_search,
+                          color: Color(0xFF0DB2E2),
+                          size: 22,
+                        ),
+                        const SizedBox(width: 10),
+                        Text(
+                          'Library Scan',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: t.fontHeading,
+                            fontWeight: FontWeight.w700,
                           ),
                         ),
-                        Container(
-                          width: 1,
-                          margin: const EdgeInsets.symmetric(horizontal: 16),
-                          color: Colors.white.withAlpha(15),
-                        ),
-                        Expanded(
-                          child: _PanelWidget(
-                            label: 'Shows',
-                            icon: Icons.tv_outlined,
-                            folder: _showsFolder,
-                            isActive:
-                                _activePanel == _ScanPanel.shows && _scanning,
-                            canScan: _showsFolder != null && !_scanning,
-                            onSelectFolder: () =>
-                                _selectFolder(_ScanPanel.shows),
-                            onScan: () => _startScan(_ScanPanel.shows),
-                            t: t,
+                        const Spacer(),
+                        WarpDpadButton(
+                          tokens: t,
+                          onSelect: () => Navigator.of(context).pop(),
+                          padding: const EdgeInsets.all(4),
+                          backgroundColor: Colors.transparent,
+                          borderColor: Colors.transparent,
+                          focusBackgroundColor: const Color(0x330DB2E2),
+                          focusBorderColor: Colors.white,
+                          focusBoxShadow: [
+                            BoxShadow(
+                              color: Colors.white.withAlpha(130),
+                              blurRadius: 10,
+                              spreadRadius: 1,
+                            ),
+                            BoxShadow(
+                              color: const Color(0xFF0DB2E2).withAlpha(140),
+                              blurRadius: 22,
+                              spreadRadius: 4,
+                            ),
+                          ],
+                          child: const Icon(
+                            Icons.close,
+                            color: Colors.white54,
+                            size: 20,
                           ),
                         ),
                       ],
                     ),
-                  ),
-
-                  // ── Progress + Logs ─────────────────────────────────────────────
-                  if (_scanning || _status != null) ...[
                     const SizedBox(height: 20),
-                    _ScanProgressArea(
-                      scanning: _scanning,
-                      status: _status,
-                      logs: _logs,
-                      logScroll: _logScroll,
-                      t: t,
-                    ),
-                  ],
 
-                  // ── Error ────────────────────────────────────────────────────────
-                  if (_error != null) ...[
-                    const SizedBox(height: 12),
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: Colors.redAccent.withAlpha(30),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(
-                          color: Colors.redAccent.withAlpha(80),
+                    // ── Dual panels ─────────────────────────────────────────────────
+                    IntrinsicHeight(
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Expanded(
+                            child: _PanelWidget(
+                              label: 'Movies',
+                              icon: Icons.movie_outlined,
+                              folder: _moviesFolder,
+                              isActive:
+                                  _activePanel == _ScanPanel.movies &&
+                                  _scanning,
+                              canScan: _moviesFolder != null && !_scanning,
+                              onSelectFolder: () =>
+                                  _selectFolder(_ScanPanel.movies),
+                              onScan: () => _startScan(_ScanPanel.movies),
+                              autofocusFolder: true,
+                              t: t,
+                            ),
+                          ),
+                          Container(
+                            width: 1,
+                            margin: const EdgeInsets.symmetric(horizontal: 16),
+                            color: Colors.white.withAlpha(15),
+                          ),
+                          Expanded(
+                            child: _PanelWidget(
+                              label: 'Shows',
+                              icon: Icons.tv_outlined,
+                              folder: _showsFolder,
+                              isActive:
+                                  _activePanel == _ScanPanel.shows && _scanning,
+                              canScan: _showsFolder != null && !_scanning,
+                              onSelectFolder: () =>
+                                  _selectFolder(_ScanPanel.shows),
+                              onScan: () => _startScan(_ScanPanel.shows),
+                              t: t,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    // ── Progress + Logs ─────────────────────────────────────────────
+                    if (_scanning || _status != null) ...[
+                      const SizedBox(height: 20),
+                      _ScanProgressArea(
+                        scanning: _scanning,
+                        status: _status,
+                        logs: _logs,
+                        logScroll: _logScroll,
+                        t: t,
+                      ),
+                    ],
+
+                    // ── Error ────────────────────────────────────────────────────────
+                    if (_error != null) ...[
+                      const SizedBox(height: 12),
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Colors.redAccent.withAlpha(30),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: Colors.redAccent.withAlpha(80),
+                          ),
+                        ),
+                        child: Text(
+                          _error!,
+                          style: TextStyle(
+                            color: Colors.redAccent,
+                            fontSize: t.fontSubtitle,
+                          ),
                         ),
                       ),
-                      child: Text(
-                        _error!,
-                        style: TextStyle(
-                          color: Colors.redAccent,
-                          fontSize: t.fontSubtitle,
-                        ),
-                      ),
-                    ),
-                  ],
+                    ],
 
-                  const SizedBox(height: 20),
+                    const SizedBox(height: 20),
 
-                  // ── Footer ───────────────────────────────────────────────────────
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      if (_scanning)
-                        WarpDpadButton(
-                          tokens: t,
-                          onSelect: _cancelScan,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 8,
+                    // ── Footer ───────────────────────────────────────────────────────
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        if (_scanning)
+                          WarpDpadButton(
+                            tokens: t,
+                            onSelect: _cancelScan,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 8,
+                            ),
+                            backgroundColor: Colors.redAccent.withAlpha(16),
+                            borderColor: Colors.redAccent.withAlpha(50),
+                            focusBorderColor: Colors.redAccent,
+                            child: const Text(
+                              'Cancel Scan',
+                              style: TextStyle(color: Colors.redAccent),
+                            ),
                           ),
-                          backgroundColor: Colors.redAccent.withAlpha(16),
-                          borderColor: Colors.redAccent.withAlpha(50),
-                          focusBorderColor: Colors.redAccent,
-                          child: const Text(
-                            'Cancel Scan',
-                            style: TextStyle(color: Colors.redAccent),
+                        if (isDone && _status?.result != null) ...[
+                          const SizedBox(width: 8),
+                          WarpDpadButton(
+                            tokens: t,
+                            onSelect: _addToLibrary,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 8,
+                            ),
+                            backgroundColor: const Color(
+                              0xFF0DB2E2,
+                            ).withAlpha(30),
+                            borderColor: const Color(0xFF0DB2E2).withAlpha(80),
+                            child: const Text(
+                              'Add to Library',
+                              style: TextStyle(
+                                color: Color(0xFF0DB2E2),
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
                           ),
-                        ),
-                      if (isDone && _status?.result != null) ...[
+                        ],
                         const SizedBox(width: 8),
                         WarpDpadButton(
                           tokens: t,
-                          onSelect: _addToLibrary,
+                          onSelect: () => Navigator.of(context).pop(),
                           padding: const EdgeInsets.symmetric(
                             horizontal: 16,
                             vertical: 8,
                           ),
-                          backgroundColor: const Color(
-                            0xFF0DB2E2,
-                          ).withAlpha(30),
-                          borderColor: const Color(0xFF0DB2E2).withAlpha(80),
-                          child: const Text(
-                            'Add to Library',
-                            style: TextStyle(
-                              color: Color(0xFF0DB2E2),
-                              fontWeight: FontWeight.w600,
-                            ),
+                          backgroundColor: Colors.transparent,
+                          borderColor: Colors.white.withAlpha(20),
+                          child: Text(
+                            _scanning ? 'Dismiss' : 'Close',
+                            style: const TextStyle(color: Colors.white54),
                           ),
                         ),
                       ],
-                      const SizedBox(width: 8),
-                      WarpDpadButton(
-                        tokens: t,
-                        onSelect: () => Navigator.of(context).pop(),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 8,
-                        ),
-                        backgroundColor: Colors.transparent,
-                        borderColor: Colors.white.withAlpha(20),
-                        child: Text(
-                          _scanning ? 'Dismiss' : 'Close',
-                          style: const TextStyle(color: Colors.white54),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
+                    ),
+                  ],
+                ),
               ),
             ),
           ),

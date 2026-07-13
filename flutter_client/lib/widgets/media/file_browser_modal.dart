@@ -7,6 +7,7 @@ import '../../models/files.dart';
 import '../../theme/warp_tokens.dart';
 import '../shared/dpad_controls.dart';
 import '../shared/modal_focus_restore.dart';
+import '../shared/tv_modal_chrome_scale.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FileBrowserModal — browse server filesystem via GET /api/v1/files/browse
@@ -108,140 +109,144 @@ class _FileBrowserModalState extends ConsumerState<FileBrowserModal>
 
     return Dialog(
       backgroundColor: Colors.transparent,
-      child: CallbackShortcuts(
-        bindings: {
-          const SingleActivator(LogicalKeyboardKey.escape): () =>
-              Navigator.of(context).pop(),
-          const SingleActivator(LogicalKeyboardKey.goBack): () =>
-              Navigator.of(context).pop(),
-          const SingleActivator(LogicalKeyboardKey.browserBack): () =>
-              Navigator.of(context).pop(),
-        },
-        child: DpadRegion(
-          memoryKey: 'modal-file-browser',
-          horizontalEdge: DpadEdgeBehavior.stop,
-          verticalEdge: DpadEdgeBehavior.stop,
-          child: Center(
-            child: Container(
-              width: w,
-              height: h,
-              decoration: BoxDecoration(
-                color: const Color(0xFF1A1A2E),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.white.withAlpha(20)),
-              ),
-              child: Column(
-                children: [
-                  // Header
-                  _Header(
-                    path: _path,
-                    dirsOnly: widget.dirsOnly,
-                    onClose: () => Navigator.of(context).pop(),
-                    t: t,
-                  ),
+      child: TvModalChromeScale(
+        child: CallbackShortcuts(
+          bindings: {
+            const SingleActivator(LogicalKeyboardKey.escape): () =>
+                Navigator.of(context).pop(),
+            const SingleActivator(LogicalKeyboardKey.goBack): () =>
+                Navigator.of(context).pop(),
+            const SingleActivator(LogicalKeyboardKey.browserBack): () =>
+                Navigator.of(context).pop(),
+          },
+          child: DpadRegion(
+            memoryKey: 'modal-file-browser',
+            horizontalEdge: DpadEdgeBehavior.stop,
+            verticalEdge: DpadEdgeBehavior.stop,
+            child: Center(
+              child: Container(
+                width: w,
+                height: h,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1A1A2E),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: Colors.white.withAlpha(20)),
+                ),
+                child: Column(
+                  children: [
+                    // Header
+                    _Header(
+                      path: _path,
+                      dirsOnly: widget.dirsOnly,
+                      onClose: () => Navigator.of(context).pop(),
+                      t: t,
+                    ),
 
-                  // Breadcrumb navigation
-                  _BreadcrumbRow(
-                    labels: _breadcrumbLabels(),
-                    onTap: (i) => _browse(_pathForCrumb(i)),
-                    t: t,
-                  ),
+                    // Breadcrumb navigation
+                    _BreadcrumbRow(
+                      labels: _breadcrumbLabels(),
+                      onTap: (i) => _browse(_pathForCrumb(i)),
+                      t: t,
+                    ),
 
-                  // Up button
-                  if (_parent != null)
-                    _UpRow(onTap: () => _browse(_parent!), t: t),
+                    // Up button
+                    if (_parent != null)
+                      _UpRow(onTap: () => _browse(_parent!), t: t),
 
-                  // Body
-                  Expanded(
-                    child: _loading
-                        ? const Center(
-                            child: CircularProgressIndicator(
-                              color: Color(0xFF0DB2E2),
-                              strokeWidth: 2,
+                    // Body
+                    Expanded(
+                      child: _loading
+                          ? const Center(
+                              child: CircularProgressIndicator(
+                                color: Color(0xFF0DB2E2),
+                                strokeWidth: 2,
+                              ),
+                            )
+                          : _error != null
+                          ? Center(
+                              child: Text(
+                                _error!,
+                                style: TextStyle(
+                                  color: Colors.redAccent,
+                                  fontSize: t.fontSubtitle,
+                                ),
+                              ),
+                            )
+                          : _EntryList(
+                              entries: _entries,
+                              dirsOnly: widget.dirsOnly,
+                              onTap: _navigateTo,
+                              t: t,
                             ),
-                          )
-                        : _error != null
-                        ? Center(
+                    ),
+
+                    // Footer
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 20,
+                        vertical: 12,
+                      ),
+                      decoration: BoxDecoration(
+                        border: Border(
+                          top: BorderSide(color: Colors.white.withAlpha(15)),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
                             child: Text(
-                              _error!,
+                              _path,
                               style: TextStyle(
-                                color: Colors.redAccent,
+                                color: Colors.white38,
                                 fontSize: t.fontSubtitle,
                               ),
+                              overflow: TextOverflow.ellipsis,
                             ),
-                          )
-                        : _EntryList(
-                            entries: _entries,
-                            dirsOnly: widget.dirsOnly,
-                            onTap: _navigateTo,
-                            t: t,
                           ),
-                  ),
-
-                  // Footer
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 20,
-                      vertical: 12,
-                    ),
-                    decoration: BoxDecoration(
-                      border: Border(
-                        top: BorderSide(color: Colors.white.withAlpha(15)),
-                      ),
-                    ),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            _path,
-                            style: TextStyle(
-                              color: Colors.white38,
-                              fontSize: t.fontSubtitle,
-                            ),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        WarpDpadButton(
-                          tokens: t,
-                          onSelect: () => Navigator.of(context).pop(),
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 8,
-                          ),
-                          backgroundColor: Colors.transparent,
-                          borderColor: Colors.white.withAlpha(20),
-                          child: const Text(
-                            'Cancel',
-                            style: TextStyle(color: Colors.white54),
-                          ),
-                        ),
-                        if (widget.dirsOnly) ...[
-                          const SizedBox(width: 8),
                           WarpDpadButton(
                             tokens: t,
-                            onSelect: () => Navigator.of(context).pop(_path),
+                            onSelect: () => Navigator.of(context).pop(),
                             padding: const EdgeInsets.symmetric(
                               horizontal: 16,
                               vertical: 8,
                             ),
-                            backgroundColor: const Color(
-                              0xFF0DB2E2,
-                            ).withAlpha(30),
-                            borderColor: const Color(0xFF0DB2E2).withAlpha(80),
+                            backgroundColor: Colors.transparent,
+                            borderColor: Colors.white.withAlpha(20),
                             child: const Text(
-                              'Select Folder',
-                              style: TextStyle(
-                                color: Color(0xFF0DB2E2),
-                                fontWeight: FontWeight.w600,
-                                fontSize: 13,
-                              ),
+                              'Cancel',
+                              style: TextStyle(color: Colors.white54),
                             ),
                           ),
+                          if (widget.dirsOnly) ...[
+                            const SizedBox(width: 8),
+                            WarpDpadButton(
+                              tokens: t,
+                              onSelect: () => Navigator.of(context).pop(_path),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 8,
+                              ),
+                              backgroundColor: const Color(
+                                0xFF0DB2E2,
+                              ).withAlpha(30),
+                              borderColor: const Color(
+                                0xFF0DB2E2,
+                              ).withAlpha(80),
+                              child: const Text(
+                                'Select Folder',
+                                style: TextStyle(
+                                  color: Color(0xFF0DB2E2),
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ),
+                          ],
                         ],
-                      ],
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),

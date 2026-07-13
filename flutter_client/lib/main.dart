@@ -86,11 +86,57 @@ class WarpApp extends ConsumerWidget {
       debugShowCheckedModeBanner: false,
       theme: WarpTheme.build(tokens),
       routerConfig: router,
-      builder: Dpad.wrap(
-        // Page/dialog-level handlers own Back/Escape. The root dpad has no
-        // onBack callback, so mapping these keys here can preempt focused
-        // text fields and route-specific shortcuts.
-        keySet: const DpadKeySet(back: []),
+      builder: (context, child) {
+        final dpadWrapped = Dpad.wrap(
+          // Page/dialog-level handlers own Back/Escape. The root dpad has no
+          // onBack callback, so mapping these keys here can preempt focused
+          // text fields and route-specific shortcuts.
+          keySet: const DpadKeySet(back: []),
+        )(context, child);
+        if (density != UiDensity.tv) return dpadWrapped;
+        return _TvViewportScale(child: dpadWrapped);
+      },
+    );
+  }
+}
+
+class _TvViewportScale extends StatelessWidget {
+  static const _scale = 0.4;
+  static const _chromeScale = 1.5;
+
+  final Widget child;
+
+  const _TvViewportScale({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
+    final size = media.size;
+    if (size.width <= 0 || size.height <= 0) return child;
+
+    final virtualSize = Size(size.width / _scale, size.height / _scale);
+    return ClipRect(
+      child: OverflowBox(
+        alignment: Alignment.topLeft,
+        minWidth: virtualSize.width,
+        maxWidth: virtualSize.width,
+        minHeight: virtualSize.height,
+        maxHeight: virtualSize.height,
+        child: Transform.scale(
+          scale: _scale,
+          alignment: Alignment.topLeft,
+          child: SizedBox(
+            width: virtualSize.width,
+            height: virtualSize.height,
+            child: MediaQuery(
+              data: media.copyWith(
+                size: virtualSize,
+                textScaler: TextScaler.linear(_chromeScale),
+              ),
+              child: child,
+            ),
+          ),
+        ),
       ),
     );
   }

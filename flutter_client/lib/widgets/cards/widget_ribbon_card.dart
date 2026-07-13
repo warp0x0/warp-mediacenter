@@ -100,16 +100,26 @@ class _WidgetRibbonCardState extends ConsumerState<WidgetRibbonCard> {
     final showRing = _focused || _contextMenuOpen;
 
     final tmdbId = widget.item.tmdbId;
-    final liked = tmdbId != null && tmdbId.isNotEmpty
+    final showCollectionButtons =
+        tmdbId != null && tmdbId.isNotEmpty && showRing;
+    final liked = showCollectionButtons
         ? ref.watch(isLikedProvider(tmdbId)).asData?.value ?? false
         : false;
-    final wishlisted = tmdbId != null && tmdbId.isNotEmpty
+    final wishlisted = showCollectionButtons
         ? ref.watch(isWishlistedProvider(tmdbId)).asData?.value ?? false
         : false;
 
-    final w = MediaQuery.sizeOf(context).width;
-    final btnSize = (w * 0.012).clamp(14.0, 20.0);
+    final media = MediaQuery.of(context);
+    final w = media.size.width;
+    double scaled(num value) => media.textScaler.scale(value.toDouble());
+    final btnSize = scaled((w * 0.012).clamp(14.0, 20.0));
     final url = _resolveUrl();
+    final cacheWidth = _targetCacheWidth(context, imgW, max: 300);
+    final cacheHeight = _targetCacheWidth(context, imgH, max: 450);
+    final focusScale = t.isTV ? 1.0 : (showRing || _hovered ? 1.05 : 1.0);
+    final animationDuration = t.isTV
+        ? const Duration(milliseconds: 80)
+        : const Duration(milliseconds: 180);
 
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
@@ -147,10 +157,10 @@ class _WidgetRibbonCardState extends ConsumerState<WidgetRibbonCard> {
           onLongPress: _openContextMenu,
           onSecondaryTap: _openContextMenu,
           child: AnimatedScale(
-            scale: showRing || _hovered ? 1.05 : 1.0,
-            duration: const Duration(milliseconds: 180),
+            scale: focusScale,
+            duration: animationDuration,
             child: AnimatedContainer(
-              duration: const Duration(milliseconds: 180),
+              duration: animationDuration,
               width: imgW,
               height: imgH,
               decoration: BoxDecoration(
@@ -163,10 +173,10 @@ class _WidgetRibbonCardState extends ConsumerState<WidgetRibbonCard> {
                     : null,
                 boxShadow: showRing
                     ? [
-                        const BoxShadow(
-                          color: Color(0x470DB2E2),
-                          blurRadius: 20,
-                          spreadRadius: 1,
+                        BoxShadow(
+                          color: const Color(0x470DB2E2),
+                          blurRadius: t.isTV ? 8 : 20,
+                          spreadRadius: t.isTV ? 0 : 1,
                         ),
                       ]
                     : (_hovered
@@ -183,83 +193,96 @@ class _WidgetRibbonCardState extends ConsumerState<WidgetRibbonCard> {
                               ),
                             ]),
               ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(
-                  (t.cardRadius - (showRing ? t.cardFocusRingWidth : 0)).clamp(
-                    0.0,
-                    t.cardRadius,
+              child: RepaintBoundary(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(
+                    (t.cardRadius - (showRing ? t.cardFocusRingWidth : 0))
+                        .clamp(0.0, t.cardRadius),
                   ),
-                ),
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    if (url.isNotEmpty)
-                      CachedNetworkImage(
-                        imageUrl: url,
-                        fit: BoxFit.cover,
-                        placeholder: (_, _) =>
-                            _RibbonSkeleton(radius: t.cardRadius),
-                        errorWidget: (_, _, _) => const _RibbonNoPoster(),
-                      )
-                    else
-                      const _RibbonNoPoster(),
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      if (url.isNotEmpty)
+                        CachedNetworkImage(
+                          imageUrl: url,
+                          fit: BoxFit.cover,
+                          memCacheWidth: cacheWidth,
+                          memCacheHeight: cacheHeight,
+                          fadeInDuration: t.isTV
+                              ? Duration.zero
+                              : const Duration(milliseconds: 500),
+                          fadeOutDuration: t.isTV
+                              ? Duration.zero
+                              : const Duration(milliseconds: 1000),
+                          placeholder: (_, _) =>
+                              _RibbonSkeleton(radius: t.cardRadius),
+                          errorWidget: (_, _, _) => const _RibbonNoPoster(),
+                        )
+                      else
+                        const _RibbonNoPoster(),
 
-                    // Subtle inner vignette — a dark rim between the poster
-                    // art and the outer cyan focus ring, so the ring stays
-                    // legible even against near-white/near-cyan poster edges.
-                    const Positioned.fill(
-                      child: IgnorePointer(
-                        child: DecoratedBox(
-                          decoration: BoxDecoration(
-                            border: Border.fromBorderSide(
-                              BorderSide(color: Color(0x59000000), width: 3.5),
+                      // Subtle inner vignette — a dark rim between the poster
+                      // art and the outer cyan focus ring, so the ring stays
+                      // legible even against near-white/near-cyan poster edges.
+                      const Positioned.fill(
+                        child: IgnorePointer(
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              border: Border.fromBorderSide(
+                                BorderSide(
+                                  color: Color(0x59000000),
+                                  width: 3.5,
+                                ),
+                              ),
                             ),
                           ),
                         ),
                       ),
-                    ),
 
-                    if (tmdbId != null && tmdbId.isNotEmpty)
-                      Positioned(
-                        top: 4,
-                        left: 4,
-                        child: Column(
-                          children: [
-                            _RibbonCollectionBtn(
-                              size: btnSize,
-                              active: liked,
-                              icon: Icons.favorite,
-                              activeColor: const Color(0xFFF87171),
-                              activeBg: const Color(0x40EF4444),
-                              activeBorder: const Color(0x99EF4444),
-                              onTap: () => toggleLiked(ref, widget.item),
-                            ),
-                            const SizedBox(height: 3),
-                            _RibbonCollectionBtn(
-                              size: btnSize,
-                              active: wishlisted,
-                              icon: wishlisted ? Icons.check_circle : Icons.add,
-                              activeColor: const Color(0xFF34D399),
-                              activeBg: const Color(0x4010B981),
-                              activeBorder: const Color(0x9910B981),
-                              onTap: () => toggleWishlisted(ref, widget.item),
-                            ),
-                          ],
+                      if (showCollectionButtons)
+                        Positioned(
+                          top: scaled(4),
+                          left: scaled(4),
+                          child: Column(
+                            children: [
+                              _RibbonCollectionBtn(
+                                size: btnSize,
+                                active: liked,
+                                icon: Icons.favorite,
+                                activeColor: const Color(0xFFF87171),
+                                activeBg: const Color(0x40EF4444),
+                                activeBorder: const Color(0x99EF4444),
+                                onTap: () => toggleLiked(ref, widget.item),
+                              ),
+                              SizedBox(height: scaled(3)),
+                              _RibbonCollectionBtn(
+                                size: btnSize,
+                                active: wishlisted,
+                                icon: wishlisted
+                                    ? Icons.check_circle
+                                    : Icons.add,
+                                activeColor: const Color(0xFF34D399),
+                                activeBg: const Color(0x4010B981),
+                                activeBorder: const Color(0x9910B981),
+                                onTap: () => toggleWishlisted(ref, widget.item),
+                              ),
+                            ],
+                          ),
                         ),
-                      ),
 
-                    if (widget.item.extra['progress'] is num &&
-                        (widget.item.extra['progress'] as num) > 0)
-                      Positioned(
-                        left: 0,
-                        right: 0,
-                        bottom: 2,
-                        child: _RibbonProgressBar(
-                          percent: (widget.item.extra['progress'] as num)
-                              .toDouble(),
+                      if (widget.item.extra['progress'] is num &&
+                          (widget.item.extra['progress'] as num) > 0)
+                        Positioned(
+                          left: 0,
+                          right: 0,
+                          bottom: 2,
+                          child: _RibbonProgressBar(
+                            percent: (widget.item.extra['progress'] as num)
+                                .toDouble(),
+                          ),
                         ),
-                      ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -268,6 +291,23 @@ class _WidgetRibbonCardState extends ConsumerState<WidgetRibbonCard> {
       ),
     );
   }
+}
+
+int _targetCacheWidth(
+  BuildContext context,
+  double displayWidth, {
+  required int max,
+}) {
+  final media = MediaQuery.of(context);
+  final view = View.maybeOf(context);
+  final logicalViewportWidth = view == null
+      ? media.size.width
+      : view.physicalSize.width / view.devicePixelRatio;
+  final paintScale = media.size.width <= 0
+      ? 1.0
+      : (logicalViewportWidth / media.size.width).clamp(0.1, 1.0);
+  final pixels = (displayWidth * media.devicePixelRatio * paintScale).ceil();
+  return pixels.clamp(1, max).toInt();
 }
 
 class _RibbonCollectionBtn extends StatelessWidget {
