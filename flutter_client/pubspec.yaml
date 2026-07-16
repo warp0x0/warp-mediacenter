@@ -22,6 +22,8 @@ dependencies:
   media_kit: ^1.2.6
   media_kit_video: ^2.0.1
   media_kit_libs_video: ^1.0.7             # libmpv for all platforms (Android, macOS, Windows, Linux, iOS)
+  better_player_enhanced:                  # AndroidX Media3/ExoPlayer trial path for trailers
+    path: third_party/better_player_enhanced
 
   # ── YouTube trailers ─────────────────────────────────────────────────────────
   youtube_explode_dart: ^3.1.0             # Primary: direct stream extraction (no WebView)

@@ -144,23 +144,28 @@ class _PosterCardState extends ConsumerState<PosterCard> {
     final rating =
         widget.item.rating ?? widget.item.media.rating ?? enrichedRating;
 
-    // Self-managed collection status — mirrors useIsLiked/useIsWishlisted.ts,
-    // shown on every card that has a tmdbId, just like Tauri's CollectionButtons.
-    final liked = tmdbId != null && tmdbId.isNotEmpty
-        ? ref.watch(isLikedProvider(tmdbId)).asData?.value ?? false
-        : false;
-    final wishlisted = tmdbId != null && tmdbId.isNotEmpty
-        ? ref.watch(isWishlistedProvider(tmdbId)).asData?.value ?? false
-        : false;
-
     // Clamp font sizes to match Tauri PosterCard
     final media = MediaQuery.of(context);
     final w = media.size.width;
     double scaled(num value) => media.textScaler.scale(value.toDouble());
+    final isTV = t.isTV;
     final titleFs = (w * 0.0073).clamp(12.0, 15.0);
     final yearFs = (w * 0.0063).clamp(10.0, 13.0);
     final ratingFs = (w * 0.0068).clamp(11.0, 14.0);
     final btnSize = scaled((w * 0.015).clamp(20.0, 26.0));
+    final cacheWidth = _targetCacheDimension(context, imgW, max: 500);
+    final cacheHeight = _targetCacheDimension(context, imgH, max: 750);
+    final animationDuration = isTV
+        ? const Duration(milliseconds: 90)
+        : const Duration(milliseconds: 180);
+    final showCollectionButtons =
+        tmdbId != null && tmdbId.isNotEmpty && (_focused || _contextMenuOpen);
+    final liked = showCollectionButtons
+        ? ref.watch(isLikedProvider(tmdbId)).asData?.value ?? false
+        : false;
+    final wishlisted = showCollectionButtons
+        ? ref.watch(isWishlistedProvider(tmdbId)).asData?.value ?? false
+        : false;
 
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
@@ -184,8 +189,8 @@ class _PosterCardState extends ConsumerState<PosterCard> {
           onLongPress: _openContextMenu,
           onSecondaryTap: _openContextMenu,
           child: AnimatedScale(
-            scale: _hovered ? 1.05 : 1.0,
-            duration: const Duration(milliseconds: 150),
+            scale: isTV ? 1.0 : (_hovered ? 1.05 : 1.0),
+            duration: animationDuration,
             alignment:
                 Alignment.center, // CSS default: transform-origin center center
             child: Column(
@@ -194,7 +199,7 @@ class _PosterCardState extends ConsumerState<PosterCard> {
               children: [
                 // ── Poster image ───────────────────────────────────────────────
                 AnimatedContainer(
-                  duration: const Duration(milliseconds: 180),
+                  duration: animationDuration,
                   width: imgW,
                   height: imgH,
                   decoration: BoxDecoration(
@@ -207,10 +212,10 @@ class _PosterCardState extends ConsumerState<PosterCard> {
                         : null,
                     boxShadow: showRing
                         ? [
-                            const BoxShadow(
-                              color: Color(0x470DB2E2),
-                              blurRadius: 16,
-                              spreadRadius: 2,
+                            BoxShadow(
+                              color: const Color(0x470DB2E2),
+                              blurRadius: isTV ? 8 : 16,
+                              spreadRadius: isTV ? 0 : 2,
                             ),
                           ]
                         : [
@@ -233,6 +238,14 @@ class _PosterCardState extends ConsumerState<PosterCard> {
                           CachedNetworkImage(
                             imageUrl: url,
                             fit: BoxFit.cover,
+                            memCacheWidth: cacheWidth,
+                            memCacheHeight: cacheHeight,
+                            fadeInDuration: isTV
+                                ? Duration.zero
+                                : const Duration(milliseconds: 500),
+                            fadeOutDuration: isTV
+                                ? Duration.zero
+                                : const Duration(milliseconds: 1000),
                             placeholder: (_, _) =>
                                 _Skeleton(radius: t.cardRadius),
                             errorWidget: (_, _, _) => _NoPoster(t: t),
@@ -296,15 +309,15 @@ class _PosterCardState extends ConsumerState<PosterCard> {
                         // Collection buttons — top left (mirrors CollectionButtons.tsx)
                         // Inactive buttons hidden until card is hovered (opacity-0 → opacity-100).
                         // Active (liked/wishlisted) buttons always visible.
-                        if (tmdbId != null && tmdbId.isNotEmpty)
+                        if (showCollectionButtons)
                           Positioned(
                             top: scaled((w * 0.0031).clamp(4.0, 8.0)),
                             left: scaled((w * 0.0031).clamp(4.0, 8.0)),
                             child: Column(
                               children: [
                                 AnimatedOpacity(
-                                  duration: const Duration(milliseconds: 150),
-                                  opacity: liked || _hovered ? 1.0 : 0.0,
+                                  duration: animationDuration,
+                                  opacity: 1.0,
                                   child: _CollectionBtn(
                                     size: btnSize,
                                     active: liked,
@@ -320,8 +333,8 @@ class _PosterCardState extends ConsumerState<PosterCard> {
                                   height: scaled((w * 0.0026).clamp(3.0, 5.0)),
                                 ),
                                 AnimatedOpacity(
-                                  duration: const Duration(milliseconds: 150),
-                                  opacity: wishlisted || _hovered ? 1.0 : 0.0,
+                                  duration: animationDuration,
+                                  opacity: 1.0,
                                   child: _CollectionBtn(
                                     size: btnSize,
                                     active: wishlisted,
@@ -399,6 +412,24 @@ class _PosterCardState extends ConsumerState<PosterCard> {
       ),
     );
   }
+}
+
+int _targetCacheDimension(
+  BuildContext context,
+  double displayDimension, {
+  required int max,
+}) {
+  final media = MediaQuery.of(context);
+  final view = View.maybeOf(context);
+  final logicalViewportWidth = view == null
+      ? media.size.width
+      : view.physicalSize.width / view.devicePixelRatio;
+  final paintScale = media.size.width <= 0
+      ? 1.0
+      : (logicalViewportWidth / media.size.width).clamp(0.1, 1.0);
+  final pixels = (displayDimension * media.devicePixelRatio * paintScale)
+      .ceil();
+  return pixels.clamp(1, max).toInt();
 }
 
 // Mirrors CollectionButtons.tsx: bg-black/60 → hover:bg-black/80 when inactive

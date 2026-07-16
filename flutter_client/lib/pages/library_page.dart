@@ -52,6 +52,30 @@ bool _isLastFourCard(int index, int length) {
   return index >= threshold;
 }
 
+bool _isTvScaled(BuildContext context) {
+  final media = MediaQuery.of(context);
+  final view = View.maybeOf(context);
+  if (view == null || media.size.width <= 0) return false;
+  final logicalViewportWidth = view.physicalSize.width / view.devicePixelRatio;
+  return media.size.width > logicalViewportWidth * 1.2;
+}
+
+Duration _libraryFocusDuration(BuildContext context) => _isTvScaled(context)
+    ? const Duration(milliseconds: 110)
+    : const Duration(milliseconds: 180);
+
+Duration _libraryScrollDuration(BuildContext context) => _isTvScaled(context)
+    ? const Duration(milliseconds: 150)
+    : const Duration(milliseconds: 250);
+
+bool _focusLibraryNode(BuildContext context, FocusNode node) {
+  final focused = Dpad.of(context).requestFocus(node);
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    if (node.hasFocus) _centerLibraryCard(node);
+  });
+  return focused;
+}
+
 void _centerLibraryCard(FocusNode node) {
   final cardContext = node.context;
   if (cardContext == null || !cardContext.mounted) return;
@@ -91,7 +115,7 @@ void _centerInScrollable(RenderBox target, ScrollableState scrollable) {
   if ((offset - position.pixels).abs() < 0.5) return;
   position.animateTo(
     offset,
-    duration: const Duration(milliseconds: 250),
+    duration: _libraryFocusDuration(scrollable.context),
     curve: Curves.easeOutCubic,
   );
 }
@@ -184,18 +208,18 @@ class _LibraryPageState extends ConsumerState<LibraryPage>
   bool _focusLibraryTab() {
     final tab = ref.read(tabBarFocusRegistryProvider).forRoute('/library');
     if (tab == null) return false;
-    return Dpad.of(context).requestFocus(tab);
+    return _focusLibraryNode(context, tab);
   }
 
   bool _focusSelectedSubtab() {
-    return Dpad.of(context).requestFocus(_subTabFocusNodes[_tab.index]);
+    return _focusLibraryNode(context, _subTabFocusNodes[_tab.index]);
   }
 
   bool _focusContentEntry() {
     if (_tab == _LibTab.local) {
-      return Dpad.of(context).requestFocus(_typeMovieFocus);
+      return _focusLibraryNode(context, _typeMovieFocus);
     }
-    return Dpad.of(context).requestFocus(_selectedTypeFocus);
+    return _focusLibraryNode(context, _selectedTypeFocus);
   }
 
   bool _subTabDirection(TraversalDirection direction) {
@@ -833,7 +857,12 @@ class _CollectionTabState extends ConsumerState<_CollectionTab> {
       final index = _cardFocusNodes.length;
       final node = FocusNode(debugLabel: 'LibraryGridCard-$index');
       node.addListener(() {
-        if (node.hasFocus) _lastFocusedCard = index;
+        if (node.hasFocus) {
+          _lastFocusedCard = index;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted && node.hasFocus) _centerLibraryCard(node);
+          });
+        }
       });
       _cardFocusNodes.add(node);
     }
@@ -844,7 +873,7 @@ class _CollectionTabState extends ConsumerState<_CollectionTab> {
 
   bool _focusFirstCard() {
     if (_cardFocusNodes.isEmpty) return true;
-    Dpad.of(context).requestFocus(_cardFocusNodes.first);
+    _focusLibraryNode(context, _cardFocusNodes.first);
     return true;
   }
 
@@ -852,14 +881,14 @@ class _CollectionTabState extends ConsumerState<_CollectionTab> {
     final node = widget.mediaType == _MediaTypeF.movie
         ? widget.movieFocusNode
         : widget.showFocusNode;
-    Dpad.of(context).requestFocus(node);
+    _focusLibraryNode(context, node);
     return true;
   }
 
   bool _focusLastCard() {
     if (_cardFocusNodes.isEmpty) return _focusSelectedType();
     final index = _lastFocusedCard.clamp(0, _cardFocusNodes.length - 1);
-    Dpad.of(context).requestFocus(_cardFocusNodes[index]);
+    _focusLibraryNode(context, _cardFocusNodes[index]);
     return true;
   }
 
@@ -870,7 +899,7 @@ class _CollectionTabState extends ConsumerState<_CollectionTab> {
       return true;
     }
     if (direction == TraversalDirection.right && option == _MediaTypeF.show) {
-      Dpad.of(context).requestFocus(widget.sortFocusNode);
+      _focusLibraryNode(context, widget.sortFocusNode);
       return true;
     }
     return false;
@@ -893,7 +922,7 @@ class _CollectionTabState extends ConsumerState<_CollectionTab> {
     if (direction == TraversalDirection.up) {
       final target = index - columns;
       if (target >= 0 && target < _cardFocusNodes.length) {
-        Dpad.of(context).requestFocus(_cardFocusNodes[target]);
+        _focusLibraryNode(context, _cardFocusNodes[target]);
       } else {
         _focusSelectedType();
       }
@@ -902,9 +931,9 @@ class _CollectionTabState extends ConsumerState<_CollectionTab> {
     if (direction == TraversalDirection.down) {
       final target = index + columns;
       if (target < _cardFocusNodes.length) {
-        Dpad.of(context).requestFocus(_cardFocusNodes[target]);
+        _focusLibraryNode(context, _cardFocusNodes[target]);
       } else if (hasMore) {
-        Dpad.of(context).requestFocus(_loadMoreFocusNode);
+        _focusLibraryNode(context, _loadMoreFocusNode);
       }
       return true;
     }
@@ -1060,6 +1089,7 @@ class _CollectionTabState extends ConsumerState<_CollectionTab> {
                       ? _cardFocusNodes[i]
                       : null,
                   entry: i == 0,
+                  autoScroll: false,
                   onDirection: (d) => _cardDirection(i, cols, hasMore, d),
                   onTap: () => context.push(
                     '/detail/${item.type}/${item.tmdbId ?? item.id}',
@@ -1174,7 +1204,7 @@ class _HoverableRibbonState extends State<_HoverableRibbon> {
         0.0,
         _scrollCtrl.position.maxScrollExtent,
       ),
-      duration: const Duration(milliseconds: 350),
+      duration: _libraryScrollDuration(context),
       curve: Curves.easeOutCubic,
     );
   }
@@ -1186,7 +1216,7 @@ class _HoverableRibbonState extends State<_HoverableRibbon> {
         0.0,
         _scrollCtrl.position.maxScrollExtent,
       ),
-      duration: const Duration(milliseconds: 350),
+      duration: _libraryScrollDuration(context),
       curve: Curves.easeOutCubic,
     );
   }
@@ -1211,7 +1241,7 @@ class _HoverableRibbonState extends State<_HoverableRibbon> {
                   absorbing: !_hovered,
                   child: AnimatedOpacity(
                     opacity: _hovered ? 1.0 : 0.0,
-                    duration: const Duration(milliseconds: 200),
+                    duration: _libraryFocusDuration(context),
                     child: _LibChevronBtn(
                       icon: Icons.chevron_left,
                       onTap: _scrollLeft,
@@ -1230,7 +1260,7 @@ class _HoverableRibbonState extends State<_HoverableRibbon> {
                   absorbing: !_hovered,
                   child: AnimatedOpacity(
                     opacity: _hovered ? 1.0 : 0.0,
-                    duration: const Duration(milliseconds: 200),
+                    duration: _libraryFocusDuration(context),
                     child: _LibChevronBtn(
                       icon: Icons.chevron_right,
                       onTap: _scrollRight,
@@ -1259,6 +1289,7 @@ class _LibChevronBtnState extends State<_LibChevronBtn> {
 
   @override
   Widget build(BuildContext context) {
+    final isTV = _isTvScaled(context);
     return MouseRegion(
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hovered = true),
@@ -1266,18 +1297,20 @@ class _LibChevronBtnState extends State<_LibChevronBtn> {
       child: GestureDetector(
         onTap: widget.onTap,
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
+          duration: _libraryFocusDuration(context),
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
             color: Colors.black.withAlpha(_hovered ? 204 : 128),
             shape: BoxShape.circle,
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0x66000000),
-                blurRadius: 8,
-                offset: Offset(0, 2),
-              ),
-            ],
+            boxShadow: isTV
+                ? null
+                : const [
+                    BoxShadow(
+                      color: Color(0x66000000),
+                      blurRadius: 8,
+                      offset: Offset(0, 2),
+                    ),
+                  ],
           ),
           child: Icon(widget.icon, color: Colors.white, size: 50),
         ),
@@ -1312,9 +1345,11 @@ class _DiscoverSeeMoreBtnState extends State<_DiscoverSeeMoreBtn> {
       onExit: (_) => setState(() => _hovered = false),
       cursor: SystemMouseCursors.click,
       child: DpadFocusable(
+        effects: const [],
         focusNode: widget.focusNode,
         onSelect: widget.onTap,
         onDirection: widget.onDirection,
+        autoScroll: false,
         tapToSelect: false,
         builder: (context, state, child) {
           final focused = state.focused;
@@ -1328,18 +1363,12 @@ class _DiscoverSeeMoreBtnState extends State<_DiscoverSeeMoreBtn> {
               padding: const EdgeInsets.all(6),
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(8),
-                boxShadow: focused
-                    ? [
-                        BoxShadow(
-                          color: WarpColors.accent.withAlpha(140),
-                          blurRadius: 28,
-                          spreadRadius: 4,
-                        ),
-                      ]
+                border: focused
+                    ? Border.all(color: WarpColors.accent, width: 2)
                     : null,
               ),
               child: AnimatedDefaultTextStyle(
-                duration: const Duration(milliseconds: 150),
+                duration: _libraryFocusDuration(context),
                 style: TextStyle(
                   fontSize: widget.t.fontSubtitle,
                   fontWeight: FontWeight.w700,
@@ -1400,7 +1429,7 @@ class _DiscoverTabState extends ConsumerState<_DiscoverTab> {
     final node = widget.mediaType == _MediaTypeF.movie
         ? widget.movieFocusNode
         : widget.showFocusNode;
-    Dpad.of(context).requestFocus(node);
+    _focusLibraryNode(context, node);
     return true;
   }
 
@@ -1412,7 +1441,7 @@ class _DiscoverTabState extends ConsumerState<_DiscoverTab> {
     ) {
       final node = _rowRegistry.entryFor(i);
       if (node != null) {
-        Dpad.of(context).requestFocus(node);
+        _focusLibraryNode(context, node);
         return true;
       }
     }
@@ -1564,9 +1593,10 @@ class _DiscoverRibbonState extends ConsumerState<_DiscoverRibbon> {
     if (direction == TraversalDirection.down) {
       final node = widget.rowRegistry.entryFor(widget.rowIndex);
       if (node != null) {
-        Dpad.of(context).requestFocus(node);
+        _focusLibraryNode(context, node);
       } else if (_focusNodes.isNotEmpty) {
-        Dpad.of(context).requestFocus(
+        _focusLibraryNode(
+          context,
           _focusNodes[_lastFocusedIndex.clamp(0, _focusNodes.length - 1)],
         );
       }
@@ -1609,7 +1639,7 @@ class _DiscoverRibbonState extends ConsumerState<_DiscoverRibbon> {
   bool _cardDirection(int index, TraversalDirection direction) {
     if (direction == TraversalDirection.up &&
         _isLastFourCard(index, _focusNodes.length)) {
-      Dpad.of(context).requestFocus(_seeMoreFocusNode);
+      _focusLibraryNode(context, _seeMoreFocusNode);
       return true;
     }
     return widget.onDirection(widget.rowIndex, direction);
@@ -1768,7 +1798,7 @@ class _LocalTabState extends ConsumerState<_LocalTab> {
     final node = widget.mediaType == _MediaTypeF.movie
         ? widget.movieFocusNode
         : widget.showFocusNode;
-    Dpad.of(context).requestFocus(node);
+    _focusLibraryNode(context, node);
     return true;
   }
 
@@ -1776,7 +1806,7 @@ class _LocalTabState extends ConsumerState<_LocalTab> {
     for (var i = rowIndex + delta; i >= 0 && i < 2; i += delta) {
       final node = _rowRegistry.entryFor(i);
       if (node != null) {
-        Dpad.of(context).requestFocus(node);
+        _focusLibraryNode(context, node);
         return true;
       }
     }
@@ -1788,14 +1818,14 @@ class _LocalTabState extends ConsumerState<_LocalTab> {
     if (direction == TraversalDirection.right) {
       final node = _scanReturnNode;
       if (node?.context != null) {
-        Dpad.of(context).requestFocus(node!);
+        _focusLibraryNode(context, node!);
       } else {
-        Dpad.of(context).requestFocus(widget.movieFocusNode);
+        _focusLibraryNode(context, widget.movieFocusNode);
       }
       return true;
     }
     if (direction == TraversalDirection.down) {
-      Dpad.of(context).requestFocus(widget.movieFocusNode);
+      _focusLibraryNode(context, widget.movieFocusNode);
       return true;
     }
     if (direction == TraversalDirection.left) return true;
@@ -1810,7 +1840,7 @@ class _LocalTabState extends ConsumerState<_LocalTab> {
     }
     if (direction == TraversalDirection.left && option == _MediaTypeF.movie) {
       _scanReturnNode = null;
-      Dpad.of(context).requestFocus(widget.scanFocusNode);
+      _focusLibraryNode(context, widget.scanFocusNode);
       return true;
     }
     if (direction == TraversalDirection.right && option == _MediaTypeF.show) {
@@ -2158,9 +2188,10 @@ class _LocalRibbonState extends State<_LocalRibbon> {
     if (direction == TraversalDirection.down) {
       final node = widget.rowRegistry.entryFor(widget.rowIndex);
       if (node != null) {
-        Dpad.of(context).requestFocus(node);
+        _focusLibraryNode(context, node);
       } else if (_focusNodes.isNotEmpty) {
-        Dpad.of(context).requestFocus(
+        _focusLibraryNode(
+          context,
           _focusNodes[_lastFocusedIndex.clamp(0, _focusNodes.length - 1)],
         );
       }
@@ -2176,12 +2207,12 @@ class _LocalRibbonState extends State<_LocalRibbon> {
   bool _cardDirection(int index, TraversalDirection direction) {
     if (direction == TraversalDirection.left && index == 0) {
       widget.onScanReturn(_focusNodes[index]);
-      Dpad.of(context).requestFocus(widget.scanFocusNode);
+      _focusLibraryNode(context, widget.scanFocusNode);
       return true;
     }
     if (direction == TraversalDirection.up &&
         _isLastFourCard(index, _focusNodes.length)) {
-      Dpad.of(context).requestFocus(_seeMoreFocusNode);
+      _focusLibraryNode(context, _seeMoreFocusNode);
       return true;
     }
     return widget.onDirection(widget.rowIndex, direction);

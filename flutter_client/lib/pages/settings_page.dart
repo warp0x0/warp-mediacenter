@@ -25,6 +25,39 @@ const _kDebridClientSecret = 'realdebrid_client_secret';
 const _kTorrentApiUrl = 'torrent_api_url';
 const _kTorrentApiKey = 'torrent_api_key';
 
+bool _isTvScaled(BuildContext context) {
+  final media = MediaQuery.of(context);
+  final view = View.maybeOf(context);
+  if (view == null || media.size.width <= 0) return false;
+  final logicalViewportWidth = view.physicalSize.width / view.devicePixelRatio;
+  return media.size.width > logicalViewportWidth * 1.2;
+}
+
+Duration _settingsFocusDuration(BuildContext context) => _isTvScaled(context)
+    ? const Duration(milliseconds: 100)
+    : const Duration(milliseconds: 160);
+
+Duration _settingsScrollDuration(BuildContext context) => _isTvScaled(context)
+    ? const Duration(milliseconds: 150)
+    : const Duration(milliseconds: 240);
+
+bool _focusSettingsNode(BuildContext context, FocusNode node) {
+  final focused = Dpad.of(context).requestFocus(node);
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    if (!node.hasFocus) return;
+    final nodeContext = node.context;
+    if (nodeContext == null) return;
+    Scrollable.ensureVisible(
+      nodeContext,
+      alignment: 0.12,
+      duration: _settingsFocusDuration(nodeContext),
+      curve: Curves.easeOutCubic,
+      alignmentPolicy: ScrollPositionAlignmentPolicy.explicit,
+    );
+  });
+  return focused;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // SettingsPage — mirrors Tauri SettingsPage.tsx:
 //   sidebar (header + nav + footer) + content header + scrollable body
@@ -178,7 +211,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
     if (_appActive) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         final node = _lastSettingsFocus;
-        if (mounted && node?.context != null) node?.requestFocus();
+        if (mounted && node?.context != null) {
+          _focusSettingsNode(context, node!);
+        }
       });
     }
   }
@@ -216,19 +251,19 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
     if (d != TraversalDirection.up) return false;
     final tab = ref.read(tabBarFocusRegistryProvider).forRoute('/settings');
     if (tab == null) return false;
-    Dpad.of(context).requestFocus(tab);
+    _focusSettingsNode(context, tab);
     return true;
   }
 
   bool _sidebarDirection(int index, TraversalDirection direction) {
     if (direction == TraversalDirection.up) {
       if (index == 0) return _firstNavItemUp(direction);
-      Dpad.of(context).requestFocus(_sidebarFocusNodes[index - 1]);
+      _focusSettingsNode(context, _sidebarFocusNodes[index - 1]);
       return true;
     }
     if (direction == TraversalDirection.down) {
       if (index < _sidebarFocusNodes.length - 1) {
-        Dpad.of(context).requestFocus(_sidebarFocusNodes[index + 1]);
+        _focusSettingsNode(context, _sidebarFocusNodes[index + 1]);
       }
       return true;
     }
@@ -244,18 +279,18 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
     final target = section ?? _section;
     final index = _sections.indexWhere((s) => s.id == target);
     if (index < 0) return false;
-    Dpad.of(context).requestFocus(_sidebarFocusNodes[index]);
+    _focusSettingsNode(context, _sidebarFocusNodes[index]);
     return true;
   }
 
   bool _focusScrollRail() {
-    Dpad.of(context).requestFocus(_scrollRailFocusNode);
+    _focusSettingsNode(context, _scrollRailFocusNode);
     return true;
   }
 
   bool _focusMounted(FocusNode node) {
     if (node.context == null) return false;
-    Dpad.of(context).requestFocus(node);
+    _focusSettingsNode(context, node);
     return true;
   }
 
@@ -335,7 +370,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
     );
     position.animateTo(
       next,
-      duration: const Duration(milliseconds: 240),
+      duration: _settingsScrollDuration(context),
       curve: Curves.easeOutCubic,
     );
   }
@@ -686,10 +721,12 @@ class _NavItemState extends State<_NavItem> {
       onExit: (_) => setState(() => _hovered = false),
       cursor: SystemMouseCursors.click,
       child: DpadFocusable(
+        effects: const [],
         focusNode: widget.focusNode,
         autofocus: widget.autofocus,
         onDirection: widget.onDirection,
         onSelect: widget.onTap,
+        autoScroll: false,
         tapToSelect: false,
         builder: (context, state, child) => _buildContent(
           state.focused || _hovered,
@@ -717,7 +754,7 @@ class _NavItemState extends State<_NavItem> {
     double hPad,
   ) {
     return AnimatedContainer(
-      duration: const Duration(milliseconds: 150),
+      duration: _settingsFocusDuration(context),
       color: !selected && active
           ? Colors.white.withAlpha(18)
           : Colors.transparent,
@@ -742,12 +779,16 @@ class _NavItemState extends State<_NavItem> {
                                 : Colors.white.withAlpha(13)),
                       borderRadius: BorderRadius.circular(8),
                       boxShadow: selected
-                          ? [
-                              BoxShadow(
-                                color: const Color(0xFF0DB2E2).withAlpha(56),
-                                blurRadius: 14,
-                              ),
-                            ]
+                          ? (_isTvScaled(context)
+                                ? null
+                                : [
+                                    BoxShadow(
+                                      color: const Color(
+                                        0xFF0DB2E2,
+                                      ).withAlpha(56),
+                                      blurRadius: 14,
+                                    ),
+                                  ])
                           : null,
                     ),
                     child: Icon(
@@ -832,13 +873,15 @@ class _SettingsScrollRail extends StatelessWidget {
       width: 24,
       child: Center(
         child: DpadFocusable(
+          effects: const [],
           focusNode: focusNode,
           onDirection: onDirection,
           onSelect: () {},
+          autoScroll: false,
           tapToSelect: false,
           builder: (context, state, child) {
             return AnimatedContainer(
-              duration: const Duration(milliseconds: 150),
+              duration: _settingsFocusDuration(context),
               width: state.focused ? 8 : 4,
               height: 120,
               decoration: BoxDecoration(
@@ -847,13 +890,15 @@ class _SettingsScrollRail extends StatelessWidget {
                     : Colors.white.withAlpha(30),
                 borderRadius: BorderRadius.circular(999),
                 boxShadow: state.focused
-                    ? [
-                        BoxShadow(
-                          color: const Color(0xFF0DB2E2).withAlpha(120),
-                          blurRadius: 18,
-                          spreadRadius: 2,
-                        ),
-                      ]
+                    ? (_isTvScaled(context)
+                          ? null
+                          : [
+                              BoxShadow(
+                                color: const Color(0xFF0DB2E2).withAlpha(120),
+                                blurRadius: 18,
+                                spreadRadius: 2,
+                              ),
+                            ])
                     : null,
               ),
             );
@@ -935,7 +980,7 @@ class _ConnectionPanelState extends ConsumerState<_ConnectionPanel> {
     if (direction == TraversalDirection.left) return widget.onFocusSidebar();
     if (direction == TraversalDirection.right) return widget.onFocusRail();
     if (direction == TraversalDirection.down) {
-      Dpad.of(context).requestFocus(widget.testFocusNode);
+      _focusSettingsNode(context, widget.testFocusNode);
       return true;
     }
     if (direction == TraversalDirection.up) return true;
@@ -945,11 +990,11 @@ class _ConnectionPanelState extends ConsumerState<_ConnectionPanel> {
   bool _testDirection(TraversalDirection direction) {
     if (direction == TraversalDirection.left) return widget.onFocusSidebar();
     if (direction == TraversalDirection.right) {
-      Dpad.of(context).requestFocus(widget.saveFocusNode);
+      _focusSettingsNode(context, widget.saveFocusNode);
       return true;
     }
     if (direction == TraversalDirection.up) {
-      Dpad.of(context).requestFocus(widget.wrapperFocusNode);
+      _focusSettingsNode(context, widget.wrapperFocusNode);
       return true;
     }
     if (direction == TraversalDirection.down) return true;
@@ -958,12 +1003,12 @@ class _ConnectionPanelState extends ConsumerState<_ConnectionPanel> {
 
   bool _saveDirection(TraversalDirection direction) {
     if (direction == TraversalDirection.left) {
-      Dpad.of(context).requestFocus(widget.testFocusNode);
+      _focusSettingsNode(context, widget.testFocusNode);
       return true;
     }
     if (direction == TraversalDirection.right) return widget.onFocusRail();
     if (direction == TraversalDirection.up) {
-      Dpad.of(context).requestFocus(widget.wrapperFocusNode);
+      _focusSettingsNode(context, widget.wrapperFocusNode);
       return true;
     }
     if (direction == TraversalDirection.down) return true;
@@ -1126,8 +1171,7 @@ class _ApiKeysPanel extends ConsumerWidget {
   });
 
   bool _focus(BuildContext context, FocusNode node) {
-    Dpad.of(context).requestFocus(node);
-    return true;
+    return _focusSettingsNode(context, node);
   }
 
   bool _fieldDirection(
@@ -1950,7 +1994,7 @@ class _AuthSectionPanel extends StatelessWidget {
     if (direction == TraversalDirection.left) return onFocusSidebar();
     if (direction == TraversalDirection.right) return onFocusRail();
     if (direction == TraversalDirection.down) {
-      Dpad.of(context).requestFocus(debridFocusNode);
+      _focusSettingsNode(context, debridFocusNode);
       return true;
     }
     if (direction == TraversalDirection.up) return true;
@@ -1961,7 +2005,7 @@ class _AuthSectionPanel extends StatelessWidget {
     if (direction == TraversalDirection.left) return onFocusSidebar();
     if (direction == TraversalDirection.right) return onFocusRail();
     if (direction == TraversalDirection.up) {
-      Dpad.of(context).requestFocus(traktFocusNode);
+      _focusSettingsNode(context, traktFocusNode);
       return true;
     }
     if (direction == TraversalDirection.down) return true;
@@ -2095,7 +2139,7 @@ class _CatalogPanelState extends ConsumerState<_CatalogPanel> {
     ).then((selected) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && idx < widget.configureFocusNodes.length) {
-          widget.configureFocusNodes[idx].requestFocus();
+          _focusSettingsNode(context, widget.configureFocusNodes[idx]);
         }
       });
       if (selected == null) return;
@@ -2114,18 +2158,18 @@ class _CatalogPanelState extends ConsumerState<_CatalogPanel> {
       return widget.onFocusSidebar();
     }
     if (direction == TraversalDirection.right && tab == 'movies') {
-      Dpad.of(context).requestFocus(widget.showFocusNode);
+      _focusSettingsNode(context, widget.showFocusNode);
       return true;
     }
     if (direction == TraversalDirection.left && tab == 'shows') {
-      Dpad.of(context).requestFocus(widget.movieFocusNode);
+      _focusSettingsNode(context, widget.movieFocusNode);
       return true;
     }
     if (direction == TraversalDirection.right && tab == 'shows') {
       return widget.onFocusRail();
     }
     if (direction == TraversalDirection.down) {
-      Dpad.of(context).requestFocus(widget.configureFocusNodes.first);
+      _focusSettingsNode(context, widget.configureFocusNodes.first);
       return true;
     }
     if (direction == TraversalDirection.up) return true;
@@ -2141,14 +2185,14 @@ class _CatalogPanelState extends ConsumerState<_CatalogPanel> {
                 ? widget.movieFocusNode
                 : widget.showFocusNode)
           : widget.configureFocusNodes[index - 1];
-      Dpad.of(context).requestFocus(target);
+      _focusSettingsNode(context, target);
       return true;
     }
     if (direction == TraversalDirection.down) {
       final target = index >= widget.configureFocusNodes.length - 1
           ? widget.saveFocusNode
           : widget.configureFocusNodes[index + 1];
-      Dpad.of(context).requestFocus(target);
+      _focusSettingsNode(context, target);
       return true;
     }
     return false;
@@ -2157,11 +2201,11 @@ class _CatalogPanelState extends ConsumerState<_CatalogPanel> {
   bool _saveDirection(TraversalDirection direction) {
     if (direction == TraversalDirection.left) return widget.onFocusSidebar();
     if (direction == TraversalDirection.right) {
-      Dpad.of(context).requestFocus(widget.refreshFocusNode);
+      _focusSettingsNode(context, widget.refreshFocusNode);
       return true;
     }
     if (direction == TraversalDirection.up) {
-      Dpad.of(context).requestFocus(widget.configureFocusNodes.last);
+      _focusSettingsNode(context, widget.configureFocusNodes.last);
       return true;
     }
     if (direction == TraversalDirection.down) return true;
@@ -2170,12 +2214,12 @@ class _CatalogPanelState extends ConsumerState<_CatalogPanel> {
 
   bool _refreshDirection(TraversalDirection direction) {
     if (direction == TraversalDirection.left) {
-      Dpad.of(context).requestFocus(widget.saveFocusNode);
+      _focusSettingsNode(context, widget.saveFocusNode);
       return true;
     }
     if (direction == TraversalDirection.right) return widget.onFocusRail();
     if (direction == TraversalDirection.up) {
-      Dpad.of(context).requestFocus(widget.configureFocusNodes.last);
+      _focusSettingsNode(context, widget.configureFocusNodes.last);
       return true;
     }
     if (direction == TraversalDirection.down) return true;
@@ -2624,8 +2668,7 @@ class _ConfigureWidgetDialogState extends State<_ConfigureWidgetDialog>
 
   bool _focusCatalogIndex(int index) {
     if (index < 0 || index >= _cardFocusNodes.length) return false;
-    Dpad.of(context).requestFocus(_cardFocusNodes[index]);
-    return true;
+    return _focusSettingsNode(context, _cardFocusNodes[index]);
   }
 
   _CatalogDialogPosition? _positionForIndex(
@@ -2724,7 +2767,7 @@ class _ConfigureWidgetDialogState extends State<_ConfigureWidgetDialog>
         );
     position.animateTo(
       next,
-      duration: const Duration(milliseconds: 240),
+      duration: _settingsScrollDuration(context),
       curve: Curves.easeOutCubic,
     );
   }
@@ -2783,9 +2826,10 @@ class _ConfigureWidgetDialogState extends State<_ConfigureWidgetDialog>
   bool _closeDirection(TraversalDirection direction) {
     if (direction == TraversalDirection.down ||
         direction == TraversalDirection.left) {
-      Dpad.of(
+      _focusSettingsNode(
         context,
-      ).requestFocus(_providerTab == 'tmdb' ? _tmdbFocusNode : _traktFocusNode);
+        _providerTab == 'tmdb' ? _tmdbFocusNode : _traktFocusNode,
+      );
       return true;
     }
     return true;
@@ -2797,7 +2841,7 @@ class _ConfigureWidgetDialogState extends State<_ConfigureWidgetDialog>
     TraversalDirection direction,
   ) {
     if (direction == TraversalDirection.up) {
-      Dpad.of(context).requestFocus(_closeFocusNode);
+      _focusSettingsNode(context, _closeFocusNode);
       return true;
     }
     if (direction == TraversalDirection.down) {
@@ -2812,15 +2856,15 @@ class _ConfigureWidgetDialogState extends State<_ConfigureWidgetDialog>
       return true;
     }
     if (direction == TraversalDirection.left && tab == 'trakt') {
-      Dpad.of(context).requestFocus(_tmdbFocusNode);
+      _focusSettingsNode(context, _tmdbFocusNode);
       return true;
     }
     if (direction == TraversalDirection.right && tab == 'tmdb') {
-      Dpad.of(context).requestFocus(_traktFocusNode);
+      _focusSettingsNode(context, _traktFocusNode);
       return true;
     }
     if (direction == TraversalDirection.right && tab == 'trakt') {
-      Dpad.of(context).requestFocus(_dialogScrollRailFocusNode);
+      _focusSettingsNode(context, _dialogScrollRailFocusNode);
       return true;
     }
     return true;
@@ -2853,9 +2897,10 @@ class _ConfigureWidgetDialogState extends State<_ConfigureWidgetDialog>
       if (target != null) {
         return _focusCatalogIndex(target.globalIndex);
       }
-      Dpad.of(
+      _focusSettingsNode(
         context,
-      ).requestFocus(_providerTab == 'tmdb' ? _tmdbFocusNode : _traktFocusNode);
+        _providerTab == 'tmdb' ? _tmdbFocusNode : _traktFocusNode,
+      );
       return true;
     }
 
@@ -2898,7 +2943,7 @@ class _ConfigureWidgetDialogState extends State<_ConfigureWidgetDialog>
       if (target != null) {
         _focusCatalogIndex(target.globalIndex);
       } else {
-        Dpad.of(context).requestFocus(_dialogScrollRailFocusNode);
+        _focusSettingsNode(context, _dialogScrollRailFocusNode);
       }
       return true;
     }

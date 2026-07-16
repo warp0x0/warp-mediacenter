@@ -18,6 +18,7 @@ import '../pages/power_page.dart';
 import '../pages/settings_page.dart';
 import '../pages/shows_page.dart';
 import '../theme/warp_theme.dart';
+import '../theme/warp_tokens.dart';
 import '../widgets/layout/backdrop_layer.dart';
 import 'last_tab_route.dart';
 import 'tab_bar_focus_registry.dart';
@@ -44,47 +45,84 @@ GoRouter warpRouter(Ref ref) {
     initialLocation: '/',
     observers: [routeObserver],
     routes: [
-      // Shell wraps all tab-bar screens — tab bar floats above content
-      ShellRoute(
-        builder: (context, state, child) => AppShell(child: child),
-        routes: [
-          GoRoute(path: '/', builder: (_, _) => const MoviesPage()),
-          GoRoute(path: '/shows', builder: (_, _) => const ShowsPage()),
-          GoRoute(path: '/search', builder: (_, _) => const SearchPage()),
-          GoRoute(path: '/library', builder: (_, _) => const LibraryPage()),
-          GoRoute(path: '/settings', builder: (_, _) => const SettingsPage()),
-          GoRoute(path: '/power', builder: (_, _) => const PowerPage()),
-          GoRoute(
-            path: '/catalog/:provider/:category',
-            builder: (ctx, state) {
-              final extra = state.extra;
-              return CatalogBrowsePage(
-                provider: state.pathParameters['provider']!,
-                category: state.pathParameters['category']!,
-                mediaType: state.uri.queryParameters['type'] ?? 'movie',
-                title: state.uri.queryParameters['title'],
-                returnFocusNode: extra is CatalogBrowseRouteExtra
-                    ? extra.returnFocusNode
-                    : null,
-              );
-            },
+      // Shell wraps all tab-bar screens — tab bar floats above content. The
+      // indexed stack keeps inactive tabs mounted so tab switching doesn't
+      // rebuild/refetch whole pages during the transition.
+      StatefulShellRoute.indexedStack(
+        builder: (context, state, navigationShell) =>
+            AppShell(navigationShell: navigationShell),
+        branches: [
+          StatefulShellBranch(
+            routes: [
+              GoRoute(path: '/search', builder: (_, _) => const SearchPage()),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/',
+                builder: (_, _) => const MoviesPage(),
+                routes: [
+                  GoRoute(
+                    path: 'catalog/:provider/:category',
+                    builder: (ctx, state) {
+                      final extra = state.extra;
+                      return CatalogBrowsePage(
+                        provider: state.pathParameters['provider']!,
+                        category: state.pathParameters['category']!,
+                        mediaType: state.uri.queryParameters['type'] ?? 'movie',
+                        title: state.uri.queryParameters['title'],
+                        returnFocusNode: extra is CatalogBrowseRouteExtra
+                            ? extra.returnFocusNode
+                            : null,
+                      );
+                    },
+                  ),
+                ],
+              ),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(path: '/shows', builder: (_, _) => const ShowsPage()),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(path: '/library', builder: (_, _) => const LibraryPage()),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/settings',
+                builder: (_, _) => const SettingsPage(),
+              ),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(path: '/power', builder: (_, _) => const PowerPage()),
+            ],
           ),
         ],
       ),
       // Full-screen routes (no TabBar/Shell)
       GoRoute(
         path: '/detail/:mediaType/:mediaId',
-        builder: (ctx, state) {
+        pageBuilder: (ctx, state) {
           final extra = state.extra;
-          return DetailViewPage(
-            mediaType: state.pathParameters['mediaType']!,
-            mediaId: state.pathParameters['mediaId']!,
-            item: extra is DetailRouteExtra
-                ? extra.item
-                : (extra is MediaItem ? extra : null),
-            returnFocusNode: extra is DetailRouteExtra
-                ? extra.returnFocusNode
-                : null,
+          return NoTransitionPage(
+            child: DetailViewPage(
+              mediaType: state.pathParameters['mediaType']!,
+              mediaId: state.pathParameters['mediaId']!,
+              item: extra is DetailRouteExtra
+                  ? extra.item
+                  : (extra is MediaItem ? extra : null),
+              returnFocusNode: extra is DetailRouteExtra
+                  ? extra.returnFocusNode
+                  : null,
+            ),
           );
         },
       ),
@@ -117,14 +155,30 @@ GoRouter warpRouter(Ref ref) {
 //   • No global backdrop widget — each WidgetSection renders its own
 // ─────────────────────────────────────────────────────────────────────────────
 
-class AppShell extends ConsumerWidget {
-  final Widget child;
-  const AppShell({super.key, required this.child});
+class AppShell extends ConsumerStatefulWidget {
+  final StatefulNavigationShell navigationShell;
+  const AppShell({super.key, required this.navigationShell});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<AppShell> createState() => _AppShellState();
+}
+
+class _AppShellState extends ConsumerState<AppShell> {
+  int? _lastSelectedIndex;
+
+  @override
+  Widget build(BuildContext context) {
     final path = GoRouterState.of(context).uri.path;
     final selectedIndex = _routeIndex(path);
+    final isTV = ref.watch(uiDensityProvider) == UiDensity.tv;
+    if (_lastSelectedIndex == null) {
+      _lastSelectedIndex = selectedIndex;
+    } else if (_lastSelectedIndex != selectedIndex) {
+      _lastSelectedIndex = selectedIndex;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) ref.read(backdropProvider.notifier).clear();
+      });
+    }
     if (path != '/search') LastTabRoute.value = path;
 
     // No SafeArea — backdrop must fill the full window edge-to-edge,
@@ -139,13 +193,25 @@ class AppShell extends ConsumerWidget {
           // Pages write backdropProvider on focus change; this widget just renders it.
           const BackdropLayer(),
           // Content (transparent — backdrop shows through)
-          child,
+          widget.navigationShell,
           // Floating tab bar — blur + gradient background, pill-style active tab
           Positioned(
             top: 0,
             left: 0,
             right: 0,
-            child: _WarpTabBar(selectedIndex: selectedIndex),
+            child: _WarpTabBar(
+              selectedIndex: selectedIndex,
+              isTV: isTV,
+              onTabSelected: (index) {
+                if (index != widget.navigationShell.currentIndex) {
+                  ref.read(backdropProvider.notifier).clear();
+                }
+                widget.navigationShell.goBranch(
+                  index,
+                  initialLocation: index == widget.navigationShell.currentIndex,
+                );
+              },
+            ),
           ),
         ],
       ),
@@ -172,7 +238,14 @@ class AppShell extends ConsumerWidget {
 
 class _WarpTabBar extends StatelessWidget {
   final int selectedIndex;
-  const _WarpTabBar({required this.selectedIndex});
+  final bool isTV;
+  final ValueChanged<int> onTabSelected;
+
+  const _WarpTabBar({
+    required this.selectedIndex,
+    required this.isTV,
+    required this.onTabSelected,
+  });
 
   static const _tabs = [
     (icon: Icons.search, label: 'Search', route: '/search'),
@@ -193,44 +266,52 @@ class _WarpTabBar extends StatelessWidget {
     // CSS: gap: clamp(16px, 2vw, 40px)
     final gap = scaler.scale((screenW * 0.02).clamp(16.0, 40.0));
 
-    return ClipRect(
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-        child: Container(
-          height: barH,
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [
-                Color(0xE6000000), // rgba(0,0,0,0.9)
-                Color(0x99000000), // rgba(0,0,0,0.6)
-                Color(0x00000000), // transparent
+    final bar = Container(
+      height: barH,
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Color(0xE6000000), // rgba(0,0,0,0.9)
+            Color(0x99000000), // rgba(0,0,0,0.6)
+            Color(0x00000000), // transparent
+          ],
+          stops: [0.0, 0.6, 1.0],
+        ),
+      ),
+      // FittedBox scales the pill row down uniformly on narrow windows,
+      // so individual pill sizes stay proportional (matches CSS clamp behaviour).
+      child: Center(
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: DpadRegion(
+            memoryKey: 'tab-bar',
+            horizontalEdge: DpadEdgeBehavior.stop,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (int i = 0; i < _tabs.length; i++) ...[
+                  if (i > 0) SizedBox(width: gap),
+                  _TabPill(
+                    tab: _tabs[i],
+                    isActive: selectedIndex == i,
+                    onSelect: () => onTabSelected(i),
+                  ),
+                ],
               ],
-              stops: [0.0, 0.6, 1.0],
-            ),
-          ),
-          // FittedBox scales the pill row down uniformly on narrow windows,
-          // so individual pill sizes stay proportional (matches CSS clamp behaviour).
-          child: Center(
-            child: FittedBox(
-              fit: BoxFit.scaleDown,
-              child: DpadRegion(
-                memoryKey: 'tab-bar',
-                horizontalEdge: DpadEdgeBehavior.stop,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    for (int i = 0; i < _tabs.length; i++) ...[
-                      if (i > 0) SizedBox(width: gap),
-                      _TabPill(tab: _tabs[i], isActive: selectedIndex == i),
-                    ],
-                  ],
-                ),
-              ),
             ),
           ),
         ),
+      ),
+    );
+
+    if (isTV) return bar;
+
+    return ClipRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+        child: bar,
       ),
     );
   }
@@ -239,8 +320,13 @@ class _WarpTabBar extends StatelessWidget {
 class _TabPill extends ConsumerStatefulWidget {
   final ({IconData icon, String label, String route}) tab;
   final bool isActive;
+  final VoidCallback onSelect;
 
-  const _TabPill({required this.tab, required this.isActive});
+  const _TabPill({
+    required this.tab,
+    required this.isActive,
+    required this.onSelect,
+  });
 
   @override
   ConsumerState<_TabPill> createState() => _TabPillState();
@@ -293,7 +379,7 @@ class _TabPillState extends ConsumerState<_TabPill> {
       cursor: SystemMouseCursors.click,
       child: DpadFocusable(
         focusNode: _focusNode,
-        onSelect: () => context.go(widget.tab.route),
+        onSelect: widget.onSelect,
         builder: (context, state, child) {
           final active = widget.isActive || state.focused || _hovered;
           // The active-tab pill and a focused pill share the exact same

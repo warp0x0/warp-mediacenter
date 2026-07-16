@@ -437,15 +437,13 @@ class _TwoColumnRow extends StatelessWidget {
         if (constraints.maxWidth < 600) {
           return Column(children: [left, const SizedBox(height: 16), right]);
         }
-        return IntrinsicHeight(
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Expanded(child: left),
-              const SizedBox(width: 16),
-              Expanded(child: right),
-            ],
-          ),
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(child: left),
+            const SizedBox(width: 16),
+            Expanded(child: right),
+          ],
         );
       },
     );

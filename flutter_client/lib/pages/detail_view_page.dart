@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:developer' as developer;
 import 'dart:math' as math;
-import 'dart:ui';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:dio/dio.dart';
 import 'package:dpad/dpad.dart';
@@ -38,6 +37,56 @@ class _ShowResumeInfo {
     required this.episode,
     required this.isScrobbled,
     required this.progress,
+  });
+}
+
+int _targetCacheDimension(
+  BuildContext context,
+  double displayDimension, {
+  required int max,
+}) {
+  final media = MediaQuery.of(context);
+  final view = View.maybeOf(context);
+  final logicalViewportWidth = view == null
+      ? media.size.width
+      : view.physicalSize.width / view.devicePixelRatio;
+  final paintScale = media.size.width <= 0
+      ? 1.0
+      : (logicalViewportWidth / media.size.width).clamp(0.1, 1.0);
+  final pixels = (displayDimension * media.devicePixelRatio * paintScale)
+      .ceil();
+  return pixels.clamp(1, max).toInt();
+}
+
+bool _disableImageFade(BuildContext context) {
+  final media = MediaQuery.of(context);
+  final view = View.maybeOf(context);
+  if (view == null || media.size.width <= 0) return false;
+  final logicalViewportWidth = view.physicalSize.width / view.devicePixelRatio;
+  return media.size.width > logicalViewportWidth * 1.2;
+}
+
+Duration _detailFocusDuration(BuildContext context) =>
+    _disableImageFade(context)
+    ? const Duration(milliseconds: 90)
+    : const Duration(milliseconds: 150);
+
+Duration _detailScrollDuration(BuildContext context) =>
+    _disableImageFade(context)
+    ? const Duration(milliseconds: 150)
+    : const Duration(milliseconds: 240);
+
+void _revealFocusedNode(BuildContext context, FocusNode node) {
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    final nodeContext = node.context;
+    if (nodeContext == null) return;
+    Scrollable.ensureVisible(
+      nodeContext,
+      alignment: 0.12,
+      duration: _detailFocusDuration(nodeContext),
+      curve: Curves.easeOutCubic,
+      alignmentPolicy: ScrollPositionAlignmentPolicy.explicit,
+    );
   });
 }
 
@@ -79,6 +128,8 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
   double? _resumePercent;
   String? _markingEpisodeKey;
   bool _pushedPlayback = false;
+  bool _showDeferredSections = false;
+  Timer? _deferredSectionsTimer;
   FocusNode? _lastDetailFocus;
   FocusNode? _lastEpisodeActionFocusNode;
   bool _appActive = true;
@@ -119,7 +170,10 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
   FocusNode get _heroEntryNode =>
       _hasTrailer ? _playTrailerFocusNode : _playResumeFocusNode;
 
-  void _focus(FocusNode node) => Dpad.of(context).requestFocus(node);
+  void _focus(FocusNode node) {
+    Dpad.of(context).requestFocus(node);
+    _revealFocusedNode(context, node);
+  }
 
   void _restoreOriginFocus() {
     final node = widget.returnFocusNode;
@@ -149,7 +203,7 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
         );
     position.animateTo(
       next,
-      duration: const Duration(milliseconds: 240),
+      duration: _detailScrollDuration(context),
       curve: Curves.easeOutCubic,
     );
   }
@@ -175,15 +229,15 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
       return true;
     }
     if (_hasCast) {
-      Dpad.of(context).requestFocus(_castEntryFocusNode);
+      _focus(_castEntryFocusNode);
       return true;
     }
     if (_hasWhereToWatch) {
-      Dpad.of(context).requestFocus(_whereToWatchEntryFocusNode);
+      _focus(_whereToWatchEntryFocusNode);
       return true;
     }
     if (_hasLocalSources) {
-      Dpad.of(context).requestFocus(_localSourcesEntryFocusNode);
+      _focus(_localSourcesEntryFocusNode);
       return true;
     }
     return false;
@@ -255,7 +309,7 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
       return true;
     }
     if (d != TraversalDirection.up) return false;
-    Dpad.of(context).requestFocus(_heroEntryNode);
+    _focus(_heroEntryNode);
     return true;
   }
 
@@ -263,15 +317,15 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
   bool _episodesLastDown(TraversalDirection d) {
     if (d != TraversalDirection.down) return false;
     if (_hasCast) {
-      Dpad.of(context).requestFocus(_castEntryFocusNode);
+      _focus(_castEntryFocusNode);
       return true;
     }
     if (_hasWhereToWatch) {
-      Dpad.of(context).requestFocus(_whereToWatchEntryFocusNode);
+      _focus(_whereToWatchEntryFocusNode);
       return true;
     }
     if (_hasLocalSources) {
-      Dpad.of(context).requestFocus(_localSourcesEntryFocusNode);
+      _focus(_localSourcesEntryFocusNode);
       return true;
     }
     return false;
@@ -284,17 +338,15 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
     }
     if (d == TraversalDirection.up) {
       if (_hasCast) {
-        Dpad.of(context).requestFocus(_castEntryFocusNode);
+        _focus(_castEntryFocusNode);
       } else {
-        Dpad.of(
-          context,
-        ).requestFocus(_hasEpisodes ? _episodesEntryFocusNode : _heroEntryNode);
+        _focus(_hasEpisodes ? _episodesEntryFocusNode : _heroEntryNode);
       }
       return true;
     }
     if (d == TraversalDirection.down) {
       if (_hasLocalSources) {
-        Dpad.of(context).requestFocus(_localSourcesEntryFocusNode);
+        _focus(_localSourcesEntryFocusNode);
         return true;
       }
       return false;
@@ -306,11 +358,9 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
     if (d != TraversalDirection.up) return false;
     final lastEpisode = _lastEpisodeActionFocusNode;
     if (_hasEpisodes && lastEpisode?.context != null) {
-      Dpad.of(context).requestFocus(lastEpisode!);
+      _focus(lastEpisode!);
     } else {
-      Dpad.of(
-        context,
-      ).requestFocus(_hasEpisodes ? _episodesEntryFocusNode : _heroEntryNode);
+      _focus(_hasEpisodes ? _episodesEntryFocusNode : _heroEntryNode);
     }
     return true;
   }
@@ -318,11 +368,11 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
   bool _castDown(TraversalDirection d) {
     if (d != TraversalDirection.down) return false;
     if (_hasWhereToWatch) {
-      Dpad.of(context).requestFocus(_whereToWatchEntryFocusNode);
+      _focus(_whereToWatchEntryFocusNode);
       return true;
     }
     if (_hasLocalSources) {
-      Dpad.of(context).requestFocus(_localSourcesEntryFocusNode);
+      _focus(_localSourcesEntryFocusNode);
       return true;
     }
     return true;
@@ -337,18 +387,18 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
     }
     if (d != TraversalDirection.up) return false;
     if (_hasWhereToWatch) {
-      Dpad.of(context).requestFocus(_whereToWatchEntryFocusNode);
+      _focus(_whereToWatchEntryFocusNode);
       return true;
     }
     if (_hasCast) {
-      Dpad.of(context).requestFocus(_castEntryFocusNode);
+      _focus(_castEntryFocusNode);
       return true;
     }
     if (_hasEpisodes) {
-      Dpad.of(context).requestFocus(_episodesEntryFocusNode);
+      _focus(_episodesEntryFocusNode);
       return true;
     }
-    Dpad.of(context).requestFocus(_heroEntryNode);
+    _focus(_heroEntryNode);
     return true;
   }
 
@@ -357,6 +407,9 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     FocusManager.instance.addListener(_rememberDetailFocus);
+    _deferredSectionsTimer = Timer(const Duration(milliseconds: 240), () {
+      if (mounted) setState(() => _showDeferredSections = true);
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _seedBackdrop();
     });
@@ -374,6 +427,7 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
     FocusManager.instance.removeListener(_rememberDetailFocus);
     WidgetsBinding.instance.removeObserver(this);
     routeObserver.unsubscribe(this);
+    _deferredSectionsTimer?.cancel();
     _scrollCtrl.dispose();
     _backFocusNode.dispose();
     _playTrailerFocusNode.dispose();
@@ -814,10 +868,7 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
 
   @override
   Widget build(BuildContext context) {
-    WarpTokens.watch(
-      context,
-      ref,
-    ); // keep tokens provider alive for child widgets
+    final tokens = WarpTokens.watch(context, ref);
     final size = MediaQuery.sizeOf(context);
     final tmdbId = widget.mediaId;
     final hPad = (size.width * 0.025).clamp(20.0, 48.0);
@@ -905,6 +956,20 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
     final posterW = (size.width * 0.18).clamp(200.0, 280.0);
     final posterH = (size.width * 0.27).clamp(300.0, 420.0);
     final spacerH = (size.width * 0.23).clamp(180.0, 240.0);
+    final backdropCacheWidth = _targetCacheDimension(
+      context,
+      size.width,
+      max: 1280,
+    );
+    final backdropCacheHeight = (backdropCacheWidth * 9 / 16).round();
+    final posterCacheWidth = _targetCacheDimension(context, posterW, max: 500);
+    final posterCacheHeight = _targetCacheDimension(context, posterH, max: 750);
+    final imageFadeIn = tokens.isTV
+        ? Duration.zero
+        : const Duration(milliseconds: 500);
+    final imageFadeOut = tokens.isTV
+        ? Duration.zero
+        : const Duration(milliseconds: 1000);
 
     // Resume / progress state
     final showResumeInfo = _computeShowResumeInfo(showProgress);
@@ -943,14 +1008,17 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
     // is known (this page loads its detail data asynchronously).
     _hasTrailer = trailerUrl != null;
     _hasEpisodes =
-        _isShow && (seasonsAsync?.asData?.value?.seasons.isNotEmpty ?? false);
-    _hasCast = cast.isNotEmpty;
+        _showDeferredSections &&
+        _isShow &&
+        (seasonsAsync?.asData?.value?.seasons.isNotEmpty ?? false);
+    _hasCast = _showDeferredSections && cast.isNotEmpty;
     _hasWhereToWatch =
+        _showDeferredSections &&
         watchProviders != null &&
         (watchProviders.streaming.isNotEmpty ||
             watchProviders.rent.isNotEmpty ||
             watchProviders.buy.isNotEmpty);
-    _hasLocalSources = sources.isNotEmpty;
+    _hasLocalSources = _showDeferredSections && sources.isNotEmpty;
     if (!_initialFocusRequested && !isDetailLoading) {
       _initialFocusRequested = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -986,6 +1054,10 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
                             imageUrl: backdropImg,
                             fit: BoxFit.cover,
                             alignment: Alignment.topCenter,
+                            memCacheWidth: backdropCacheWidth,
+                            memCacheHeight: backdropCacheHeight,
+                            fadeInDuration: imageFadeIn,
+                            fadeOutDuration: imageFadeOut,
                             placeholder: (_, _) =>
                                 const ColoredBox(color: Color(0xFF181818)),
                             errorWidget: (_, _, _) =>
@@ -1191,6 +1263,10 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
                                         ? CachedNetworkImage(
                                             imageUrl: posterImg,
                                             fit: BoxFit.cover,
+                                            memCacheWidth: posterCacheWidth,
+                                            memCacheHeight: posterCacheHeight,
+                                            fadeInDuration: imageFadeIn,
+                                            fadeOutDuration: imageFadeOut,
                                             placeholder: (_, _) =>
                                                 const SizedBox.shrink(),
                                             errorWidget: (_, _, _) => Center(
@@ -1445,7 +1521,8 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
                 ),
 
                 // ── Director / Writers / Year ───────────────────────────────────
-                if (!isDetailLoading &&
+                if (_showDeferredSections &&
+                    !isDetailLoading &&
                     (director != null || writers.isNotEmpty))
                   SliverToBoxAdapter(
                     child: Container(
@@ -1475,7 +1552,7 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
                   ),
 
                 // ── Episodes section (shows) ─────────────────────────────────────
-                if (_isShow && seasonsAsync != null)
+                if (_showDeferredSections && _isShow && seasonsAsync != null)
                   SliverToBoxAdapter(
                     child: seasonsAsync.when(
                       loading: () => const SizedBox.shrink(),
@@ -1529,7 +1606,9 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
                   ),
 
                 // ── Cast section (with chevrons — user requirement) ──────────────
-                if (!isDetailLoading && cast.isNotEmpty)
+                if (_showDeferredSections &&
+                    !isDetailLoading &&
+                    cast.isNotEmpty)
                   SliverToBoxAdapter(
                     child: _CastSection(
                       cast: cast,
@@ -1542,7 +1621,8 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
                   ),
 
                 // ── Where to Watch ───────────────────────────────────────────────
-                if (watchProviders != null &&
+                if (_showDeferredSections &&
+                    watchProviders != null &&
                     (watchProviders.streaming.isNotEmpty ||
                         watchProviders.rent.isNotEmpty ||
                         watchProviders.buy.isNotEmpty))
@@ -1556,7 +1636,7 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
                   ),
 
                 // ── Local Sources ────────────────────────────────────────────────
-                if (sources.isNotEmpty)
+                if (_showDeferredSections && sources.isNotEmpty)
                   SliverToBoxAdapter(
                     child: _LocalSourcesSection(
                       sources: sources,
@@ -1570,7 +1650,8 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
                   ),
 
                 // ── "Add to library" hint ────────────────────────────────────────
-                if (libraryAsync.asData?.value == null &&
+                if (_showDeferredSections &&
+                    libraryAsync.asData?.value == null &&
                     !libraryAsync.isLoading)
                   SliverToBoxAdapter(
                     child: Padding(
@@ -1678,16 +1759,19 @@ class _DetailScrollRail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isTV = _disableImageFade(context);
     return SizedBox(
       width: 24,
       child: Center(
         child: DpadFocusable(
+          effects: const [],
           focusNode: focusNode,
           onDirection: onDirection,
           onSelect: () {},
+          autoScroll: false,
           tapToSelect: false,
           builder: (context, state, child) => AnimatedContainer(
-            duration: const Duration(milliseconds: 150),
+            duration: _detailFocusDuration(context),
             width: state.focused ? 8 : 4,
             height: 132,
             decoration: BoxDecoration(
@@ -1696,13 +1780,15 @@ class _DetailScrollRail extends StatelessWidget {
                   : Colors.white.withAlpha(30),
               borderRadius: BorderRadius.circular(999),
               boxShadow: state.focused
-                  ? [
-                      BoxShadow(
-                        color: const Color(0xFF0DB2E2).withAlpha(120),
-                        blurRadius: 18,
-                        spreadRadius: 2,
-                      ),
-                    ]
+                  ? (isTV
+                        ? null
+                        : [
+                            BoxShadow(
+                              color: const Color(0xFF0DB2E2).withAlpha(120),
+                              blurRadius: 18,
+                              spreadRadius: 2,
+                            ),
+                          ])
                   : null,
             ),
           ),
@@ -1735,14 +1821,17 @@ class _BackButtonState extends State<_BackButton> {
   @override
   Widget build(BuildContext context) {
     final scaler = MediaQuery.textScalerOf(context);
+    final isTV = _disableImageFade(context);
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
       cursor: SystemMouseCursors.click,
       child: DpadFocusable(
+        effects: const [],
         focusNode: widget.focusNode,
         onDirection: widget.onDirection,
         onSelect: widget.onBack,
+        autoScroll: false,
         tapToSelect: false,
         builder: (context, state, child) {
           final active = state.focused || _hovered;
@@ -1752,7 +1841,7 @@ class _BackButtonState extends State<_BackButton> {
               widget.onBack();
             },
             child: AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
+              duration: _detailFocusDuration(context),
               width: scaler.scale(100),
               height: scaler.scale(40),
               decoration: BoxDecoration(
@@ -1760,13 +1849,15 @@ class _BackButtonState extends State<_BackButton> {
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(color: _backColor, width: 1),
                 boxShadow: active
-                    ? const [
-                        BoxShadow(
-                          color: _backShadow,
-                          blurRadius: 16,
-                          offset: Offset(0, 4),
-                        ),
-                      ]
+                    ? (isTV
+                          ? null
+                          : const [
+                              BoxShadow(
+                                color: _backShadow,
+                                blurRadius: 16,
+                                offset: Offset(0, 4),
+                              ),
+                            ])
                     : null,
               ),
               child: Row(
@@ -1828,10 +1919,12 @@ class _PlayTrailerButtonState extends State<_PlayTrailerButton> {
       onExit: (_) => setState(() => _hovered = false),
       cursor: SystemMouseCursors.click,
       child: DpadFocusable(
+        effects: const [],
         focusNode: widget.focusNode,
         onDirection: widget.onDirection,
         onSelect: widget.loading ? () {} : widget.onTap,
         enabled: !widget.loading,
+        autoScroll: false,
         tapToSelect: false,
         builder: (context, state, child) {
           // Global rule: CTA buttons never show a ring — dark/cyan-border
@@ -1847,7 +1940,7 @@ class _PlayTrailerButtonState extends State<_PlayTrailerButton> {
             child: Transform.translate(
               offset: _hovered ? const Offset(0, -2) : Offset.zero,
               child: AnimatedContainer(
-                duration: const Duration(milliseconds: 150),
+                duration: _detailFocusDuration(context),
                 width: scaler.scale(150),
                 height: scaler.scale(40),
                 decoration: BoxDecoration(
@@ -1948,14 +2041,17 @@ class _PlayResumeButtonState extends State<_PlayResumeButton> {
   @override
   Widget build(BuildContext context) {
     final scaler = MediaQuery.textScalerOf(context);
+    final isTV = _disableImageFade(context);
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
       cursor: SystemMouseCursors.click,
       child: DpadFocusable(
+        effects: const [],
         focusNode: widget.focusNode,
         onDirection: widget.onDirection,
         onSelect: widget.onTap,
+        autoScroll: false,
         tapToSelect: false,
         builder: (context, state, child) {
           final active = state.focused || _hovered;
@@ -1967,7 +2063,7 @@ class _PlayResumeButtonState extends State<_PlayResumeButton> {
             child: Transform.translate(
               offset: _hovered ? const Offset(0, -2) : Offset.zero,
               child: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
+                duration: _detailFocusDuration(context),
                 constraints: BoxConstraints(minWidth: scaler.scale(150)),
                 height: scaler.scale(40),
                 padding: EdgeInsets.symmetric(horizontal: scaler.scale(16)),
@@ -1979,13 +2075,15 @@ class _PlayResumeButtonState extends State<_PlayResumeButton> {
                     width: 1,
                   ),
                   boxShadow: active
-                      ? [
-                          BoxShadow(
-                            color: _shadow,
-                            blurRadius: 16,
-                            offset: const Offset(0, 4),
-                          ),
-                        ]
+                      ? (isTV
+                            ? null
+                            : [
+                                BoxShadow(
+                                  color: _shadow,
+                                  blurRadius: 16,
+                                  offset: const Offset(0, 4),
+                                ),
+                              ])
                       : null,
                 ),
                 child: Row(
@@ -2054,15 +2152,18 @@ class _CircleActionButtonState extends State<_CircleActionButton> {
   @override
   Widget build(BuildContext context) {
     final scaler = MediaQuery.textScalerOf(context);
+    final isTV = _disableImageFade(context);
     // Tauri: w-12 h-12 (48×48) rounded-full backdrop-blur-3xl hover:scale-110
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
       cursor: SystemMouseCursors.click,
       child: DpadFocusable(
+        effects: const [],
         focusNode: widget.focusNode,
         onDirection: widget.onDirection,
         onSelect: widget.onTap,
+        autoScroll: false,
         tapToSelect: false,
         builder: (context, state, child) => GestureDetector(
           onTap: () {
@@ -2070,14 +2171,14 @@ class _CircleActionButtonState extends State<_CircleActionButton> {
             widget.onTap();
           },
           child: AnimatedScale(
-            scale: (_hovered || state.focused) ? 1.10 : 1.0,
-            duration: const Duration(milliseconds: 200),
+            scale: isTV ? 1.0 : ((_hovered || state.focused) ? 1.10 : 1.0),
+            duration: _detailFocusDuration(context),
             child: Stack(
               clipBehavior: Clip.none,
               alignment: Alignment.center,
               children: [
                 AnimatedContainer(
-                  duration: const Duration(milliseconds: 150),
+                  duration: _detailFocusDuration(context),
                   padding: EdgeInsets.all(state.focused ? scaler.scale(4) : 0),
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
@@ -2085,46 +2186,45 @@ class _CircleActionButtonState extends State<_CircleActionButton> {
                         ? Border.all(color: Colors.white, width: 2.5)
                         : null,
                     boxShadow: state.focused
-                        ? const [
-                            BoxShadow(
-                              color: Color(0xCC000000),
-                              blurRadius: 18,
-                              spreadRadius: 2,
-                            ),
-                          ]
+                        ? (isTV
+                              ? null
+                              : const [
+                                  BoxShadow(
+                                    color: Color(0xCC000000),
+                                    blurRadius: 18,
+                                    spreadRadius: 2,
+                                  ),
+                                ])
                         : null,
                   ),
                   child: ClipOval(
-                    child: BackdropFilter(
-                      filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
-                        width: scaler.scale(48),
-                        height: scaler.scale(48),
-                        decoration: BoxDecoration(
-                          color: widget.active
-                              ? Color.alphaBlend(
-                                  widget.activeColor,
-                                  const Color(0xCC000000),
-                                )
-                              : const Color(0xCC000000),
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: state.focused
-                                ? Colors.black
-                                : widget.active
-                                ? widget.activeBorderColor
-                                : Colors.white.withAlpha(80),
-                            width: state.focused ? 2 : 1,
-                          ),
+                    child: AnimatedContainer(
+                      duration: _detailFocusDuration(context),
+                      width: scaler.scale(48),
+                      height: scaler.scale(48),
+                      decoration: BoxDecoration(
+                        color: widget.active
+                            ? Color.alphaBlend(
+                                widget.activeColor,
+                                const Color(0xCC000000),
+                              )
+                            : const Color(0xCC000000),
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: state.focused
+                              ? Colors.black
+                              : widget.active
+                              ? widget.activeBorderColor
+                              : Colors.white.withAlpha(80),
+                          width: state.focused ? 2 : 1,
                         ),
-                        child: Icon(
-                          widget.icon,
-                          color: widget.active
-                              ? widget.activeIconColor
-                              : Colors.white,
-                          size: scaler.scale(20),
-                        ),
+                      ),
+                      child: Icon(
+                        widget.icon,
+                        color: widget.active
+                            ? widget.activeIconColor
+                            : Colors.white,
+                        size: scaler.scale(20),
                       ),
                     ),
                   ),
@@ -2384,7 +2484,13 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
     for (final fn in _episodeFocusNodes) {
       fn.dispose();
     }
-    _episodeFocusNodes = List.generate(count, (_) => FocusNode());
+    _episodeFocusNodes = List.generate(count, (_) {
+      final node = FocusNode();
+      node.addListener(() {
+        if (node.hasFocus) _revealFocusedNode(context, node);
+      });
+      return node;
+    });
   }
 
   void _reportLastEpisodeFocusNode() {
@@ -2404,6 +2510,7 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
     if (!Dpad.of(context).requestFocus(node)) {
       node.requestFocus();
     }
+    _revealFocusedNode(context, node);
   }
 
   int _seasonEntryIndex() {
@@ -2425,7 +2532,7 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
       _seasonScroll
           .animateTo(
             target,
-            duration: const Duration(milliseconds: 220),
+            duration: _detailFocusDuration(context),
             curve: Curves.easeOutCubic,
           )
           .then((_) {
@@ -2485,6 +2592,7 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
     if (d == TraversalDirection.down) {
       if (_episodeFocusNodes.isNotEmpty) {
         Dpad.of(context).requestFocus(_episodeFocusNodes[0]);
+        _revealFocusedNode(context, _episodeFocusNodes[0]);
         return true;
       }
       return false;
@@ -2539,7 +2647,7 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
               ],
             ],
           ),
-          const SizedBox(height: 28),
+          const SizedBox(height: 32),
 
           // Season selector with chevrons
           Row(
@@ -2548,7 +2656,7 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
                 icon: Icons.chevron_left,
                 onTap: () => _seasonScroll.animateTo(
                   _seasonScroll.offset - 300,
-                  duration: const Duration(milliseconds: 280),
+                  duration: _detailScrollDuration(context),
                   curve: Curves.easeOut,
                 ),
               ),
@@ -2556,7 +2664,7 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
               Expanded(
                 child: SizedBox(
                   key: _seasonViewportKey,
-                  height: scaler.scale(40),
+                  height: scaler.scale(50),
                   child: ScrollConfiguration(
                     behavior: ScrollConfiguration.of(
                       context,
@@ -2591,14 +2699,14 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
                 icon: Icons.chevron_right,
                 onTap: () => _seasonScroll.animateTo(
                   _seasonScroll.offset + 300,
-                  duration: const Duration(milliseconds: 280),
+                  duration: _detailScrollDuration(context),
                   curve: Curves.easeOut,
                 ),
               ),
             ],
           ),
 
-          const SizedBox(height: 28),
+          const SizedBox(height: 34),
 
           // Episode cards
           if (selected?.episodes?.isNotEmpty == true)
@@ -2786,80 +2894,86 @@ class _SeasonPillState extends State<_SeasonPill> {
       onExit: (_) => setState(() => _hovered = false),
       cursor: SystemMouseCursors.click,
       child: DpadFocusable(
+        effects: const [],
         focusNode: widget.focusNode,
         onDirection: widget.onDirection,
         onSelect: widget.onTap,
+        autoScroll: false,
         tapToSelect: false,
-        builder: (context, state, child) => GestureDetector(
-          onTap: () {
-            widget.focusNode?.requestFocus();
-            widget.onTap();
-          },
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 150),
-            padding: EdgeInsets.symmetric(
-              horizontal: scaler.scale(18),
-              vertical: scaler.scale(7),
-            ),
-            decoration: BoxDecoration(
-              color: active
-                  ? const Color(0xFF0DB2E2)
-                  : (_hovered
-                        ? Colors.white.withAlpha(20)
-                        : Colors.white.withAlpha(15)),
-              borderRadius: BorderRadius.circular(99),
-              border: state.focused
-                  ? Border.all(
-                      color: active ? Colors.white : WarpColors.accent,
-                      width: 2.5,
-                    )
-                  : (active
-                        ? null
-                        : Border.all(
-                            color: Colors.white.withAlpha(_hovered ? 38 : 25),
-                          )),
-              boxShadow: state.focused
-                  ? const [
-                      BoxShadow(
-                        color: Color(0xCC000000),
-                        blurRadius: 12,
-                        spreadRadius: 1,
-                      ),
-                      BoxShadow(color: Color(0x9901B4E4), blurRadius: 18),
-                    ]
-                  : active
-                  ? const [BoxShadow(color: Color(0x5901B4E4), blurRadius: 14)]
-                  : null,
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  'S${widget.seasonNumber.toString().padLeft(2, '0')}',
-                  style: TextStyle(
-                    color: active
-                        ? Colors.black
-                        : Colors.white.withAlpha(_hovered ? 180 : 140),
-                    fontWeight: FontWeight.w600,
-                    fontSize: 14,
-                  ),
+        builder: (context, state, child) {
+          final showRing = state.focused || active;
+          return GestureDetector(
+            onTap: () {
+              widget.focusNode?.requestFocus();
+              widget.onTap();
+            },
+            child: AnimatedContainer(
+              duration: _detailFocusDuration(context),
+              padding: EdgeInsets.all(scaler.scale(4)),
+              constraints: BoxConstraints(minHeight: scaler.scale(42)),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(999),
+                border: showRing
+                    ? Border.all(
+                        color: state.focused ? Colors.white : WarpColors.accent,
+                        width: state.focused ? 2.5 : 2,
+                      )
+                    : null,
+              ),
+              child: AnimatedContainer(
+                duration: _detailFocusDuration(context),
+                padding: EdgeInsets.symmetric(
+                  horizontal: scaler.scale(18),
+                  vertical: scaler.scale(9),
                 ),
-                if (widget.episodeCount != null) ...[
-                  SizedBox(width: scaler.scale(4)),
-                  Text(
-                    '· ${widget.episodeCount}ep',
-                    style: TextStyle(
-                      color: active
-                          ? Colors.black.withAlpha(160)
-                          : Colors.white.withAlpha(_hovered ? 130 : 100),
-                      fontSize: 11,
+                constraints: BoxConstraints(minHeight: scaler.scale(34)),
+                decoration: BoxDecoration(
+                  color: active
+                      ? const Color(0xFF0DB2E2)
+                      : (_hovered
+                            ? Colors.white.withAlpha(20)
+                            : Colors.white.withAlpha(15)),
+                  borderRadius: BorderRadius.circular(99),
+                  border: active
+                      ? null
+                      : Border.all(
+                          color: Colors.white.withAlpha(_hovered ? 38 : 25),
+                        ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Text(
+                      'S${widget.seasonNumber.toString().padLeft(2, '0')}',
+                      style: TextStyle(
+                        color: active
+                            ? Colors.black
+                            : Colors.white.withAlpha(_hovered ? 180 : 140),
+                        fontWeight: FontWeight.w600,
+                        fontSize: 14,
+                        height: 1.0,
+                      ),
                     ),
-                  ),
-                ],
-              ],
+                    if (widget.episodeCount != null) ...[
+                      SizedBox(width: scaler.scale(4)),
+                      Text(
+                        '· ${widget.episodeCount}ep',
+                        style: TextStyle(
+                          color: active
+                              ? Colors.black.withAlpha(160)
+                              : Colors.white.withAlpha(_hovered ? 130 : 100),
+                          fontSize: 11,
+                          height: 1.0,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
             ),
-          ),
-        ),
+          );
+        },
         child: const SizedBox.shrink(),
       ),
     );
@@ -2924,6 +3038,22 @@ class _EpisodeCardState extends State<_EpisodeCard> {
         ? posterUrl(ep.stillFrame!.url, size: 'w300')
         : null;
 
+    // Still frame width: clamp(160px, 14vw, 220px)
+    final stillW = (size.width * 0.14).clamp(160.0, 220.0);
+    final stillCacheWidth = _targetCacheDimension(context, stillW, max: 300);
+    final stillCacheHeight = math.min(220, (stillCacheWidth * 9 / 16).round());
+    final disableImageFade = _disableImageFade(context);
+    final isTV = disableImageFade;
+    final imageFadeIn = disableImageFade
+        ? Duration.zero
+        : const Duration(milliseconds: 500);
+    final imageFadeOut = disableImageFade
+        ? Duration.zero
+        : const Duration(milliseconds: 1000);
+    final cardHeight = MediaQuery.textScalerOf(
+      context,
+    ).scale(124).clamp(124.0, 168.0).toDouble();
+
     // Tauri: episode card colors
     final bgColor = isResumeEp
         ? const Color(0x14D97706)
@@ -2935,28 +3065,26 @@ class _EpisodeCardState extends State<_EpisodeCard> {
         : watchedDone
         ? const Color(0x0AFFFFFF)
         : const Color(0x12FFFFFF);
-
-    // Still frame width: clamp(160px, 14vw, 220px)
-    final stillW = (size.width * 0.14).clamp(160.0, 220.0);
-
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        constraints: const BoxConstraints(minHeight: 110),
+        duration: _detailFocusDuration(context),
+        height: cardHeight,
         decoration: BoxDecoration(
           color: bgColor,
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: borderColor, width: 1.0),
           boxShadow: _hovered
-              ? const [
-                  BoxShadow(
-                    color: Color(0x80000000),
-                    blurRadius: 24,
-                    offset: Offset(0, 4),
-                  ),
-                ]
+              ? (isTV
+                    ? null
+                    : const [
+                        BoxShadow(
+                          color: Color(0x80000000),
+                          blurRadius: 24,
+                          offset: Offset(0, 4),
+                        ),
+                      ])
               : null,
         ),
         // Tauri: opacity 0.65 for watched-done episodes that aren't resume
@@ -2966,7 +3094,8 @@ class _EpisodeCardState extends State<_EpisodeCard> {
             borderRadius: BorderRadius.circular(12),
             child: Stack(
               children: [
-                IntrinsicHeight(
+                SizedBox(
+                  height: cardHeight,
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
@@ -2980,6 +3109,10 @@ class _EpisodeCardState extends State<_EpisodeCard> {
                               CachedNetworkImage(
                                 imageUrl: stillImg,
                                 fit: BoxFit.cover,
+                                memCacheWidth: stillCacheWidth,
+                                memCacheHeight: stillCacheHeight,
+                                fadeInDuration: imageFadeIn,
+                                fadeOutDuration: imageFadeOut,
                                 placeholder: (_, _) =>
                                     const ColoredBox(color: Color(0x0AFFFFFF)),
                                 errorWidget: (_, _, _) =>
@@ -3304,16 +3437,19 @@ class _EpisodePlayButtonState extends State<_EpisodePlayButton> {
 
   @override
   Widget build(BuildContext context) {
+    final isTV = _disableImageFade(context);
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
       cursor: SystemMouseCursors.click,
       child: DpadFocusable(
+        effects: const [],
         focusNode: widget.focusNode,
         onDirection: widget.onDirection,
         onSelect: widget.isMarking ? () {} : widget.onPlay,
         onLongSelect: _openContextMenu,
         enabled: !widget.isMarking,
+        autoScroll: false,
         tapToSelect: false,
         builder: (context, state, child) {
           final active = state.focused || _hovered;
@@ -3327,7 +3463,7 @@ class _EpisodePlayButtonState extends State<_EpisodePlayButton> {
             onLongPress: _openContextMenu,
             onSecondaryTap: _openContextMenu,
             child: AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
+              duration: _detailFocusDuration(context),
               padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 10),
               decoration: BoxDecoration(
                 color: active ? _activeBgColor : _inactiveBgColor,
@@ -3336,7 +3472,7 @@ class _EpisodePlayButtonState extends State<_EpisodePlayButton> {
                   color: active ? _accentColor : _inactiveBorderColor,
                   width: 1,
                 ),
-                boxShadow: active ? [_shadow] : null,
+                boxShadow: active && !isTV ? [_shadow] : null,
               ),
               child: Opacity(
                 opacity: widget.isMarking ? 0.8 : 1.0,
@@ -3423,7 +3559,7 @@ class _CastSectionState extends State<_CastSection> {
       if (nodeContext == null) return;
       Scrollable.ensureVisible(
         nodeContext,
-        duration: const Duration(milliseconds: 220),
+        duration: _detailFocusDuration(nodeContext),
         curve: Curves.easeOutCubic,
         alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
       );
@@ -3487,7 +3623,7 @@ class _CastSectionState extends State<_CastSection> {
                 icon: Icons.chevron_left,
                 onTap: () => _scroll.animateTo(
                   _scroll.offset - 320,
-                  duration: const Duration(milliseconds: 280),
+                  duration: _detailScrollDuration(context),
                   curve: Curves.easeOut,
                 ),
               ),
@@ -3521,7 +3657,7 @@ class _CastSectionState extends State<_CastSection> {
                 icon: Icons.chevron_right,
                 onTap: () => _scroll.animateTo(
                   _scroll.offset + 320,
-                  duration: const Duration(milliseconds: 280),
+                  duration: _detailScrollDuration(context),
                   curve: Curves.easeOut,
                 ),
               ),
@@ -3590,26 +3726,34 @@ class _CastCardState extends State<_CastCard> {
   @override
   Widget build(BuildContext context) {
     final m = widget.member;
+    final isTV = _disableImageFade(context);
     final photo = (m.profileImage?.url ?? m.profilePath) != null
         ? posterUrl(m.profileImage?.url ?? m.profilePath!, size: 'w300')
         : null;
+    final cacheWidth = _targetCacheDimension(context, 160, max: 300);
+    final cacheHeight = _targetCacheDimension(context, 200, max: 375);
+    final disableImageFade = _disableImageFade(context);
 
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
       cursor: SystemMouseCursors.click,
       child: DpadFocusable(
+        effects: const [],
         focusNode: widget.focusNode,
         onDirection: widget.onDirection,
         onSelect: () {},
+        autoScroll: false,
         tapToSelect: false,
         builder: (context, state, child) => AnimatedSlide(
-          offset: (_hovered || state.focused)
+          offset: isTV
+              ? Offset.zero
+              : (_hovered || state.focused)
               ? const Offset(0, -0.08)
               : Offset.zero,
-          duration: const Duration(milliseconds: 200),
+          duration: _detailFocusDuration(context),
           child: AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
+            duration: _detailFocusDuration(context),
             width: 160,
             decoration: BoxDecoration(
               color: _hovered || state.focused
@@ -3625,13 +3769,15 @@ class _CastCardState extends State<_CastCard> {
                 width: state.focused ? 2.5 : 1,
               ),
               boxShadow: _hovered || state.focused
-                  ? const [
-                      BoxShadow(
-                        color: Color(0x80000000),
-                        blurRadius: 24,
-                        offset: Offset(0, 12),
-                      ),
-                    ]
+                  ? (isTV
+                        ? null
+                        : const [
+                            BoxShadow(
+                              color: Color(0x80000000),
+                              blurRadius: 24,
+                              offset: Offset(0, 12),
+                            ),
+                          ])
                   : null,
             ),
             clipBehavior: Clip.hardEdge,
@@ -3645,6 +3791,14 @@ class _CastCardState extends State<_CastCard> {
                       ? CachedNetworkImage(
                           imageUrl: photo,
                           fit: BoxFit.cover,
+                          memCacheWidth: cacheWidth,
+                          memCacheHeight: cacheHeight,
+                          fadeInDuration: disableImageFade
+                              ? Duration.zero
+                              : const Duration(milliseconds: 500),
+                          fadeOutDuration: disableImageFade
+                              ? Duration.zero
+                              : const Duration(milliseconds: 1000),
                           placeholder: (_, _) =>
                               const ColoredBox(color: Color(0x0DFFFFFF)),
                           errorWidget: (_, _, _) => const _NoPhoto(),
@@ -3779,7 +3933,9 @@ class _WatchProvidersSectionState extends State<_WatchProvidersSection> {
 
   void _focusNode(List<FocusNode> nodes, int index) {
     if (nodes.isEmpty) return;
-    Dpad.of(context).requestFocus(nodes[index.clamp(0, nodes.length - 1)]);
+    final node = nodes[index.clamp(0, nodes.length - 1)];
+    Dpad.of(context).requestFocus(node);
+    _revealFocusedNode(context, node);
   }
 
   bool _providerDirection({
@@ -3967,6 +4123,9 @@ class _ProviderLogoState extends State<_ProviderLogo> {
     final imgUrl = p.logoPath != null
         ? 'https://image.tmdb.org/t/p/w92${p.logoPath}'
         : null;
+    final cacheSize = _targetCacheDimension(context, 56, max: 92);
+    final disableImageFade = _disableImageFade(context);
+    final isTV = disableImageFade;
 
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
@@ -3976,19 +4135,21 @@ class _ProviderLogoState extends State<_ProviderLogo> {
       // backend model yet) — focusable/halo-on-focus for D-pad reachability,
       // onSelect is a no-op.
       child: DpadFocusable(
+        effects: const [],
         focusNode: widget.focusNode,
         onDirection: widget.onDirection,
         onSelect: () {},
+        autoScroll: false,
         tapToSelect: false,
         builder: (context, state, child) => AnimatedScale(
-          scale: (_hovered || state.focused) ? 1.10 : 1.0,
-          duration: const Duration(milliseconds: 200),
+          scale: isTV ? 1.0 : ((_hovered || state.focused) ? 1.10 : 1.0),
+          duration: _detailFocusDuration(context),
           child: Stack(
             clipBehavior: Clip.none,
             alignment: Alignment.center,
             children: [
               AnimatedContainer(
-                duration: const Duration(milliseconds: 150),
+                duration: _detailFocusDuration(context),
                 padding: EdgeInsets.all(state.focused ? 4 : 0),
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(16),
@@ -3996,13 +4157,15 @@ class _ProviderLogoState extends State<_ProviderLogo> {
                       ? Border.all(color: Colors.white, width: 2.5)
                       : null,
                   boxShadow: state.focused
-                      ? const [
-                          BoxShadow(
-                            color: Color(0xCC000000),
-                            blurRadius: 18,
-                            spreadRadius: 2,
-                          ),
-                        ]
+                      ? (isTV
+                            ? null
+                            : const [
+                                BoxShadow(
+                                  color: Color(0xCC000000),
+                                  blurRadius: 18,
+                                  spreadRadius: 2,
+                                ),
+                              ])
                       : null,
                 ),
                 child: Container(
@@ -4020,6 +4183,14 @@ class _ProviderLogoState extends State<_ProviderLogo> {
                             width: 56,
                             height: 56,
                             fit: BoxFit.cover,
+                            memCacheWidth: cacheSize,
+                            memCacheHeight: cacheSize,
+                            fadeInDuration: disableImageFade
+                                ? Duration.zero
+                                : const Duration(milliseconds: 500),
+                            fadeOutDuration: disableImageFade
+                                ? Duration.zero
+                                : const Duration(milliseconds: 1000),
                             placeholder: (_, _) => Container(
                               width: 56,
                               height: 56,
@@ -4131,7 +4302,9 @@ class _LocalSourcesSectionState extends State<_LocalSourcesSection> {
 
   void _focusSource(int index) {
     if (index < 0 || index >= _sourceFocusNodes.length) return;
-    Dpad.of(context).requestFocus(_sourceFocusNodes[index]);
+    final node = _sourceFocusNodes[index];
+    Dpad.of(context).requestFocus(node);
+    _revealFocusedNode(context, node);
   }
 
   @override
@@ -4296,14 +4469,17 @@ class _SourcePlayButtonState extends State<_SourcePlayButton> {
 
   @override
   Widget build(BuildContext context) {
+    final isTV = _disableImageFade(context);
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
       cursor: SystemMouseCursors.click,
       child: DpadFocusable(
+        effects: const [],
         focusNode: widget.focusNode,
         onDirection: widget.onDirection,
         onSelect: widget.onPlay,
+        autoScroll: false,
         tapToSelect: false,
         builder: (context, state, child) => GestureDetector(
           onTap: () {
@@ -4311,7 +4487,7 @@ class _SourcePlayButtonState extends State<_SourcePlayButton> {
             widget.onPlay();
           },
           child: AnimatedContainer(
-            duration: const Duration(milliseconds: 150),
+            duration: _detailFocusDuration(context),
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             decoration: BoxDecoration(
               color: state.focused || _hovered
@@ -4325,13 +4501,15 @@ class _SourcePlayButtonState extends State<_SourcePlayButton> {
                 width: state.focused ? 2.5 : 1,
               ),
               boxShadow: state.focused || _hovered
-                  ? const [
-                      BoxShadow(
-                        color: Color(0x4DE50914),
-                        blurRadius: 12,
-                        offset: Offset(0, 2),
-                      ),
-                    ]
+                  ? (isTV
+                        ? null
+                        : const [
+                            BoxShadow(
+                              color: Color(0x4DE50914),
+                              blurRadius: 12,
+                              offset: Offset(0, 2),
+                            ),
+                          ])
                   : null,
             ),
             child: const Row(
@@ -4576,11 +4754,13 @@ class _ResumeModalButtonState extends State<_ResumeModalButton> {
       onExit: (_) => setState(() => _hovered = false),
       cursor: SystemMouseCursors.click,
       child: DpadFocusable(
+        effects: const [],
         focusNode: widget.focusNode,
         autofocus: widget.autofocus,
         entry: widget.entry,
         onDirection: widget.onDirection,
         onSelect: widget.onTap,
+        autoScroll: false,
         tapToSelect: false,
         builder: (context, state, child) {
           final active = _hovered || state.focused;
@@ -4656,9 +4836,11 @@ class _ResumeCancelButtonState extends State<_ResumeCancelButton> {
       onExit: (_) => setState(() => _hovered = false),
       cursor: SystemMouseCursors.click,
       child: DpadFocusable(
+        effects: const [],
         focusNode: widget.focusNode,
         onDirection: widget.onDirection,
         onSelect: widget.onTap,
+        autoScroll: false,
         tapToSelect: false,
         builder: (context, state, child) => GestureDetector(
           onTap: () {

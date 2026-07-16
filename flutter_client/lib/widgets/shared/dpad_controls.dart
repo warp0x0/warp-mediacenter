@@ -65,6 +65,7 @@ class _WarpDpadButtonState extends State<WarpDpadButton> {
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
       child: DpadFocusable(
+        effects: const [],
         focusNode: widget.focusNode,
         enabled: widget.enabled,
         autofocus: widget.autofocus,

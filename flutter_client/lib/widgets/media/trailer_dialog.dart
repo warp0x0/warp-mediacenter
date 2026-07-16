@@ -4,18 +4,17 @@ import 'package:dpad/dpad.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:media_kit/media_kit.dart';
-import 'package:media_kit_video/media_kit_video.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart' hide Video;
 
 import '../../models/media.dart';
+import '../../player/better_trailer_player.dart';
 import '../../theme/warp_theme.dart';
 import '../../theme/warp_tokens.dart';
 import '../shared/modal_focus_restore.dart';
 import '../shared/tv_modal_chrome_scale.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TrailerDialog — plays YouTube trailers via media_kit (libmpv).
+// TrailerDialog — plays YouTube trailers through the active trailer player.
 // ─────────────────────────────────────────────────────────────────────────────
 
 class TrailerDialog extends ConsumerStatefulWidget {
@@ -36,13 +35,11 @@ class TrailerDialog extends ConsumerStatefulWidget {
 
 class _TrailerDialogState extends ConsumerState<TrailerDialog>
     with WidgetsBindingObserver, ModalFocusRestore<TrailerDialog> {
-  late final Player _player;
-  late final VideoController _controller;
+  late final BetterTrailerPlayerController _player;
   final _surfaceFocus = FocusNode(debugLabel: 'TrailerVideoSurface');
   final _selectorScroll = ScrollController();
   final _selectorRailFocus = FocusNode(debugLabel: 'TrailerSelectorScrollRail');
   final List<FocusNode> _selectorFocusNodes = [];
-  StreamSubscription<String>? _playerErrorSub;
 
   bool _loading = true;
   bool _selectorOpen = false;
@@ -56,12 +53,12 @@ class _TrailerDialogState extends ConsumerState<TrailerDialog>
   @override
   void initState() {
     super.initState();
-    _player = Player();
-    _controller = VideoController(_player);
-    _playerErrorSub = _player.stream.error.listen((message) {
-      if (!mounted || _loading) return;
-      setState(() => _error = message);
-    });
+    _player = BetterTrailerPlayerController(
+      onError: (message) {
+        if (!mounted || _loading) return;
+        setState(() => _error = message);
+      },
+    );
     _orderedTrailers = _buildOrderedTrailers();
     _selectedIndex = 0;
     _syncSelectorFocusNodes();
@@ -93,7 +90,6 @@ class _TrailerDialogState extends ConsumerState<TrailerDialog>
     for (final node in _selectorFocusNodes) {
       node.dispose();
     }
-    _playerErrorSub?.cancel();
     _player.dispose();
     super.dispose();
   }
@@ -155,23 +151,7 @@ class _TrailerDialogState extends ConsumerState<TrailerDialog>
   }
 
   Future<void> _openStreams(_TrailerStreams streams) async {
-    if (streams.audioUrl != null) {
-      try {
-        await _openSeparateStreams(streams.videoUrl, streams.audioUrl!);
-        return;
-      } catch (_) {
-        if (streams.muxedUrl == null) rethrow;
-      }
-    }
-    final fallbackUrl = streams.muxedUrl ?? streams.videoUrl;
-    await _player.open(Media(fallbackUrl), play: true);
-  }
-
-  Future<void> _openSeparateStreams(String videoUrl, String audioUrl) async {
-    await _controller.player.open(Media(videoUrl));
-    await _controller.player.setAudioTrack(
-      AudioTrack.uri(audioUrl, title: 'YouTube audio'),
-    );
+    await _player.load(streams.videoUrl);
   }
 
   Future<_TrailerStreams> _extractStreams(String youtubeUrl) async {
@@ -182,53 +162,29 @@ class _TrailerDialogState extends ConsumerState<TrailerDialog>
         videoId,
         ytClients: [YoutubeApiClient.safari, YoutubeApiClient.androidVr],
       );
-      final videoOnly = manifest.videoOnly;
-      final audioOnly = manifest.audioOnly;
       final muxed = manifest.muxed;
       debugPrint(
-        'Manifest loaded for $videoId: videoOnly=${videoOnly.length}, audioOnly=${audioOnly.length}, muxed=${muxed.length}',
+        'Manifest loaded for $videoId: muxed=${muxed.length}, videoOnly=${manifest.videoOnly.length}, audioOnly=${manifest.audioOnly.length}',
       );
-      final muxedUrl = muxed.isNotEmpty
-          ? muxed.withHighestBitrate().url.toString()
-          : null;
-      if (videoOnly.isNotEmpty && audioOnly.isNotEmpty) {
-        final bestVideo = videoOnly.withHighestBitrate().url;
-        final bestAudio = audioOnly.withHighestBitrate().url;
-        return _TrailerStreams(
-          bestVideo.toString(),
-          audioUrl: bestAudio.toString(),
-          muxedUrl: muxedUrl,
-        );
+      if (muxed.isNotEmpty) {
+        return _TrailerStreams(muxed.withHighestBitrate().url.toString());
       }
-
-      if (muxedUrl != null) {
-        return _TrailerStreams(muxedUrl, muxedUrl: muxedUrl);
-      }
-      if (videoOnly.isNotEmpty) {
-        return _TrailerStreams(videoOnly.withHighestBitrate().url.toString());
-      }
-      throw Exception('No playable stream found');
+      throw Exception('No muxed playable stream found');
     } finally {
       yt.close();
     }
   }
 
   void _togglePlayPause() {
-    _player.state.playing
-        ? unawaited(_player.pause())
-        : unawaited(_player.play());
-    setState(() {});
+    unawaited(_player.togglePlayPause());
   }
 
   void _seek(int seconds) {
-    final next = _player.state.position + Duration(seconds: seconds);
-    unawaited(_player.seek(next.isNegative ? Duration.zero : next));
+    unawaited(_player.seekBy(Duration(seconds: seconds)));
   }
 
   void _adjustVolume(double delta) {
-    final next = (_player.state.volume + delta).clamp(0.0, 100.0);
-    unawaited(_player.setVolume(next));
-    setState(() {});
+    unawaited(_player.adjustVolume(delta / 100));
   }
 
   bool _surfaceDirection(TraversalDirection direction) {
@@ -463,9 +419,8 @@ class _TrailerDialogState extends ConsumerState<TrailerDialog>
                                         behavior: HitTestBehavior.opaque,
                                         onTap: _togglePlayPause,
                                         onLongPress: _openSelector,
-                                        child: Video(
-                                          controller: _controller,
-                                          controls: NoVideoControls,
+                                        child: BetterTrailerPlayerSurface(
+                                          controller: _player,
                                         ),
                                       ),
                               ),
@@ -576,10 +531,8 @@ class _TrailerDialogState extends ConsumerState<TrailerDialog>
 
 class _TrailerStreams {
   final String videoUrl;
-  final String? audioUrl;
-  final String? muxedUrl;
 
-  const _TrailerStreams(this.videoUrl, {this.audioUrl, this.muxedUrl});
+  const _TrailerStreams(this.videoUrl);
 }
 
 class _TrailerOptionRow extends StatelessWidget {

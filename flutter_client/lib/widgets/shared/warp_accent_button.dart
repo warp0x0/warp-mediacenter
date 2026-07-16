@@ -64,6 +64,8 @@ class WarpAccentButton extends StatelessWidget {
       onDirection: onDirection,
       autofocus: autofocus,
       entry: entry,
+      effects: const [],
+      autoScroll: false,
       builder: (context, state, child) {
         final focused = state.focused;
         return AnimatedContainer(
