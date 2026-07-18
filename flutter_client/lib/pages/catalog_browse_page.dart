@@ -11,6 +11,7 @@ import '../models/catalog.dart';
 import '../models/library.dart';
 import '../models/media.dart';
 import '../navigation/detail_route_extra.dart';
+import '../navigation/tab_bar_focus_registry.dart';
 import '../providers/library_provider.dart';
 import '../theme/warp_tokens.dart';
 import '../widgets/cards/poster_card.dart';
@@ -18,6 +19,22 @@ import '../widgets/layout/backdrop_layer.dart';
 import '../widgets/shared/dpad_controls.dart';
 
 const _kPageSize = 20;
+
+bool _isTvScaled(BuildContext context) {
+  final media = MediaQuery.of(context);
+  final view = View.maybeOf(context);
+  if (view == null || media.size.width <= 0) return false;
+  final logicalViewportWidth = view.physicalSize.width / view.devicePixelRatio;
+  return media.size.width > logicalViewportWidth * 1.2;
+}
+
+Duration _browseFocusDuration(BuildContext context) => _isTvScaled(context)
+    ? const Duration(milliseconds: 100)
+    : const Duration(milliseconds: 180);
+
+Duration _browseScrollDuration(BuildContext context) => _isTvScaled(context)
+    ? const Duration(milliseconds: 150)
+    : const Duration(milliseconds: 240);
 
 class _BrowsePageData {
   const _BrowsePageData({
@@ -207,7 +224,9 @@ class _CatalogBrowsePageState extends ConsumerState<CatalogBrowsePage>
     if (_appActive) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         final node = _lastCatalogBrowseFocus;
-        if (mounted && node?.context != null) node?.requestFocus();
+        if (mounted && node?.context != null) {
+          _focus(node!);
+        }
       });
     }
   }
@@ -245,11 +264,7 @@ class _CatalogBrowsePageState extends ConsumerState<CatalogBrowsePage>
 
   void _handleBackFocusChanged() {
     if (!_backFocusNode.hasFocus || !_scrollController.hasClients) return;
-    _scrollController.animateTo(
-      0,
-      duration: const Duration(milliseconds: 220),
-      curve: Curves.easeOutCubic,
-    );
+    _scrollController.jumpTo(0);
   }
 
   void _handleLoadMoreFocusChanged() {
@@ -265,19 +280,12 @@ class _CatalogBrowsePageState extends ConsumerState<CatalogBrowsePage>
       if (!mounted || !node.hasFocus || !_scrollController.hasClients) return;
       final nodeContext = node.context;
       if (nodeContext == null) return;
-      final box = nodeContext.findRenderObject();
-      if (box is! RenderBox || !box.hasSize) return;
-      final center = box.localToGlobal(box.size.center(Offset.zero));
-      final viewportHeight = MediaQuery.sizeOf(context).height;
-      final target =
-          (_scrollController.offset + center.dy - viewportHeight * 0.5).clamp(
-            _scrollController.position.minScrollExtent,
-            _scrollController.position.maxScrollExtent,
-          );
-      _scrollController.animateTo(
-        target,
-        duration: const Duration(milliseconds: 220),
+      Scrollable.ensureVisible(
+        nodeContext,
+        alignment: 0.16,
+        duration: _browseFocusDuration(nodeContext),
         curve: Curves.easeOutCubic,
+        alignmentPolicy: ScrollPositionAlignmentPolicy.explicit,
       );
     });
   }
@@ -296,7 +304,13 @@ class _CatalogBrowsePageState extends ConsumerState<CatalogBrowsePage>
     }
   }
 
-  void _focus(FocusNode node) => Dpad.of(context).requestFocus(node);
+  bool _focus(FocusNode node) {
+    final focused = Dpad.of(context).requestFocus(node);
+    if (node != _backFocusNode) {
+      _centerNode(node);
+    }
+    return focused;
+  }
 
   int _gridColumns(WarpTokens t, double availableWidth) {
     return math.max(
@@ -353,12 +367,19 @@ class _CatalogBrowsePageState extends ConsumerState<CatalogBrowsePage>
   }
 
   bool _backDirection(TraversalDirection direction) {
+    if (direction == TraversalDirection.up) {
+      if (_scrollController.hasClients) _scrollController.jumpTo(0);
+      final tab = ref.read(tabBarFocusRegistryProvider).forRoute('/');
+      if (tab != null) {
+        Dpad.of(context).requestFocus(tab);
+      }
+      return true;
+    }
     if (direction == TraversalDirection.down && _cardFocusNodes.isNotEmpty) {
       _focusCard(0);
       return true;
     }
     return direction == TraversalDirection.left ||
-        direction == TraversalDirection.up ||
         direction == TraversalDirection.right;
   }
 
@@ -385,7 +406,7 @@ class _CatalogBrowsePageState extends ConsumerState<CatalogBrowsePage>
         );
     position.animateTo(
       next,
-      duration: const Duration(milliseconds: 240),
+      duration: _browseScrollDuration(context),
       curve: Curves.easeOutCubic,
     );
   }
@@ -476,8 +497,6 @@ class _CatalogBrowsePageState extends ConsumerState<CatalogBrowsePage>
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  SizedBox(height: t.tabBarHeight),
-
                   _Header(
                     title: _displayTitle,
                     itemCount: _items.length,
@@ -583,8 +602,8 @@ class _CatalogBrowsePageState extends ConsumerState<CatalogBrowsePage>
                         ),
                         child: Center(
                           child: _SecondaryBtn(
-                            width: 150,
-                            height: 40,
+                            width: 170,
+                            height: 44,
                             focusNode: _loadMoreFocusNode,
                             onDirection: _loadMoreDirection,
                             onTap: _loadMore,
@@ -600,9 +619,11 @@ class _CatalogBrowsePageState extends ConsumerState<CatalogBrowsePage>
                                   )
                                 : Text(
                                     'Load More',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
                                     style: TextStyle(
                                       color: Colors.white,
-                                      fontSize: t.fontBody,
+                                      fontSize: t.fontSubtitle,
                                       fontWeight: FontWeight.w500,
                                     ),
                                   ),
@@ -749,9 +770,10 @@ class _BackBtn extends StatefulWidget {
 class _BackBtnState extends State<_BackBtn> {
   @override
   Widget build(BuildContext context) {
+    final scaler = MediaQuery.textScalerOf(context);
     return WarpDpadButton(
-      width: 100,
-      height: 40,
+      width: scaler.scale(124),
+      height: scaler.scale(44),
       padding: EdgeInsets.zero,
       tokens: widget.t,
       focusNode: widget.focusNode,
@@ -763,18 +785,20 @@ class _BackBtnState extends State<_BackBtn> {
       focusBorderColor: const Color(0xFF8B5CF6),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.arrow_back, size: 16, color: Colors.white),
-          const SizedBox(width: 6),
-          Text(
-            'Back',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: (MediaQuery.sizeOf(context).width * 0.009).clamp(
-                13.0,
-                16.0,
+          Icon(Icons.arrow_back, size: scaler.scale(16), color: Colors.white),
+          SizedBox(width: scaler.scale(6)),
+          Flexible(
+            child: Text(
+              'Back',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: widget.t.fontSubtitle,
+                fontWeight: FontWeight.w500,
               ),
-              fontWeight: FontWeight.w500,
             ),
           ),
         ],
@@ -813,9 +837,10 @@ class _SecondaryBtn extends StatefulWidget {
 class _SecondaryBtnState extends State<_SecondaryBtn> {
   @override
   Widget build(BuildContext context) {
+    final scaler = MediaQuery.textScalerOf(context);
     return WarpDpadButton(
-      width: widget.width,
-      height: widget.height,
+      width: scaler.scale(widget.width),
+      height: scaler.scale(widget.height),
       padding: EdgeInsets.zero,
       tokens: widget.t,
       focusNode: widget.focusNode,
@@ -841,10 +866,13 @@ class _CatalogBrowseScrollRail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isTv = _isTvScaled(context);
     return SizedBox(
       width: 24,
       child: Center(
         child: DpadFocusable(
+          effects: const [],
+          autoScroll: false,
           focusNode: focusNode,
           onDirection: onDirection,
           onSelect: () {},
@@ -859,13 +887,15 @@ class _CatalogBrowseScrollRail extends StatelessWidget {
                   : Colors.white.withAlpha(30),
               borderRadius: BorderRadius.circular(999),
               boxShadow: state.focused
-                  ? [
-                      BoxShadow(
-                        color: const Color(0xFF0DB2E2).withAlpha(120),
-                        blurRadius: 18,
-                        spreadRadius: 2,
-                      ),
-                    ]
+                  ? isTv
+                        ? null
+                        : [
+                            BoxShadow(
+                              color: const Color(0xFF0DB2E2).withAlpha(120),
+                              blurRadius: 18,
+                              spreadRadius: 2,
+                            ),
+                          ]
                   : null,
             ),
           ),

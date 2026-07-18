@@ -1865,6 +1865,7 @@ class _LocalTabState extends ConsumerState<_LocalTab> {
   Widget build(BuildContext context) {
     final t = WarpTokens.watch(context, ref);
     final size = MediaQuery.sizeOf(context);
+    final scaler = MediaQuery.textScalerOf(context);
     final hPad = (size.width * 0.02).clamp(20.0, 36.0);
 
     final recentAsync = widget.mediaType == _MediaTypeF.movie
@@ -1885,7 +1886,7 @@ class _LocalTabState extends ConsumerState<_LocalTab> {
       children: [
         // ── Sidebar ────────────────────────────────────────────────────────
         Container(
-          width: (size.width * 0.16).clamp(200.0, 280.0),
+          width: (size.width * 0.20).clamp(260.0, 360.0),
           decoration: const BoxDecoration(
             border: Border(right: BorderSide(color: Color(0x0DFFFFFF))),
           ),
@@ -1929,25 +1930,34 @@ class _LocalTabState extends ConsumerState<_LocalTab> {
                 focusBackgroundColor: const Color(0xFF0DB2E2),
                 borderColor: const Color(0xFF0DB2E2),
                 focusBorderColor: const Color(0xFF0DB2E2),
+                padding: EdgeInsets.symmetric(
+                  horizontal: scaler.scale(16),
+                  vertical: scaler.scale(12),
+                ),
                 onSelect: () => showDialog<void>(
                   context: context,
                   builder: (_) => const ScanDialog(),
                 ),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.center,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(
+                    Icon(
                       Icons.document_scanner_outlined,
                       color: Colors.white,
-                      size: 15,
+                      size: scaler.scale(15),
                     ),
-                    const SizedBox(width: 8),
-                    Text(
-                      'Start Scanning',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: (size.width * 0.0085).clamp(13.0, 15.0),
-                        fontWeight: FontWeight.w600,
+                    SizedBox(width: scaler.scale(8)),
+                    Flexible(
+                      child: Text(
+                        'Start Scanning',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: (size.width * 0.0085).clamp(13.0, 15.0),
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
                   ],

@@ -26,9 +26,11 @@ class RowFirstCardRegistry {
     int rowIndex,
     FocusNode node, {
     Future<void> Function()? revealFirstCard,
+    VoidCallback? republishBackdrop,
   }) => _entries[rowIndex] = RowFirstCardEntry(
     node: node,
     revealFirstCard: revealFirstCard,
+    republishBackdrop: republishBackdrop,
   );
 
   void unregister(int rowIndex) => _entries.remove(rowIndex);
@@ -38,11 +40,20 @@ class RowFirstCardRegistry {
   Future<void> revealFirstCard(int rowIndex) async {
     await _entries[rowIndex]?.revealFirstCard?.call();
   }
+
+  void republishBackdrop(int rowIndex) {
+    _entries[rowIndex]?.republishBackdrop?.call();
+  }
 }
 
 class RowFirstCardEntry {
   final FocusNode node;
   final Future<void> Function()? revealFirstCard;
+  final VoidCallback? republishBackdrop;
 
-  const RowFirstCardEntry({required this.node, this.revealFirstCard});
+  const RowFirstCardEntry({
+    required this.node,
+    this.revealFirstCard,
+    this.republishBackdrop,
+  });
 }

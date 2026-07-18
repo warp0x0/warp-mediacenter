@@ -65,16 +65,19 @@ GoRouter warpRouter(Ref ref) {
                 routes: [
                   GoRoute(
                     path: 'catalog/:provider/:category',
-                    builder: (ctx, state) {
+                    pageBuilder: (ctx, state) {
                       final extra = state.extra;
-                      return CatalogBrowsePage(
-                        provider: state.pathParameters['provider']!,
-                        category: state.pathParameters['category']!,
-                        mediaType: state.uri.queryParameters['type'] ?? 'movie',
-                        title: state.uri.queryParameters['title'],
-                        returnFocusNode: extra is CatalogBrowseRouteExtra
-                            ? extra.returnFocusNode
-                            : null,
+                      return NoTransitionPage(
+                        child: CatalogBrowsePage(
+                          provider: state.pathParameters['provider']!,
+                          category: state.pathParameters['category']!,
+                          mediaType:
+                              state.uri.queryParameters['type'] ?? 'movie',
+                          title: state.uri.queryParameters['title'],
+                          returnFocusNode: extra is CatalogBrowseRouteExtra
+                              ? extra.returnFocusNode
+                              : null,
+                        ),
                       );
                     },
                   ),
@@ -171,6 +174,7 @@ class _AppShellState extends ConsumerState<AppShell> {
     final path = GoRouterState.of(context).uri.path;
     final selectedIndex = _routeIndex(path);
     final isTV = ref.watch(uiDensityProvider) == UiDensity.tv;
+    final isCatalogBrowse = path.startsWith('/catalog/');
     if (_lastSelectedIndex == null) {
       _lastSelectedIndex = selectedIndex;
     } else if (_lastSelectedIndex != selectedIndex) {
@@ -180,6 +184,20 @@ class _AppShellState extends ConsumerState<AppShell> {
       });
     }
     if (path != '/search') LastTabRoute.value = path;
+
+    final tabBar = _WarpTabBar(
+      selectedIndex: selectedIndex,
+      isTV: isTV,
+      onTabSelected: (index) {
+        if (index != widget.navigationShell.currentIndex) {
+          ref.read(backdropProvider.notifier).clear();
+        }
+        widget.navigationShell.goBranch(
+          index,
+          initialLocation: index == widget.navigationShell.currentIndex,
+        );
+      },
+    );
 
     // No SafeArea — backdrop must fill the full window edge-to-edge,
     // matching React's h-screen w-screen overflow-hidden wrapper.
@@ -192,27 +210,19 @@ class _AppShellState extends ConsumerState<AppShell> {
           // Global backdrop — correctly sized via SizedBox.expand → Stack(fit:expand)
           // Pages write backdropProvider on focus change; this widget just renders it.
           const BackdropLayer(),
-          // Content (transparent — backdrop shows through)
-          widget.navigationShell,
-          // Floating tab bar — blur + gradient background, pill-style active tab
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            child: _WarpTabBar(
-              selectedIndex: selectedIndex,
-              isTV: isTV,
-              onTabSelected: (index) {
-                if (index != widget.navigationShell.currentIndex) {
-                  ref.read(backdropProvider.notifier).clear();
-                }
-                widget.navigationShell.goBranch(
-                  index,
-                  initialLocation: index == widget.navigationShell.currentIndex,
-                );
-              },
-            ),
-          ),
+          if (isCatalogBrowse)
+            Column(
+              children: [
+                tabBar,
+                Expanded(child: widget.navigationShell),
+              ],
+            )
+          else ...[
+            // Content (transparent — backdrop shows through)
+            widget.navigationShell,
+            // Floating tab bar — blur + gradient background, pill-style active tab
+            Positioned(top: 0, left: 0, right: 0, child: tabBar),
+          ],
         ],
       ),
     );

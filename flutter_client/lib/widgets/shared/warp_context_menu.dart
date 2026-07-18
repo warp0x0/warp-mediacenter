@@ -256,6 +256,8 @@ class _ContextMenuRowState extends State<_ContextMenuRow> {
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
       child: DpadFocusable(
+        effects: const [],
+        autoScroll: false,
         focusNode: widget.focusNode,
         onSelect: widget.onSelect,
         tapToSelect: false,

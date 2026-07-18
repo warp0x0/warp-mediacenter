@@ -104,8 +104,9 @@ class _FileBrowserModalState extends ConsumerState<FileBrowserModal>
   Widget build(BuildContext context) {
     final t = WarpTokens.watch(context, ref);
     final size = MediaQuery.sizeOf(context);
+    final modalScale = MediaQuery.textScalerOf(context).scale(1);
     final w = (size.width * 0.85).clamp(380.0, 780.0);
-    final h = (size.height * 0.75).clamp(400.0, 700.0);
+    final h = (size.height * 0.75).clamp(400.0, 700.0) / modalScale;
 
     return Dialog(
       backgroundColor: Colors.transparent,
@@ -197,7 +198,7 @@ class _FileBrowserModalState extends ConsumerState<FileBrowserModal>
                             child: Text(
                               _path,
                               style: TextStyle(
-                                color: Colors.white38,
+                                color: Colors.white.withAlpha(170),
                                 fontSize: t.fontSubtitle,
                               ),
                               overflow: TextOverflow.ellipsis,
@@ -297,18 +298,6 @@ class _Header extends StatelessWidget {
             borderColor: Colors.transparent,
             focusBackgroundColor: const Color(0x330DB2E2),
             focusBorderColor: Colors.white,
-            focusBoxShadow: [
-              BoxShadow(
-                color: Colors.white.withAlpha(130),
-                blurRadius: 10,
-                spreadRadius: 1,
-              ),
-              BoxShadow(
-                color: const Color(0xFF0DB2E2).withAlpha(140),
-                blurRadius: 22,
-                spreadRadius: 4,
-              ),
-            ],
             child: const Icon(Icons.close, color: Colors.white54, size: 20),
           ),
         ],
@@ -437,7 +426,10 @@ class _EntryList extends StatelessWidget {
       return Center(
         child: Text(
           dirsOnly ? 'No subdirectories' : 'Empty directory',
-          style: TextStyle(color: Colors.white38, fontSize: t.fontBody),
+          style: TextStyle(
+            color: Colors.white.withAlpha(170),
+            fontSize: t.fontBody,
+          ),
         ),
       );
     }
@@ -474,7 +466,7 @@ class _EntryList extends StatelessWidget {
                         : Icons.insert_drive_file_outlined,
                     color: entry.isDir
                         ? const Color(0xFF0DB2E2)
-                        : Colors.white54,
+                        : Colors.white.withAlpha(170),
                     size: 18,
                   ),
                   const SizedBox(width: 12),
@@ -482,7 +474,9 @@ class _EntryList extends StatelessWidget {
                     child: Text(
                       entry.name,
                       style: TextStyle(
-                        color: entry.isDir ? Colors.white : Colors.white70,
+                        color: entry.isDir
+                            ? Colors.white
+                            : Colors.white.withAlpha(210),
                         fontSize: t.fontBody,
                       ),
                       overflow: TextOverflow.ellipsis,

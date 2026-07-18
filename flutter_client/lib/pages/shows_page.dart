@@ -18,7 +18,7 @@ class ShowsPage extends ConsumerStatefulWidget {
   ConsumerState<ShowsPage> createState() => _ShowsPageState();
 }
 
-class _ShowsPageState extends ConsumerState<ShowsPage> {
+class _ShowsPageState extends ConsumerState<ShowsPage> with RouteAware {
   static const _rowSnapDuration = Duration(milliseconds: 320);
 
   final _pageCtrl = PageController();
@@ -40,9 +40,32 @@ class _ShowsPageState extends ConsumerState<ShowsPage> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route != null) routeObserver.subscribe(this, route);
+  }
+
+  @override
   void dispose() {
+    routeObserver.unsubscribe(this);
     _pageCtrl.dispose();
     super.dispose();
+  }
+
+  @override
+  void didPopNext() {
+    _republishVisibleBackdrop();
+  }
+
+  void _republishVisibleBackdrop() {
+    final rowIndex = _pageCtrl.hasClients
+        ? (_pageCtrl.page?.round() ?? _pageCtrl.initialPage)
+        : _pageCtrl.initialPage;
+    _rowRegistry.republishBackdrop(rowIndex);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _rowRegistry.republishBackdrop(rowIndex);
+    });
   }
 
   void _snapTo(double dy) {

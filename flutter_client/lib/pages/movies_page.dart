@@ -18,7 +18,7 @@ class MoviesPage extends ConsumerStatefulWidget {
   ConsumerState<MoviesPage> createState() => _MoviesPageState();
 }
 
-class _MoviesPageState extends ConsumerState<MoviesPage> {
+class _MoviesPageState extends ConsumerState<MoviesPage> with RouteAware {
   static const _rowSnapDuration = Duration(milliseconds: 320);
 
   final _pageCtrl = PageController();
@@ -41,9 +41,32 @@ class _MoviesPageState extends ConsumerState<MoviesPage> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route != null) routeObserver.subscribe(this, route);
+  }
+
+  @override
   void dispose() {
+    routeObserver.unsubscribe(this);
     _pageCtrl.dispose();
     super.dispose();
+  }
+
+  @override
+  void didPopNext() {
+    _republishVisibleBackdrop();
+  }
+
+  void _republishVisibleBackdrop() {
+    final rowIndex = _pageCtrl.hasClients
+        ? (_pageCtrl.page?.round() ?? _pageCtrl.initialPage)
+        : _pageCtrl.initialPage;
+    _rowRegistry.republishBackdrop(rowIndex);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _rowRegistry.republishBackdrop(rowIndex);
+    });
   }
 
   // Shared snap logic for both input paths.

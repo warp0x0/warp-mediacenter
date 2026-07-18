@@ -149,14 +149,38 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
     for (final fn in _resultFocusNodes) {
       fn.dispose();
     }
-    _resultFocusNodes = List.generate(_results.length, (_) => FocusNode());
+    _resultFocusNodes = List.generate(_results.length, (index) {
+      final node = FocusNode(debugLabel: 'TorrentResult-$index');
+      node.addListener(() {
+        if (node.hasFocus) _ensureResultVisible(index);
+      });
+      return node;
+    });
   }
 
   ApiClient get _client => ref.read(apiClientProvider);
 
   bool get _isBusy => _searching || _resolving;
 
+  bool get _hasProgressCancel => _banner?.kind == _BannerKind.progress;
+
+  bool _focusBannerCancelIfAvailable() {
+    if (!_hasProgressCancel) return false;
+    Dpad.of(context).requestFocus(_bannerCancelFocus);
+    return true;
+  }
+
+  void _focusProgressAnchor() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_hasProgressCancel) return;
+      Dpad.of(context).requestFocus(_searchWrapperFocus);
+    });
+  }
+
   bool _searchFieldDirection(TraversalDirection direction) {
+    if (direction == TraversalDirection.down) {
+      return _focusBannerCancelIfAvailable();
+    }
     if (direction == TraversalDirection.right) {
       if (!_searchFieldFocus.hasFocus ||
           _searchCtrl.selection.end >= _searchCtrl.text.length) {
@@ -173,6 +197,9 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
   }
 
   bool _searchButtonDirection(TraversalDirection direction) {
+    if (direction == TraversalDirection.down) {
+      return _focusBannerCancelIfAvailable();
+    }
     if (direction == TraversalDirection.left) {
       Dpad.of(context).requestFocus(_searchWrapperFocus);
       return true;
@@ -241,11 +268,42 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
       Dpad.of(context).requestFocus(_resultScrollRailFocus);
       return true;
     }
-    if (direction == TraversalDirection.up && index == 0) {
-      Dpad.of(context).requestFocus(_searchWrapperFocus);
+    if (direction == TraversalDirection.up) {
+      if (index == 0) {
+        Dpad.of(context).requestFocus(_searchWrapperFocus);
+      } else {
+        _focusResult(index - 1);
+      }
+      return true;
+    }
+    if (direction == TraversalDirection.down) {
+      if (index < _resultFocusNodes.length - 1) _focusResult(index + 1);
       return true;
     }
     return false;
+  }
+
+  void _focusResult(int index) {
+    if (index < 0 || index >= _resultFocusNodes.length) return;
+    Dpad.of(context).requestFocus(_resultFocusNodes[index]);
+    _ensureResultVisible(index);
+  }
+
+  void _ensureResultVisible(int index) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || index >= _resultFocusNodes.length) return;
+      final node = _resultFocusNodes[index];
+      if (!node.hasFocus) return;
+      final nodeContext = node.context;
+      if (nodeContext == null) return;
+      Scrollable.ensureVisible(
+        nodeContext,
+        alignment: 0.45,
+        duration: const Duration(milliseconds: 90),
+        curve: Curves.easeOutCubic,
+        alignmentPolicy: ScrollPositionAlignmentPolicy.explicit,
+      );
+    });
   }
 
   bool _resultScrollRailDirection(TraversalDirection direction) {
@@ -284,7 +342,7 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
         .round()
         .clamp(0, _resultFocusNodes.length - 1)
         .toInt();
-    Dpad.of(context).requestFocus(_resultFocusNodes[index]);
+    _focusResult(index);
   }
 
   // ── Search ──────────────────────────────────────────────────────────────────
@@ -339,7 +397,7 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
       _syncResultFocusNodes();
       if (_resultFocusNodes.isNotEmpty) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) _resultFocusNodes[0].requestFocus();
+          if (mounted) _focusResult(0);
         });
       }
     } catch (e) {
@@ -368,6 +426,7 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
         subtext: result.name,
       );
     });
+    _focusProgressAnchor();
 
     try {
       final resolveRaw = await _client.post<Map<String, dynamic>>(
@@ -520,6 +579,7 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
         subtext: 'Fetching torrent metadata…',
       );
     });
+    _focusProgressAnchor();
     _cancelled = false;
 
     try {
@@ -562,6 +622,7 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
         'Preparing stream…',
       ),
     );
+    _focusProgressAnchor();
 
     PreloadSessionCreateResponse? session;
     try {
@@ -776,6 +837,7 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
   Widget build(BuildContext context) {
     final t = WarpTokens.watch(context, ref);
     final size = MediaQuery.sizeOf(context);
+    final modalScale = MediaQuery.textScalerOf(context).scale(1);
     final episodeTag = widget.mediaKind == 'tv' && widget.season != null
         ? '  ·  S${widget.season.toString().padLeft(2, '0')}E${(widget.episode ?? 1).toString().padLeft(2, '0')}'
         : '';
@@ -785,71 +847,92 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
       child: CallbackShortcuts(
         bindings: {
           const SingleActivator(LogicalKeyboardKey.escape): _closeOrDismiss,
+          const SingleActivator(LogicalKeyboardKey.backspace): _closeOrDismiss,
           const SingleActivator(LogicalKeyboardKey.goBack): _closeOrDismiss,
           const SingleActivator(LogicalKeyboardKey.browserBack):
               _closeOrDismiss,
         },
-        child: DpadRegion(
-          memoryKey: 'modal-torrent',
-          horizontalEdge: DpadEdgeBehavior.stop,
-          verticalEdge: DpadEdgeBehavior.stop,
-          child: Stack(
-            children: [
-              // Main dialog
-              Center(
-                child: TvModalChromeScale(
-                  child: Container(
-                    width: (size.width * 0.62).clamp(520.0, 900.0),
-                    constraints: BoxConstraints(maxHeight: size.height * 0.82),
-                    decoration: BoxDecoration(
-                      color: const Color(0xF7000000).withAlpha(247),
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: Colors.white.withAlpha(23)),
-                    ),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(16),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          // Accent top stripe
-                          Container(
-                            height: 3,
-                            decoration: const BoxDecoration(
-                              gradient: LinearGradient(
-                                colors: [Color(0xFF0DB2E2), Color(0x1F0DB2E2)],
+        child: Focus(
+          autofocus: true,
+          onKeyEvent: (node, event) {
+            if (event is! KeyDownEvent) return KeyEventResult.ignored;
+            final key = event.logicalKey;
+            if (key == LogicalKeyboardKey.escape ||
+                key == LogicalKeyboardKey.backspace ||
+                key == LogicalKeyboardKey.goBack ||
+                key == LogicalKeyboardKey.browserBack) {
+              _closeOrDismiss();
+              return KeyEventResult.handled;
+            }
+            return KeyEventResult.ignored;
+          },
+          child: DpadRegion(
+            memoryKey: 'modal-torrent',
+            horizontalEdge: DpadEdgeBehavior.stop,
+            verticalEdge: DpadEdgeBehavior.stop,
+            child: Stack(
+              children: [
+                // Main dialog
+                Center(
+                  child: TvModalChromeScale(
+                    child: Container(
+                      width: (size.width * 0.62).clamp(520.0, 900.0),
+                      constraints: BoxConstraints(
+                        maxHeight: size.height * 0.86 / modalScale,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xF7000000).withAlpha(247),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: Colors.white.withAlpha(23)),
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(16),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            // Accent top stripe
+                            Container(
+                              height: 3,
+                              decoration: const BoxDecoration(
+                                gradient: LinearGradient(
+                                  colors: [
+                                    Color(0xFF0DB2E2),
+                                    Color(0x1F0DB2E2),
+                                  ],
+                                ),
                               ),
                             ),
-                          ),
 
-                          // Header
-                          _buildHeader(t, episodeTag),
+                            // Header
+                            _buildHeader(t, episodeTag),
 
-                          // Search bar
-                          _buildSearchBar(t),
+                            // Search bar
+                            _buildSearchBar(t),
 
-                          // Banner
-                          if (_banner != null) _buildBanner(_banner!, t),
+                            // Banner
+                            if (_banner != null) _buildBanner(_banner!, t),
 
-                          // Scrollable body
-                          Flexible(child: _buildBody(t)),
-                        ],
+                            // Scrollable body
+                            Flexible(child: _buildBody(t)),
+                          ],
+                        ),
                       ),
                     ),
                   ),
                 ),
-              ),
 
-              // Local confirm overlay — an in-page overlay (not a routed dialog),
-              // so it needs its own explicit DpadRegion trap; Dpad.wrap()'s
-              // route-level isolation doesn't cover it automatically.
-              if (_localConfirmResult != null)
-                DpadRegion(
-                  memoryKey: 'torrent-local-confirm',
-                  horizontalEdge: DpadEdgeBehavior.stop,
-                  verticalEdge: DpadEdgeBehavior.stop,
-                  child: _buildLocalConfirmOverlay(t),
-                ),
-            ],
+                // Local confirm overlay — an in-page overlay (not a routed dialog),
+                // so it needs its own explicit DpadRegion trap; Dpad.wrap()'s
+                // route-level isolation doesn't cover it automatically.
+                if (_localConfirmResult != null)
+                  DpadRegion(
+                    memoryKey: 'torrent-local-confirm',
+                    horizontalEdge: DpadEdgeBehavior.stop,
+                    verticalEdge: DpadEdgeBehavior.stop,
+                    child: _buildLocalConfirmOverlay(t),
+                  ),
+              ],
+            ),
           ),
         ),
       ),
@@ -898,6 +981,8 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
             ),
           ),
           DpadFocusable(
+            effects: const [],
+            autoScroll: false,
             onSelect: widget.onClose,
             builder: (context, state, child) => Container(
               width: 32,
@@ -913,20 +998,6 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
                       : Colors.transparent,
                   width: 2,
                 ),
-                boxShadow: state.focused
-                    ? [
-                        BoxShadow(
-                          color: Colors.white.withAlpha(130),
-                          blurRadius: 10,
-                          spreadRadius: 1,
-                        ),
-                        BoxShadow(
-                          color: const Color(0xFF0DB2E2).withAlpha(140),
-                          blurRadius: 22,
-                          spreadRadius: 4,
-                        ),
-                      ]
-                    : null,
               ),
               alignment: Alignment.center,
               child: GestureDetector(
@@ -997,6 +1068,8 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
           ),
           const SizedBox(width: 10),
           DpadFocusable(
+            effects: const [],
+            autoScroll: false,
             focusNode: _searchBtnFocus,
             enabled: !_isBusy,
             onDirection: _searchButtonDirection,
@@ -1052,24 +1125,24 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
   Widget _buildBanner(_BannerState b, WarpTokens t) {
     final (bg, border, textColor) = switch (b.kind) {
       _BannerKind.info => (
-        const Color(0x0AFFFFFF),
-        const Color(0x14FFFFFF),
-        const Color(0x99FFFFFF),
+        const Color(0x1FFFFFFF),
+        const Color(0x40FFFFFF),
+        const Color(0xF2FFFFFF),
       ),
       _BannerKind.progress => (
-        const Color(0x1201B4E4),
-        const Color(0x3301B4E4),
-        const Color(0xE601B4E4),
+        const Color(0x2601B4E4),
+        const Color(0x6601B4E4),
+        const Color(0xFF67E8F9),
       ),
       _BannerKind.success => (
-        const Color(0x1422C55E),
-        const Color(0x4022C55E),
+        const Color(0x2622C55E),
+        const Color(0x6622C55E),
         const Color(0xFF4ADE80),
       ),
       _BannerKind.error => (
-        const Color(0x14EF4444),
-        const Color(0x40EF4444),
-        const Color(0xFFF87171),
+        const Color(0x33EF4444),
+        const Color(0x80EF4444),
+        const Color(0xFFFFB4B4),
       ),
     };
 
@@ -1126,7 +1199,7 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
                       b.text,
                       style: TextStyle(
                         color: textColor,
-                        fontSize: 12,
+                        fontSize: t.fontSubtitle.clamp(12.0, 14.0),
                         fontWeight: FontWeight.w600,
                       ),
                     ),
@@ -1135,8 +1208,9 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
                       Text(
                         b.subtext!,
                         style: TextStyle(
-                          color: textColor.withAlpha(178),
-                          fontSize: 11,
+                          color: Colors.white.withAlpha(225),
+                          fontSize: t.fontSubtitle.clamp(11.5, 13.5),
+                          fontWeight: FontWeight.w500,
                         ),
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -1146,6 +1220,8 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
               ),
               if (b.kind == _BannerKind.progress)
                 DpadFocusable(
+                  effects: const [],
+                  autoScroll: false,
                   focusNode: _bannerCancelFocus,
                   onDirection: _bannerCancelDirection,
                   onSelect: _handleCancel,
@@ -1265,7 +1341,6 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
         children: [
           ListView.builder(
             controller: _resultScroll,
-            shrinkWrap: true,
             padding: const EdgeInsets.fromLTRB(20, 0, 44, 16),
             itemCount: _results.length,
             itemBuilder: (_, i) {
@@ -1373,8 +1448,8 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
                           Text(
                             result.name,
                             style: TextStyle(
-                              color: Colors.white.withAlpha(64),
-                              fontSize: 11,
+                              color: Colors.white.withAlpha(155),
+                              fontSize: 12,
                             ),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
@@ -1389,6 +1464,8 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
                     DpadFocusable(
+                      effects: const [],
+                      autoScroll: false,
                       focusNode: _localConfirmCancelFocus,
                       autofocus: true,
                       entry: true,
@@ -1431,6 +1508,8 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
                     ),
                     const SizedBox(width: 10),
                     DpadFocusable(
+                      effects: const [],
+                      autoScroll: false,
                       focusNode: _localConfirmDownloadFocus,
                       onDirection: _localConfirmDownloadDirection,
                       onSelect: () => _pickLocalTorrent(result),
@@ -1495,6 +1574,8 @@ class _TorrentScrollRail extends StatelessWidget {
       width: 24,
       child: Center(
         child: DpadFocusable(
+          effects: const [],
+          autoScroll: false,
           focusNode: focusNode,
           onDirection: onDirection,
           onSelect: () {},
@@ -1508,15 +1589,6 @@ class _TorrentScrollRail extends StatelessWidget {
                   ? const Color(0xFF0DB2E2)
                   : Colors.white.withAlpha(30),
               borderRadius: BorderRadius.circular(999),
-              boxShadow: state.focused
-                  ? [
-                      BoxShadow(
-                        color: const Color(0xFF0DB2E2).withAlpha(120),
-                        blurRadius: 18,
-                        spreadRadius: 2,
-                      ),
-                    ]
-                  : null,
             ),
           ),
           child: const SizedBox.shrink(),
@@ -1563,6 +1635,8 @@ class _ResultRowState extends State<_ResultRow> {
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
       child: DpadFocusable(
+        effects: const [],
+        autoScroll: false,
         focusNode: widget.focusNode,
         enabled: !widget.isBusy,
         onDirection: widget.onDirection,
@@ -1617,22 +1691,24 @@ class _ResultRowState extends State<_ResultRow> {
                             Text(
                               '${r.seeders} seeders',
                               style: TextStyle(
-                                color: Colors.white.withAlpha(90),
-                                fontSize: 11,
+                                color: Colors.white.withAlpha(205),
+                                fontSize: t.fontSubtitle.clamp(11.5, 13.0),
+                                fontWeight: FontWeight.w600,
                               ),
                             ),
                             Text(
                               '  ·  ',
                               style: TextStyle(
-                                color: Colors.white.withAlpha(51),
-                                fontSize: 11,
+                                color: Colors.white.withAlpha(140),
+                                fontSize: t.fontSubtitle.clamp(11.5, 13.0),
                               ),
                             ),
                             Text(
                               r.size,
                               style: TextStyle(
-                                color: Colors.white.withAlpha(90),
-                                fontSize: 11,
+                                color: Colors.white.withAlpha(205),
+                                fontSize: t.fontSubtitle.clamp(11.5, 13.0),
+                                fontWeight: FontWeight.w600,
                               ),
                             ),
                           ],

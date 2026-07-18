@@ -4612,6 +4612,7 @@ class _ResumeModalState extends State<_ResumeModal> {
 
   @override
   Widget build(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
     // Tauri: fixed inset-0 z-60 flex items-center justify-center
     //   bg: rgba(0,0,0,0.75) backdrop-blur-[8px]
     return CallbackShortcuts(
@@ -4628,8 +4629,8 @@ class _ResumeModalState extends State<_ResumeModal> {
             child: GestureDetector(
               onTap: () {}, // prevent dismiss on modal tap
               child: Container(
-                width: 360,
-                padding: const EdgeInsets.all(32),
+                width: (size.width * 0.34).clamp(440.0, 560.0),
+                padding: const EdgeInsets.all(36),
                 decoration: BoxDecoration(
                   color: const Color(0xFA0C0C10),
                   borderRadius: BorderRadius.circular(16),
@@ -4677,7 +4678,6 @@ class _ResumeModalState extends State<_ResumeModal> {
                         color: const Color(0xFFD97706),
                         inactiveColor: Colors.white.withAlpha(10),
                         textColor: Colors.white,
-                        shadow: const Color(0x59D97706),
                         borderColor: Colors.white.withAlpha(25),
                         onTap: widget.onContinue,
                       ),
@@ -4689,7 +4689,6 @@ class _ResumeModalState extends State<_ResumeModal> {
                         color: const Color(0xFFE50914),
                         inactiveColor: Colors.white.withAlpha(10),
                         textColor: Colors.white,
-                        shadow: const Color(0x4DE50914),
                         borderColor: Colors.white.withAlpha(25),
                         onTap: widget.onStartOver,
                       ),
@@ -4722,7 +4721,6 @@ class _ResumeModalButton extends StatefulWidget {
   final Color color;
   final Color? inactiveColor;
   final Color textColor;
-  final Color shadow;
   final Color? borderColor;
   final VoidCallback onTap;
 
@@ -4735,7 +4733,6 @@ class _ResumeModalButton extends StatefulWidget {
     required this.color,
     this.inactiveColor,
     required this.textColor,
-    required this.shadow,
     this.borderColor,
     required this.onTap,
   });
@@ -4772,7 +4769,7 @@ class _ResumeModalButtonState extends State<_ResumeModalButton> {
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 150),
               width: double.infinity,
-              height: 40,
+              height: 56,
               decoration: BoxDecoration(
                 color: active
                     ? widget.color.withAlpha(220)
@@ -4784,21 +4781,16 @@ class _ResumeModalButtonState extends State<_ResumeModalButton> {
                       : (widget.borderColor ?? Colors.transparent),
                   width: state.focused ? 2 : 1,
                 ),
-                boxShadow: [
-                  BoxShadow(
-                    color: widget.shadow,
-                    blurRadius: 16,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
               ),
               child: Center(
                 child: Text(
                   widget.label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     color: widget.textColor,
                     fontWeight: FontWeight.w600,
-                    fontSize: 16,
+                    fontSize: 17,
                   ),
                 ),
               ),
@@ -4849,7 +4841,7 @@ class _ResumeCancelButtonState extends State<_ResumeCancelButton> {
           },
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 150),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(8),
               border: Border.all(

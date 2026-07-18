@@ -2953,6 +2953,7 @@ class _ConfigureWidgetDialogState extends State<_ConfigureWidgetDialog>
   @override
   Widget build(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
+    final modalScale = MediaQuery.textScalerOf(context).scale(1);
     final groups = _groupedCatalogs();
     final positions = _positionsFor(groups);
     _syncCardFocusNodes(_catalogs.length);
@@ -2981,7 +2982,7 @@ class _ConfigureWidgetDialogState extends State<_ConfigureWidgetDialog>
             child: ConstrainedBox(
               constraints: BoxConstraints(
                 maxWidth: 760,
-                maxHeight: size.height * 0.88,
+                maxHeight: size.height * 0.88 / modalScale,
               ),
               child: Container(
                 decoration: BoxDecoration(
@@ -3064,18 +3065,6 @@ class _ConfigureWidgetDialogState extends State<_ConfigureWidgetDialog>
                             borderColor: Colors.transparent,
                             focusBackgroundColor: const Color(0x330DB2E2),
                             focusBorderColor: Colors.white,
-                            focusBoxShadow: [
-                              BoxShadow(
-                                color: Colors.white.withAlpha(130),
-                                blurRadius: 10,
-                                spreadRadius: 1,
-                              ),
-                              BoxShadow(
-                                color: const Color(0xFF0DB2E2).withAlpha(140),
-                                blurRadius: 22,
-                                spreadRadius: 4,
-                              ),
-                            ],
                             borderRadius: 6,
                             child: const Icon(
                               Icons.close,

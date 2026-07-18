@@ -246,6 +246,7 @@ class _WidgetSectionState extends ConsumerState<WidgetSection>
       widget.rowIndex,
       _focusNodes[0],
       revealFirstCard: _revealFirstCard,
+      republishBackdrop: _republishSelectedBackdrop,
     );
     widget.onFirstCardRegistered?.call(widget.rowIndex);
   }
@@ -261,6 +262,11 @@ class _WidgetSectionState extends ConsumerState<WidgetSection>
     }
     _setBackdropForIndex(0);
     await WidgetsBinding.instance.endOfFrame;
+  }
+
+  void _republishSelectedBackdrop() {
+    if (!mounted || widget.items.isEmpty) return;
+    _setBackdropForIndex(_selectedIdx.clamp(0, widget.items.length - 1));
   }
 
   // Reset synopsis scroll and start the 3-second auto-scroll timer.
