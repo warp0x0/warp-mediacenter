@@ -6,17 +6,19 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:media_kit/media_kit.dart';
-import 'package:media_kit_video/media_kit_video.dart';
 import 'package:window_manager/window_manager.dart';
 import '../api/api_client.dart';
+import '../player/backend/backend_factory.dart';
+import '../player/backend/warp_playback_backend.dart';
 import '../providers/detail_provider.dart';
 import '../theme/warp_tokens.dart';
 import '../widgets/media/subtitle_dialog.dart';
 import '../widgets/shared/tv_modal_chrome_scale.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PlaybackPage — full-screen media_kit video player
+// PlaybackPage — full-screen video player, driven by a WarpPlaybackBackend
+// (native Media3/ExoPlayer on Android TV, media_kit/libmpv everywhere else —
+// see lib/player/backend/backend_factory.dart)
 //
 // Receives via go_router extra (Map<String, dynamic>):
 //   source     String   — stream or local file URL
@@ -38,8 +40,18 @@ class PlaybackPage extends ConsumerStatefulWidget {
 
 class _PlaybackPageState extends ConsumerState<PlaybackPage>
     with WindowListener, WidgetsBindingObserver {
-  late final Player _player;
-  late final VideoController _controller;
+  late final WarpPlaybackBackend _backend;
+  final List<StreamSubscription<dynamic>> _backendSubs = [];
+
+  // Locally tracked mirror of backend stream state — needed because
+  // WarpPlaybackBackend is stream-only (no synchronous `.state` snapshot
+  // like media_kit's Player had), and several methods below (_seek,
+  // _finishPlayback, _sendScrobble, _togglePlay's play-vs-pause decision)
+  // need synchronous access outside of build().
+  bool _playing = false;
+  bool _initialLoadComplete = false;
+  Duration _position = Duration.zero;
+  Duration _duration = Duration.zero;
 
   // ── D-pad navigation focus nodes ────────────────────────────────────────
   // Initial focus lands on the progress bar. LHS icons (Menu/Subtitles/
@@ -92,25 +104,21 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     if (_isDesktop) windowManager.addListener(this);
-    _player = Player();
-    _controller = VideoController(_player);
+    _backend = createPlaybackBackend(ref, isTrailer: false);
+
+    _backendSubs.addAll([
+      _backend.stateStream.listen(_onPlayerState),
+      _backend.playingStream.listen(_onPlayingChanged),
+      _backend.positionStream.listen(_onPositionUpdate),
+      _backend.completedStream.listen((_) => _onCompleted()),
+    ]);
 
     final src = widget.payload['source'] as String? ?? '';
     final resumeFromFrac = (widget.payload['resumeFromFrac'] as num?)
         ?.toDouble();
 
     if (src.isNotEmpty) {
-      _player.open(Media(src));
-    }
-
-    // Seek to resume position once duration is known
-    if (resumeFromFrac != null && resumeFromFrac > 0) {
-      _player.stream.duration.firstWhere((d) => d.inSeconds > 0).then((dur) {
-        final seekTo = Duration(
-          milliseconds: (resumeFromFrac * dur.inMilliseconds).round(),
-        );
-        _player.seek(seekTo);
-      }).ignore();
+      unawaited(_startPlayback(src, resumeFromFrac));
     }
 
     for (final node in [
@@ -128,10 +136,24 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
     }
 
     _resetHideTimer();
+  }
 
-    // Scrobble start after first progress tick
-    _player.stream.position.listen(_onPosition);
-    _player.stream.completed.listen(_onCompleted);
+  // setDataSource never auto-plays on either backend (kept explicit and
+  // uniform rather than relying on backend-specific defaults — see
+  // WarpMediaKitBackend.setDataSource's comment), so play() is always
+  // called here once the source is set, then the resume-position seek (if
+  // any) waits for the first position tick with a known duration.
+  Future<void> _startPlayback(String src, double? resumeFromFrac) async {
+    await _backend.setDataSource(WarpMuxedSource(src));
+    await _backend.play();
+    if (resumeFromFrac == null || resumeFromFrac <= 0) return;
+    final update = await _backend.positionStream.firstWhere(
+      (u) => u.duration.inSeconds > 0,
+    );
+    final seekTo = Duration(
+      milliseconds: (resumeFromFrac * update.duration.inMilliseconds).round(),
+    );
+    await _backend.seekTo(seekTo);
   }
 
   @override
@@ -161,8 +183,10 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
     _stopFocus.dispose();
     _centerPlayFocus.dispose();
     _volumeBarFocus.dispose();
-    _player.stop();
-    _player.dispose();
+    for (final sub in _backendSubs) {
+      sub.cancel();
+    }
+    unawaited(_backend.dispose());
     super.dispose();
   }
 
@@ -201,21 +225,37 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
 
   Duration? _scrobbleStartedAt;
 
-  void _onPosition(Duration pos) {
-    final dur = _player.state.duration;
+  void _onPlayerState(WarpPlaybackState state) {
+    if (!mounted || state != WarpPlaybackState.ready || _initialLoadComplete) {
+      return;
+    }
+    setState(() => _initialLoadComplete = true);
+  }
+
+  void _onPlayingChanged(bool playing) {
+    if (mounted) setState(() => _playing = playing);
+  }
+
+  void _onPositionUpdate(WarpPositionUpdate update) {
+    if (mounted) {
+      setState(() {
+        _position = update.position;
+        _duration = update.duration;
+      });
+    }
+
+    final dur = update.duration;
     if (dur.inSeconds == 0) return;
 
     // Fire scrobble start once playback is 5 seconds in
-    if (_scrobbleStartedAt == null && pos.inSeconds >= 5) {
-      _scrobbleStartedAt = pos;
-      _sendScrobble('start', pos, dur);
+    if (_scrobbleStartedAt == null && update.position.inSeconds >= 5) {
+      _scrobbleStartedAt = update.position;
+      _sendScrobble('start', update.position, dur);
     }
   }
 
-  void _onCompleted(bool done) {
-    if (done) {
-      unawaited(_finishPlayback(completed: true));
-    }
+  void _onCompleted() {
+    unawaited(_finishPlayback(completed: true));
   }
 
   Future<void> _cleanupSession() async {
@@ -253,8 +293,8 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
       } catch (_) {}
     }
 
-    final dur = _player.state.duration;
-    final pos = completed ? dur : _player.state.position;
+    final dur = _duration;
+    final pos = completed ? dur : _position;
     await _sendScrobble('stop', pos, dur);
 
     if (!mounted) return;
@@ -362,50 +402,35 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  // ── Video surface ─────────────────────────────────────────────
-                  Video(
-                    controller: _controller,
-                    controls: (_) => _ControlsShortcuts(
-                      onBack: _handlePlaybackBack,
-                      onStop: _exitPlayback,
-                      onPlayPause: _togglePlay,
-                      onPlay: _play,
-                      onPause: _pause,
-                      onRewind: () => _seek(-10),
-                      onFastForward: () => _seek(10),
-                      child: IgnorePointer(
-                        ignoring: !_showControls,
-                        child: AnimatedOpacity(
-                          opacity: _showControls ? 1.0 : 0.0,
-                          duration: const Duration(milliseconds: 250),
-                          child: _buildControlsOverlay(t, title),
+                  // ── Video surface — bare, never wrapped in Focus/
+                  // DpadFocusable, so it can never steal D-pad focus.
+                  // Subtitle styling/rendering is owned by the backend
+                  // itself (native SubtitleView on Android TV, media_kit's
+                  // Video subtitleViewConfiguration elsewhere) — see
+                  // buildSurface() on each backend.
+                  _backend.buildSurface(),
+                  // The native backend's SurfaceView shows nothing until
+                  // the first decoded frame arrives — cover that gap with
+                  // an opaque scrim (same pattern validated on the debug
+                  // page during M1/M2) so real playback never shows a
+                  // black flash while buffering/loading.
+                  if (!_initialLoadComplete)
+                    const Positioned.fill(
+                      child: ColoredBox(
+                        color: Colors.black,
+                        child: Center(
+                          child: CircularProgressIndicator(
+                            color: Color(0xFF0DB2E2),
+                          ),
                         ),
                       ),
                     ),
-                    fit: BoxFit.contain,
-                    subtitleViewConfiguration: const SubtitleViewConfiguration(
-                      style: TextStyle(
-                        height: 1.4,
-                        fontSize: 40.0,
-                        letterSpacing: 0.0,
-                        wordSpacing: 0.0,
-                        color: Color(0xffffffff),
-                        fontWeight: FontWeight.w600,
-                        backgroundColor: Colors.transparent,
-                        shadows: [
-                          Shadow(
-                            color: Color(0xDD000000),
-                            blurRadius: 6,
-                            offset: Offset(1, 1),
-                          ),
-                          Shadow(
-                            color: Color(0xAA000000),
-                            blurRadius: 3,
-                            offset: Offset(0, 0),
-                          ),
-                        ],
-                      ),
-                      padding: EdgeInsets.fromLTRB(24.0, 0.0, 24.0, 48.0),
+                  IgnorePointer(
+                    ignoring: !_showControls,
+                    child: AnimatedOpacity(
+                      opacity: _showControls ? 1.0 : 0.0,
+                      duration: const Duration(milliseconds: 250),
+                      child: _buildControlsOverlay(t, title),
                     ),
                   ),
                 ],
@@ -523,30 +548,33 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
 
   void _togglePlay() {
     _resetHideTimer();
-    _player.state.playing ? _player.pause() : _player.play();
-    setState(() {});
+    // Optimistic local update — playingStream will confirm/correct once the
+    // platform-channel round trip completes, but the icon should react
+    // immediately rather than waiting on it.
+    setState(() => _playing = !_playing);
+    unawaited(_playing ? _backend.play() : _backend.pause());
   }
 
   void _play() {
     _resetHideTimer();
-    _player.play();
-    setState(() {});
+    setState(() => _playing = true);
+    unawaited(_backend.play());
   }
 
   void _pause() {
     _resetHideTimer();
-    _player.pause();
-    setState(() {});
+    setState(() => _playing = false);
+    unawaited(_backend.pause());
   }
 
   void _seek(int seconds) {
     _resetHideTimer();
-    final pos = _player.state.position + Duration(seconds: seconds);
-    _player.seek(pos.isNegative ? Duration.zero : pos);
+    final pos = _position + Duration(seconds: seconds);
+    unawaited(_backend.seekTo(pos.isNegative ? Duration.zero : pos));
   }
 
   void _adjustVolume(double delta) {
-    final v = (_player.state.volume + delta * 100).clamp(0.0, 100.0);
+    final v = (_audioAmplification + delta * 100).clamp(0.0, 200.0);
     _setVolume(v);
     setState(() {});
   }
@@ -554,7 +582,7 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
   void _setVolume(double value) {
     final v = value.clamp(0.0, 200.0);
     _audioAmplification = v;
-    unawaited(_player.setVolume(v));
+    unawaited(_backend.setVolume(v / 100));
   }
 
   void _exitPlayback() {
@@ -606,53 +634,42 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
     });
   }
 
-  Future<void> _setMpvProperty(String property, String value) async {
-    final platform = _player.platform;
-    if (platform == null) return;
-    try {
-      await (platform as dynamic).setProperty(property, value);
-    } catch (_) {
-      // Advanced mpv options are unavailable on some platforms/backends.
-    }
-  }
-
   void _setSubtitleDelay(double seconds) {
     final value = seconds.clamp(-5.0, 5.0);
     if (mounted) setState(() => _subtitleDelaySeconds = value);
-    unawaited(_setMpvProperty('sub-delay', value.toStringAsFixed(2)));
+    unawaited(
+      _backend.setSubtitleDelay(
+        Duration(milliseconds: (value * 1000).round()),
+      ),
+    );
   }
 
   void _setAudioAmplification(double value) {
     final v = value.clamp(0.0, 200.0);
     if (mounted) setState(() => _audioAmplification = v);
-    unawaited(_player.setVolume(v));
+    unawaited(_backend.setVolume(v / 100));
   }
 
   void _setAudioPassthrough(bool enabled) {
     if (mounted) setState(() => _audioPassthrough = enabled);
-    unawaited(
-      _setMpvProperty(
-        'audio-spdif',
-        enabled ? 'ac3,dts,dts-hd,eac3,truehd' : '',
-      ),
-    );
+    unawaited(_backend.setAudioPassthrough(enabled));
   }
 
   void _setDolbyMode(bool enabled) {
     if (mounted) setState(() => _dolbyMode = enabled);
-    unawaited(_setMpvProperty('audio-channels', enabled ? 'auto' : 'stereo'));
+    unawaited(_backend.setDolbyMode(enabled));
   }
 
   void _openSubtitles() {
     _resetHideTimer();
     final mediaType = widget.payload['mediaType'] as String? ?? 'movie';
-    final wasPlaying = _player.state.playing;
-    if (wasPlaying) _player.pause();
+    final wasPlaying = _playing;
+    if (wasPlaying) unawaited(_backend.pause());
     showDialog<void>(
       context: context,
       barrierDismissible: true,
       builder: (_) => SubtitleDialog(
-        player: _player,
+        backend: _backend,
         tmdbId: widget.payload['tmdbId'] as String? ?? '',
         mediaKind: mediaType == 'show' ? 'show' : 'movie',
         title: widget.payload['title'] as String?,
@@ -661,7 +678,7 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
         sourceUrl: widget.payload['source'] as String?,
       ),
     ).whenComplete(() {
-      if (mounted && !_exiting && wasPlaying) _player.play();
+      if (mounted && !_exiting && wasPlaying) unawaited(_backend.play());
     });
   }
 
@@ -771,7 +788,10 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
 
   void _openAudioSettings() {
     _resetHideTimer();
-    var amplification = _audioAmplification;
+    final amplificationMax = _backend.supportsAudioAmplificationBeyond100
+        ? 200.0
+        : 100.0;
+    var amplification = _audioAmplification.clamp(0.0, amplificationMax);
     var passthrough = _audioPassthrough;
     var dolby = _dolbyMode;
     showDialog<void>(
@@ -793,36 +813,43 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
               _AccentSlider(
                 value: amplification,
                 min: 0,
-                max: 200,
-                divisions: 40,
+                max: amplificationMax,
+                divisions: (amplificationMax / 5).round(),
                 onChanged: (value) {
                   amplification = value;
                   setDialogState(() {});
                   _setAudioAmplification(value);
                 },
               ),
-              const SizedBox(height: 20),
-              _SettingsSwitchRow(
-                title: 'Audio passthrough',
-                subtitle: 'Prefer AC3/DTS bitstream output when supported.',
-                value: passthrough,
-                onChanged: (value) {
-                  passthrough = value;
-                  setDialogState(() {});
-                  _setAudioPassthrough(value);
-                },
-              ),
-              const SizedBox(height: 10),
-              _SettingsSwitchRow(
-                title: 'Dolby mode',
-                subtitle: 'Prefer surround channel layout when available.',
-                value: dolby,
-                onChanged: (value) {
-                  dolby = value;
-                  setDialogState(() {});
-                  _setDolbyMode(value);
-                },
-              ),
+              // Bitstream passthrough / Dolby: mpv-specific (audio-spdif/
+              // audio-channels property pokes), no MediaCodec equivalent —
+              // hidden entirely on backends that can't act on them, rather
+              // than shown disabled (see supportsAudioPassthrough's doc
+              // comment on WarpPlaybackBackend).
+              if (_backend.supportsAudioPassthrough) ...[
+                const SizedBox(height: 20),
+                _SettingsSwitchRow(
+                  title: 'Audio passthrough',
+                  subtitle: 'Prefer AC3/DTS bitstream output when supported.',
+                  value: passthrough,
+                  onChanged: (value) {
+                    passthrough = value;
+                    setDialogState(() {});
+                    _setAudioPassthrough(value);
+                  },
+                ),
+                const SizedBox(height: 10),
+                _SettingsSwitchRow(
+                  title: 'Dolby mode',
+                  subtitle: 'Prefer surround channel layout when available.',
+                  value: dolby,
+                  onChanged: (value) {
+                    dolby = value;
+                    setDialogState(() {});
+                    _setDolbyMode(value);
+                  },
+                ),
+              ],
               const SizedBox(height: 20),
               Row(
                 children: [
@@ -853,13 +880,7 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
     showDialog<void>(
       context: context,
       barrierColor: Colors.black54,
-      builder: (_) => _AudioTracksDialog(
-        tracksStream: _player.stream.tracks,
-        trackStream: _player.stream.track,
-        initialTracks: _player.state.tracks,
-        initialTrack: _player.state.track,
-        onSelect: (track) => unawaited(_player.setAudioTrack(track)),
-      ),
+      builder: (_) => _AudioTracksDialog(backend: _backend),
     );
   }
 
@@ -914,32 +935,23 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
           ),
         ),
         Center(
-          child: StreamBuilder<bool>(
-            stream: _player.stream.playing,
-            builder: (_, snap) => _CenterPlayButton(
-              playing: snap.data ?? _player.state.playing,
-              onTap: _togglePlay,
-              focusNode: _centerPlayFocus,
-              onDirection: _centerPlayDirection,
-            ),
+          child: _CenterPlayButton(
+            playing: _playing,
+            onTap: _togglePlay,
+            focusNode: _centerPlayFocus,
+            onDirection: _centerPlayDirection,
           ),
         ),
         Positioned.fill(
           child: Align(
             alignment: Alignment.centerRight,
-            child: StreamBuilder<double>(
-              stream: _player.stream.volume,
-              builder: (_, snap) => _VerticalVolumeBar(
-                value: ((snap.data ?? _player.state.volume) / 100).clamp(
-                  0.0,
-                  1.0,
-                ),
-                onChanged: (value) => _setVolume(value * 100),
-                focusNode: _volumeBarFocus,
-                onDirection: _volumeBarDirection,
-                adjusting: _adjustingVolume,
-                onToggleAdjust: _toggleVolumeAdjustMode,
-              ),
+            child: _VerticalVolumeBar(
+              value: (_audioAmplification / 100).clamp(0.0, 1.0),
+              onChanged: (value) => _setVolume(value * 100),
+              focusNode: _volumeBarFocus,
+              onDirection: _volumeBarDirection,
+              adjusting: _adjustingVolume,
+              onToggleAdjust: _toggleVolumeAdjustMode,
             ),
           ),
         ),
@@ -948,110 +960,101 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
             padding: EdgeInsets.fromLTRB(edge, 0, edge, t.tvEdgePadding + 18),
             child: Align(
               alignment: Alignment.bottomCenter,
-              child: StreamBuilder<Duration>(
-                stream: _player.stream.position,
-                builder: (context, posSnap) {
-                  return StreamBuilder<Duration>(
-                    stream: _player.stream.duration,
-                    builder: (context, durSnap) {
-                      final pos = posSnap.data ?? Duration.zero;
-                      final dur = durSnap.data ?? Duration.zero;
-                      final frac = dur.inMilliseconds > 0
-                          ? pos.inMilliseconds / dur.inMilliseconds
-                          : 0.0;
+              child: Builder(
+                builder: (context) {
+                  final pos = _position;
+                  final dur = _duration;
+                  final frac = dur.inMilliseconds > 0
+                      ? pos.inMilliseconds / dur.inMilliseconds
+                      : 0.0;
 
-                      return Column(
-                        mainAxisSize: MainAxisSize.min,
+                  return Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
                         children: [
-                          Row(
-                            children: [
-                              _OverlayIconButton(
-                                icon: Icons.menu,
-                                tooltip: 'Menu',
-                                onTap: _openPlayerMenu,
-                                focusNode: _menuFocus,
-                                onDirection: _lhsIconDirection,
-                              ),
-                              const SizedBox(width: 10),
-                              _OverlayIconButton(
-                                icon: Icons.subtitles,
-                                tooltip: 'Subtitles',
-                                onTap: _openSubtitles,
-                                focusNode: _subtitlesFocus,
-                                onDirection: _lhsIconDirection,
-                              ),
-                              const SizedBox(width: 10),
-                              _OverlayIconButton(
-                                icon: Icons.audiotrack,
-                                tooltip: 'Audio Tracks',
-                                onTap: _openAudioTracks,
-                                focusNode: _audioTracksFocus,
-                                onDirection: _lhsIconDirection,
-                              ),
-                              const Spacer(),
-                              StreamBuilder<bool>(
-                                stream: _player.stream.playing,
-                                builder: (_, snap) => _OverlayIconButton(
-                                  icon: (snap.data ?? _player.state.playing)
-                                      ? Icons.pause
-                                      : Icons.play_arrow,
-                                  tooltip: 'Play/Pause',
-                                  onTap: _togglePlay,
-                                  focusNode: _playPauseRowFocus,
-                                  onDirection: _rhsIconDirection,
-                                ),
-                              ),
-                              if (_isDesktop) ...[
-                                const SizedBox(width: 10),
-                                _OverlayIconButton(
-                                  icon: _isFullscreen
-                                      ? Icons.fullscreen_exit
-                                      : Icons.fullscreen,
-                                  tooltip: _isFullscreen
-                                      ? 'Exit Fullscreen'
-                                      : 'Fullscreen',
-                                  onTap: _toggleFullscreen,
-                                  focusNode: _fullscreenFocus,
-                                  onDirection: _rhsIconDirection,
-                                ),
-                              ],
-                              const SizedBox(width: 10),
-                              _OverlayIconButton(
-                                icon: Icons.stop,
-                                tooltip: 'Stop',
-                                onTap: _exitPlayback,
-                                focusNode: _stopFocus,
-                                onDirection: _rhsIconDirection,
-                              ),
-                            ],
+                          _OverlayIconButton(
+                            icon: Icons.menu,
+                            tooltip: 'Menu',
+                            onTap: _openPlayerMenu,
+                            focusNode: _menuFocus,
+                            onDirection: _lhsIconDirection,
                           ),
-                          const SizedBox(height: 12),
-                          _ProgressDock(
-                            positionLabel: _formatDuration(pos),
-                            durationLabel: _formatDuration(dur),
-                            child: _SeekBar(
-                              value: _seeking ? _seekValue : frac,
-                              focusNode: _seekBarFocus,
-                              onDirection: _seekBarDirection,
-                              onSelect: _togglePlay,
-                              onChanged: (v) => setState(() {
-                                _seeking = true;
-                                _seekValue = v;
-                              }),
-                              onChangeEnd: (v) {
-                                setState(() => _seeking = false);
-                                _player.seek(
-                                  Duration(
-                                    milliseconds: (v * dur.inMilliseconds)
-                                        .round(),
-                                  ),
-                                );
-                              },
+                          const SizedBox(width: 10),
+                          _OverlayIconButton(
+                            icon: Icons.subtitles,
+                            tooltip: 'Subtitles',
+                            onTap: _openSubtitles,
+                            focusNode: _subtitlesFocus,
+                            onDirection: _lhsIconDirection,
+                          ),
+                          const SizedBox(width: 10),
+                          _OverlayIconButton(
+                            icon: Icons.audiotrack,
+                            tooltip: 'Audio Tracks',
+                            onTap: _openAudioTracks,
+                            focusNode: _audioTracksFocus,
+                            onDirection: _lhsIconDirection,
+                          ),
+                          const Spacer(),
+                          _OverlayIconButton(
+                            icon: _playing ? Icons.pause : Icons.play_arrow,
+                            tooltip: 'Play/Pause',
+                            onTap: _togglePlay,
+                            focusNode: _playPauseRowFocus,
+                            onDirection: _rhsIconDirection,
+                          ),
+                          if (_isDesktop) ...[
+                            const SizedBox(width: 10),
+                            _OverlayIconButton(
+                              icon: _isFullscreen
+                                  ? Icons.fullscreen_exit
+                                  : Icons.fullscreen,
+                              tooltip: _isFullscreen
+                                  ? 'Exit Fullscreen'
+                                  : 'Fullscreen',
+                              onTap: _toggleFullscreen,
+                              focusNode: _fullscreenFocus,
+                              onDirection: _rhsIconDirection,
                             ),
+                          ],
+                          const SizedBox(width: 10),
+                          _OverlayIconButton(
+                            icon: Icons.stop,
+                            tooltip: 'Stop',
+                            onTap: _exitPlayback,
+                            focusNode: _stopFocus,
+                            onDirection: _rhsIconDirection,
                           ),
                         ],
-                      );
-                    },
+                      ),
+                      const SizedBox(height: 12),
+                      _ProgressDock(
+                        positionLabel: _formatDuration(pos),
+                        durationLabel: _formatDuration(dur),
+                        child: _SeekBar(
+                          value: _seeking ? _seekValue : frac,
+                          focusNode: _seekBarFocus,
+                          onDirection: _seekBarDirection,
+                          onSelect: _togglePlay,
+                          onChanged: (v) => setState(() {
+                            _seeking = true;
+                            _seekValue = v;
+                          }),
+                          onChangeEnd: (v) {
+                            setState(() => _seeking = false);
+                            unawaited(
+                              _backend.seekTo(
+                                Duration(
+                                  milliseconds: (v * dur.inMilliseconds)
+                                      .round(),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ],
                   );
                 },
               ),
@@ -1070,45 +1073,6 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
 const _uoscAccent = Color(0xFF0DB2E2);
 const _uoscAccentLight = Color(0xFF78F4FF);
 const _uoscGlass = Color(0xB30B1118);
-
-class _ControlsShortcuts extends StatelessWidget {
-  final VoidCallback onBack;
-  final VoidCallback onStop;
-  final VoidCallback onPlayPause;
-  final VoidCallback onPlay;
-  final VoidCallback onPause;
-  final VoidCallback onRewind;
-  final VoidCallback onFastForward;
-  final Widget child;
-
-  const _ControlsShortcuts({
-    required this.onBack,
-    required this.onStop,
-    required this.onPlayPause,
-    required this.onPlay,
-    required this.onPause,
-    required this.onRewind,
-    required this.onFastForward,
-    required this.child,
-  });
-
-  @override
-  Widget build(BuildContext context) => CallbackShortcuts(
-    bindings: {
-      const SingleActivator(LogicalKeyboardKey.escape): onBack,
-      const SingleActivator(LogicalKeyboardKey.backspace): onBack,
-      const SingleActivator(LogicalKeyboardKey.goBack): onBack,
-      const SingleActivator(LogicalKeyboardKey.browserBack): onBack,
-      const SingleActivator(LogicalKeyboardKey.mediaStop): onStop,
-      const SingleActivator(LogicalKeyboardKey.mediaPlayPause): onPlayPause,
-      const SingleActivator(LogicalKeyboardKey.mediaPlay): onPlay,
-      const SingleActivator(LogicalKeyboardKey.mediaPause): onPause,
-      const SingleActivator(LogicalKeyboardKey.mediaRewind): onRewind,
-      const SingleActivator(LogicalKeyboardKey.mediaFastForward): onFastForward,
-    },
-    child: child,
-  );
-}
 
 class _SeekBar extends StatelessWidget {
   final double value;
@@ -2113,65 +2077,73 @@ class _SettingsSwitchRow extends StatelessWidget {
   );
 }
 
-class _AudioTracksDialog extends StatelessWidget {
-  final Stream<Tracks> tracksStream;
-  final Stream<Track> trackStream;
-  final Tracks initialTracks;
-  final Track initialTrack;
-  final ValueChanged<AudioTrack> onSelect;
+class _AudioTracksDialog extends StatefulWidget {
+  final WarpPlaybackBackend backend;
 
-  const _AudioTracksDialog({
-    required this.tracksStream,
-    required this.trackStream,
-    required this.initialTracks,
-    required this.initialTrack,
-    required this.onSelect,
-  });
+  const _AudioTracksDialog({required this.backend});
 
   @override
-  Widget build(BuildContext context) => _SettingsDialogFrame(
-    icon: Icons.audiotrack,
-    title: 'Audio Tracks',
-    child: StreamBuilder<Tracks>(
-      stream: tracksStream,
-      initialData: initialTracks,
-      builder: (context, tracksSnap) => StreamBuilder<Track>(
-        stream: trackStream,
-        initialData: initialTrack,
-        builder: (context, trackSnap) {
-          final tracks = tracksSnap.data?.audio ?? const <AudioTrack>[];
-          final selected = trackSnap.data?.audio ?? initialTrack.audio;
-          if (tracks.isEmpty) {
-            return Text(
+  State<_AudioTracksDialog> createState() => _AudioTracksDialogState();
+}
+
+class _AudioTracksDialogState extends State<_AudioTracksDialog> {
+  WarpTrackList _tracks = const WarpTrackList();
+  StreamSubscription<WarpTrackList>? _subscription;
+
+  @override
+  void initState() {
+    super.initState();
+    // getTracks() gives the initial snapshot; tracksStream only fires on
+    // subsequent changes (mirrors the same pattern in subtitle_dialog.dart's
+    // _ActiveTracksTab — the backend interface is stream-only, no
+    // synchronous `.state` snapshot).
+    widget.backend.getTracks().then((tracks) {
+      if (mounted) setState(() => _tracks = tracks);
+    });
+    _subscription = widget.backend.tracksStream.listen((tracks) {
+      if (mounted) setState(() => _tracks = tracks);
+    });
+  }
+
+  @override
+  void dispose() {
+    _subscription?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final tracks = _tracks.audio;
+    return _SettingsDialogFrame(
+      icon: Icons.audiotrack,
+      title: 'Audio Tracks',
+      child: tracks.isEmpty
+          ? Text(
               'No audio tracks are available for this media.',
               style: TextStyle(color: Colors.white.withAlpha(170)),
-            );
-          }
-
-          return ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 420),
-            child: ListView.separated(
-              shrinkWrap: true,
-              itemCount: tracks.length,
-              separatorBuilder: (_, _) => const SizedBox(height: 8),
-              itemBuilder: (context, index) {
-                final track = tracks[index];
-                return _TrackTile(
-                  track: track,
-                  selected: track == selected,
-                  onTap: () => onSelect(track),
-                );
-              },
+            )
+          : ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 420),
+              child: ListView.separated(
+                shrinkWrap: true,
+                itemCount: tracks.length,
+                separatorBuilder: (_, _) => const SizedBox(height: 8),
+                itemBuilder: (context, index) {
+                  final track = tracks[index];
+                  return _TrackTile(
+                    track: track,
+                    selected: track.selected,
+                    onTap: () => widget.backend.selectAudioTrack(track.id),
+                  );
+                },
+              ),
             ),
-          );
-        },
-      ),
-    ),
-  );
+    );
+  }
 }
 
 class _TrackTile extends StatelessWidget {
-  final AudioTrack track;
+  final WarpAudioTrack track;
   final bool selected;
   final VoidCallback onTap;
 
@@ -2252,19 +2224,15 @@ class _TrackTile extends StatelessWidget {
   );
 }
 
-String _audioTrackTitle(AudioTrack track) {
-  if (track.id == 'auto') return 'Auto';
-  if (track.id == 'no') return 'Disabled';
-  final title = track.title?.trim();
-  if (title != null && title.isNotEmpty) return title;
+String _audioTrackTitle(WarpAudioTrack track) {
+  final label = track.label?.trim();
+  if (label != null && label.isNotEmpty) return label;
   final language = track.language?.trim();
   if (language != null && language.isNotEmpty) return language.toUpperCase();
   return 'Audio ${track.id}';
 }
 
-String _audioTrackSubtitle(AudioTrack track) {
-  if (track.id == 'auto') return 'Let the player choose the best track.';
-  if (track.id == 'no') return 'Disable audio output.';
+String _audioTrackSubtitle(WarpAudioTrack track) {
   final parts = <String>[];
   final language = track.language?.trim();
   if (language != null && language.isNotEmpty) {
@@ -2272,15 +2240,9 @@ String _audioTrackSubtitle(AudioTrack track) {
   }
   final codec = track.codec?.trim();
   if (codec != null && codec.isNotEmpty) parts.add(codec.toUpperCase());
-  final channels = track.channels?.trim();
-  if (channels != null && channels.isNotEmpty) {
-    parts.add(channels);
-  } else if (track.channelscount != null) {
-    parts.add('${track.channelscount} channels');
-  }
-  final samplerate = track.samplerate;
-  if (samplerate != null && samplerate > 0) {
-    parts.add('${(samplerate / 1000).toStringAsFixed(1)} kHz');
+  if (track.channels != null) parts.add('${track.channels} channels');
+  if (track.bitrate != null && track.bitrate! > 0) {
+    parts.add('${(track.bitrate! / 1000).round()} kbps');
   }
   return parts.isEmpty ? 'Track id ${track.id}' : parts.join(' · ');
 }

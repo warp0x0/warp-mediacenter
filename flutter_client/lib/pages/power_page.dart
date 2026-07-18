@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:dio/dio.dart' show Options;
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../api/api_client.dart';
@@ -217,6 +218,10 @@ class _PowerPageState extends ConsumerState<PowerPage>
 
   void _quitApp() => exit(0);
 
+  // TEMPORARY — native player M1 smoke test entry point. Remove at M8
+  // cleanup (see the native player implementation plan).
+  void _openNativePlayerSmokeTest() => context.push('/debug/native-player');
+
   @override
   Widget build(BuildContext context) {
     final t = WarpTokens.watch(context, ref);
@@ -263,6 +268,9 @@ class _PowerPageState extends ConsumerState<PowerPage>
                   onOpenDocs: _openApiDocs,
                   onClearCache: _clearCache,
                   onQuit: _quitApp,
+                  onOpenNativePlayerSmokeTest: Platform.isAndroid
+                      ? _openNativePlayerSmokeTest
+                      : null,
                   onDirection: _upToTab,
                   t: t,
                 ),
@@ -708,6 +716,7 @@ class _ActionsCard extends StatelessWidget {
     required this.onQuit,
     required this.onDirection,
     required this.t,
+    this.onOpenNativePlayerSmokeTest,
   });
 
   final VoidCallback onOpenDocs;
@@ -715,6 +724,9 @@ class _ActionsCard extends StatelessWidget {
   final VoidCallback onQuit;
   final DpadDirectionCallback onDirection;
   final WarpTokens t;
+  // TEMPORARY — native player M1 smoke test entry point (Android only, null
+  // elsewhere). Remove at M8 cleanup.
+  final VoidCallback? onOpenNativePlayerSmokeTest;
 
   @override
   Widget build(BuildContext context) {
@@ -762,6 +774,17 @@ class _ActionsCard extends StatelessWidget {
                   onDirection: onDirection,
                   onSelect: onQuit,
                 ),
+                if (onOpenNativePlayerSmokeTest != null)
+                  WarpAccentButton(
+                    label: 'Native Player Smoke Test',
+                    icon: Icons.science_outlined,
+                    accentColor: WarpColors.accent,
+                    fontSize: t.fontSubtitle,
+                    paddingHorizontal: 20,
+                    paddingVertical: 12,
+                    onDirection: onDirection,
+                    onSelect: onOpenNativePlayerSmokeTest!,
+                  ),
               ],
             ),
           ),

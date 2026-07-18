@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui';
 
 import 'package:dio/dio.dart';
@@ -5,17 +6,18 @@ import 'package:dpad/dpad.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:media_kit/media_kit.dart' as mk;
 
 import '../../api/api_client.dart';
 import '../../models/subtitle.dart' as subtitle_models;
+import '../../player/backend/warp_playback_backend.dart';
 import '../../theme/warp_tokens.dart';
 import 'file_browser_modal.dart';
 import '../shared/modal_focus_restore.dart';
 import '../shared/tv_modal_chrome_scale.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SubtitleDialog — live media_kit subtitle search, file load, and track switcher
+// SubtitleDialog — subtitle search, file load, and track switcher, driven by
+// a WarpPlaybackBackend (media_kit on desktop, native Media3 on Android TV).
 // ─────────────────────────────────────────────────────────────────────────────
 
 const _accent = Color(0xFF0DB2E2);
@@ -23,7 +25,7 @@ const _accentLight = Color(0xFF78F4FF);
 const _glass = Color(0xE50A0E14);
 
 class SubtitleDialog extends ConsumerStatefulWidget {
-  final mk.Player player;
+  final WarpPlaybackBackend backend;
   final String tmdbId;
   final String mediaKind; // 'movie' or 'show'
   final String? title;
@@ -33,7 +35,7 @@ class SubtitleDialog extends ConsumerStatefulWidget {
 
   const SubtitleDialog({
     super.key,
-    required this.player,
+    required this.backend,
     required this.tmdbId,
     required this.mediaKind,
     this.title,
@@ -135,7 +137,7 @@ class _SubtitleDialogState extends ConsumerState<SubtitleDialog>
                               physics: const NeverScrollableScrollPhysics(),
                               children: [
                                 _SearchTab(
-                                  player: widget.player,
+                                  backend: widget.backend,
                                   tmdbId: widget.tmdbId,
                                   mediaKind: widget.mediaKind == 'show'
                                       ? 'show'
@@ -146,8 +148,8 @@ class _SubtitleDialogState extends ConsumerState<SubtitleDialog>
                                   sourceUrl: widget.sourceUrl,
                                   t: t,
                                 ),
-                                _BrowseTab(player: widget.player, t: t),
-                                _ActiveTracksTab(player: widget.player, t: t),
+                                _BrowseTab(backend: widget.backend, t: t),
+                                _ActiveTracksTab(backend: widget.backend, t: t),
                               ],
                             ),
                           ),
@@ -464,7 +466,7 @@ class _SubtitleTabPillState extends State<_SubtitleTabPill> {
 }
 
 class _SearchTab extends ConsumerStatefulWidget {
-  final mk.Player player;
+  final WarpPlaybackBackend backend;
   final String tmdbId;
   final String mediaKind;
   final String? title;
@@ -474,7 +476,7 @@ class _SearchTab extends ConsumerStatefulWidget {
   final WarpTokens t;
 
   const _SearchTab({
-    required this.player,
+    required this.backend,
     required this.tmdbId,
     required this.mediaKind,
     required this.t,
@@ -583,35 +585,16 @@ class _SearchTabState extends ConsumerState<_SearchTab> {
       final uri = _subtitleUri(
         download.url.isNotEmpty ? download.url : download.path,
       );
-      await widget.player.setSubtitleTrack(
-        mk.SubtitleTrack.uri(
-          uri,
-          title: result.release.isNotEmpty ? result.release : download.fileName,
-          language: result.language,
-        ),
+      // addExternalSubtitle resolves only once the track is actually
+      // selectable (both backends handle their own async-registration
+      // timing internally — see WarpPlaybackBackend's doc comment), so no
+      // poll-and-hope workaround is needed here anymore.
+      final trackId = await widget.backend.addExternalSubtitle(
+        uri,
+        title: result.release.isNotEmpty ? result.release : download.fileName,
+        language: result.language,
       );
-
-      // Wait for mpv to register the external track, then explicitly
-      // select it by its mpv-assigned numeric ID to force activation.
-      try {
-        final tracks = await widget.player.stream.tracks
-            .firstWhere(
-              (t) =>
-                  t.subtitle
-                      .where((s) => s.id != 'auto' && s.id != 'no')
-                      .length >
-                  widget.player.state.tracks.subtitle
-                      .where((s) => s.id != 'auto' && s.id != 'no')
-                      .length,
-            )
-            .timeout(const Duration(seconds: 5));
-        final external = tracks.subtitle
-            .where((s) => s.id != 'auto' && s.id != 'no')
-            .last;
-        await widget.player.setSubtitleTrack(external);
-      } catch (_) {
-        // sub-add with select should have already activated it; this is a fallback.
-      }
+      await widget.backend.selectSubtitleTrack(trackId);
 
       if (mounted) Navigator.of(context).pop();
     } catch (error) {
@@ -877,10 +860,10 @@ class _SubtitleResultRow extends StatelessWidget {
 }
 
 class _BrowseTab extends ConsumerStatefulWidget {
-  final mk.Player player;
+  final WarpPlaybackBackend backend;
   final WarpTokens t;
 
-  const _BrowseTab({required this.player, required this.t});
+  const _BrowseTab({required this.backend, required this.t});
 
   @override
   ConsumerState<_BrowseTab> createState() => _BrowseTabState();
@@ -900,9 +883,11 @@ class _BrowseTabState extends ConsumerState<_BrowseTab> {
     });
 
     try {
-      await widget.player.setSubtitleTrack(
-        mk.SubtitleTrack.uri(_subtitleUri(path), title: _fileName(path)),
+      final trackId = await widget.backend.addExternalSubtitle(
+        _subtitleUri(path),
+        title: _fileName(path),
       );
+      await widget.backend.selectSubtitleTrack(trackId);
       if (mounted) Navigator.of(context).pop();
     } catch (error) {
       if (!mounted) return;
@@ -975,55 +960,85 @@ class _BrowseTabState extends ConsumerState<_BrowseTab> {
   );
 }
 
-class _ActiveTracksTab extends StatelessWidget {
-  final mk.Player player;
+class _ActiveTracksTab extends StatefulWidget {
+  final WarpPlaybackBackend backend;
   final WarpTokens t;
 
-  const _ActiveTracksTab({required this.player, required this.t});
+  const _ActiveTracksTab({required this.backend, required this.t});
 
   @override
-  Widget build(BuildContext context) => StreamBuilder<mk.Tracks>(
-    stream: player.stream.tracks,
-    initialData: player.state.tracks,
-    builder: (context, tracksSnap) => StreamBuilder<mk.Track>(
-      stream: player.stream.track,
-      initialData: player.state.track,
-      builder: (context, trackSnap) {
-        final tracks = tracksSnap.data?.subtitle ?? const <mk.SubtitleTrack>[];
-        final selected =
-            trackSnap.data?.subtitle ?? player.state.track.subtitle;
+  State<_ActiveTracksTab> createState() => _ActiveTracksTabState();
+}
 
-        if (tracks.isEmpty) {
-          return _EmptyState(
-            icon: Icons.subtitles_off,
-            title: 'No subtitle tracks',
-            subtitle:
-                'This file has not exposed any embedded subtitle tracks yet.',
-            t: t,
+class _ActiveTracksTabState extends State<_ActiveTracksTab> {
+  WarpTrackList _tracks = const WarpTrackList();
+  StreamSubscription<WarpTrackList>? _subscription;
+
+  @override
+  void initState() {
+    super.initState();
+    // getTracks() gives the initial snapshot; tracksStream only fires on
+    // subsequent changes (it won't necessarily re-emit just because this
+    // dialog opened), so both are needed — matches the same pattern used in
+    // playback_page.dart's _AudioTracksDialog.
+    widget.backend.getTracks().then((tracks) {
+      if (mounted) setState(() => _tracks = tracks);
+    });
+    _subscription = widget.backend.tracksStream.listen((tracks) {
+      if (mounted) setState(() => _tracks = tracks);
+    });
+  }
+
+  @override
+  void dispose() {
+    _subscription?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final tracks = _tracks.text;
+    final noneSelected = tracks.every((t) => !t.selected);
+
+    if (tracks.isEmpty) {
+      return _EmptyState(
+        icon: Icons.subtitles_off,
+        title: 'No subtitle tracks',
+        subtitle: 'This file has not exposed any subtitle tracks yet.',
+        t: widget.t,
+      );
+    }
+
+    return ListView.separated(
+      padding: const EdgeInsets.fromLTRB(18, 12, 18, 18),
+      itemCount: tracks.length + 1,
+      separatorBuilder: (_, _) => const SizedBox(height: 10),
+      itemBuilder: (context, index) {
+        if (index == 0) {
+          return _SubtitleTrackRow(
+            track: null,
+            selected: noneSelected,
+            onTap: () => widget.backend.selectSubtitleTrack(null),
+            t: widget.t,
           );
         }
-
-        return ListView.separated(
-          padding: const EdgeInsets.fromLTRB(18, 12, 18, 18),
-          itemCount: tracks.length,
-          separatorBuilder: (_, _) => const SizedBox(height: 10),
-          itemBuilder: (context, index) {
-            final track = tracks[index];
-            return _SubtitleTrackRow(
-              track: track,
-              selected: track == selected,
-              onTap: () => player.setSubtitleTrack(track),
-              t: t,
-            );
-          },
+        final track = tracks[index - 1];
+        return _SubtitleTrackRow(
+          track: track,
+          selected: track.selected,
+          onTap: () => widget.backend.selectSubtitleTrack(track.id),
+          t: widget.t,
         );
       },
-    ),
-  );
+    );
+  }
 }
 
 class _SubtitleTrackRow extends StatelessWidget {
-  final mk.SubtitleTrack track;
+  // null represents the synthesized "Disabled" row — native track lists
+  // (unlike mpv's) don't include a sentinel "no subtitle" entry, so the UI
+  // adds one itself rather than requiring every backend to fake one.
+  final WarpTextTrack? track;
   final bool selected;
   final VoidCallback onTap;
   final WarpTokens t;
@@ -1367,31 +1382,22 @@ String _friendlyError(Object error) {
   return error.toString();
 }
 
-String _subtitleTrackTitle(mk.SubtitleTrack track) {
-  if (track.id == 'auto') return 'Auto';
-  if (track.id == 'no') return 'Disabled';
-  final title = track.title?.trim();
-  if (title != null && title.isNotEmpty) return title;
+String _subtitleTrackTitle(WarpTextTrack? track) {
+  if (track == null) return 'Disabled';
+  final label = track.label?.trim();
+  if (label != null && label.isNotEmpty) return label;
   final language = track.language?.trim();
   if (language != null && language.isNotEmpty) return language.toUpperCase();
   return 'Subtitle ${track.id}';
 }
 
-String _subtitleTrackSubtitle(mk.SubtitleTrack track) {
-  if (track.id == 'auto') {
-    return 'Let the player choose the preferred subtitle.';
-  }
-  if (track.id == 'no') return 'Disable subtitle rendering.';
+String _subtitleTrackSubtitle(WarpTextTrack? track) {
+  if (track == null) return 'Disable subtitle rendering.';
   final parts = <String>[];
   final language = track.language?.trim();
   if (language != null && language.isNotEmpty) {
     parts.add(language.toUpperCase());
   }
-  final codec = track.codec?.trim();
-  if (codec != null && codec.isNotEmpty) {
-    parts.add(codec.toUpperCase());
-  }
-  if (track.uri) parts.add('External');
-  if (track.data) parts.add('Data');
+  if (track.isExternal) parts.add('External');
   return parts.isEmpty ? 'Track id ${track.id}' : parts.join(' · ');
 }

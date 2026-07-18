@@ -7,6 +7,7 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 import '../models/media.dart';
 import 'catalog_browse_route_extra.dart';
 import 'detail_route_extra.dart';
+import '../pages/debug/native_player_smoke_test_page.dart';
 import '../pages/detail_view_page.dart';
 import '../providers/detail_provider.dart';
 import '../pages/library_page.dart';
@@ -130,6 +131,15 @@ GoRouter warpRouter(Ref ref) {
         path: '/playback',
         builder: (ctx, state) => PlaybackPage(
           payload: (state.extra as Map<String, dynamic>?) ?? const {},
+        ),
+      ),
+      // TEMPORARY — native player M1 smoke test route. Remove at M8 cleanup
+      // once the native player is fully validated (see the native player
+      // implementation plan).
+      GoRoute(
+        path: '/debug/native-player',
+        builder: (ctx, state) => NativePlayerSmokeTestPage(
+          testUrl: state.extra as String?,
         ),
       ),
       GoRoute(

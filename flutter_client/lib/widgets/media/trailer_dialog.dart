@@ -7,7 +7,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart' hide Video;
 
 import '../../models/media.dart';
-import '../../player/better_trailer_player.dart';
+import '../../player/backend/backend_factory.dart';
+import '../../player/backend/warp_playback_backend.dart';
+import '../../player/youtube_stream_selector.dart';
 import '../../theme/warp_theme.dart';
 import '../../theme/warp_tokens.dart';
 import '../shared/modal_focus_restore.dart';
@@ -35,7 +37,8 @@ class TrailerDialog extends ConsumerStatefulWidget {
 
 class _TrailerDialogState extends ConsumerState<TrailerDialog>
     with WidgetsBindingObserver, ModalFocusRestore<TrailerDialog> {
-  late final BetterTrailerPlayerController _player;
+  late final WarpPlaybackBackend _backend;
+  final List<StreamSubscription<dynamic>> _backendSubs = [];
   final _surfaceFocus = FocusNode(debugLabel: 'TrailerVideoSurface');
   final _selectorScroll = ScrollController();
   final _selectorRailFocus = FocusNode(debugLabel: 'TrailerSelectorScrollRail');
@@ -48,17 +51,31 @@ class _TrailerDialogState extends ConsumerState<TrailerDialog>
   int _loadGeneration = 0;
   late List<Trailer> _orderedTrailers;
 
+  // Locally tracked mirror of backend stream state — see the same pattern
+  // (and rationale) in playback_page.dart; WarpPlaybackBackend is
+  // stream-only, no synchronous `.state` snapshot.
+  bool _playing = false;
+  Duration _position = Duration.zero;
+  double _volume = 1.0;
+
   List<Trailer> get _trailers => _orderedTrailers;
 
   @override
   void initState() {
     super.initState();
-    _player = BetterTrailerPlayerController(
-      onError: (message) {
+    _backend = createPlaybackBackend(ref, isTrailer: true);
+    _backendSubs.addAll([
+      _backend.playingStream.listen((playing) {
+        if (mounted) setState(() => _playing = playing);
+      }),
+      _backend.positionStream.listen((update) {
+        if (mounted) _position = update.position;
+      }),
+      _backend.errorStream.listen((error) {
         if (!mounted || _loading) return;
-        setState(() => _error = message);
-      },
-    );
+        setState(() => _error = error.message);
+      }),
+    ]);
     _orderedTrailers = _buildOrderedTrailers();
     _selectedIndex = 0;
     _syncSelectorFocusNodes();
@@ -90,7 +107,10 @@ class _TrailerDialogState extends ConsumerState<TrailerDialog>
     for (final node in _selectorFocusNodes) {
       node.dispose();
     }
-    _player.dispose();
+    for (final sub in _backendSubs) {
+      sub.cancel();
+    }
+    unawaited(_backend.dispose());
     super.dispose();
   }
 
@@ -150,41 +170,61 @@ class _TrailerDialogState extends ConsumerState<TrailerDialog>
     }
   }
 
-  Future<void> _openStreams(_TrailerStreams streams) async {
-    await _player.load(streams.videoUrl);
+  Future<void> _openStreams(WarpDataSource source) async {
+    await _backend.setDataSource(source);
+    await _backend.play();
+    // The native backend's SurfaceView shows nothing until the first
+    // decoded frame — wait for ready/error before flipping _loading off,
+    // same gate used in playback_page.dart, so this dialog never shows a
+    // black flash between "loading" and "playing" on Android TV.
+    await _backend.stateStream.firstWhere(
+      (s) => s == WarpPlaybackState.ready || s == WarpPlaybackState.error,
+    );
   }
 
-  Future<_TrailerStreams> _extractStreams(String youtubeUrl) async {
+  Future<WarpDataSource> _extractStreams(String youtubeUrl) async {
     final yt = YoutubeExplode();
     try {
       final videoId = VideoId(youtubeUrl);
       final manifest = await yt.videos.streams.getManifest(
         videoId,
+        // androidVr's video-only/audio-only progressive URLs reproducibly
+        // stalled native playback (CDN rate-pacing tied to ExoPlayer's HTTP
+        // Range header, not the client itself — see
+        // YoutubeRangeParamDataSource.kt on the native side for the actual
+        // fix and full diagnosis). Swapping the client for `ios` returned
+        // 403s (likely needs a PO token this package doesn't supply for
+        // that client), so androidVr stays in the client list.
         ytClients: [YoutubeApiClient.safari, YoutubeApiClient.androidVr],
       );
-      final muxed = manifest.muxed;
       debugPrint(
-        'Manifest loaded for $videoId: muxed=${muxed.length}, videoOnly=${manifest.videoOnly.length}, audioOnly=${manifest.audioOnly.length}',
+        'Manifest loaded for $videoId: muxed=${manifest.muxed.length}, '
+        'videoOnly=${manifest.videoOnly.length}, audioOnly=${manifest.audioOnly.length}',
       );
-      if (muxed.isNotEmpty) {
-        return _TrailerStreams(muxed.withHighestBitrate().url.toString());
-      }
-      throw Exception('No muxed playable stream found');
+      return selectBestStream(
+        manifest,
+        allowDemuxed: _backend.supportsDemuxedSource,
+      );
     } finally {
       yt.close();
     }
   }
 
   void _togglePlayPause() {
-    unawaited(_player.togglePlayPause());
+    // Optimistic local update — playingStream will confirm/correct once the
+    // platform-channel round trip completes.
+    setState(() => _playing = !_playing);
+    unawaited(_playing ? _backend.play() : _backend.pause());
   }
 
   void _seek(int seconds) {
-    unawaited(_player.seekBy(Duration(seconds: seconds)));
+    final pos = _position + Duration(seconds: seconds);
+    unawaited(_backend.seekTo(pos.isNegative ? Duration.zero : pos));
   }
 
   void _adjustVolume(double delta) {
-    unawaited(_player.adjustVolume(delta / 100));
+    _volume = (_volume + delta / 100).clamp(0.0, 1.0);
+    unawaited(_backend.setVolume(_volume));
   }
 
   bool _surfaceDirection(TraversalDirection direction) {
@@ -402,27 +442,61 @@ class _TrailerDialogState extends ConsumerState<TrailerDialog>
                                       ),
                                       child: child,
                                     ),
-                                child: _loading
-                                    ? const Center(
-                                        child: CircularProgressIndicator(
-                                          color: Color(0xFF0DB2E2),
-                                          strokeWidth: 2,
+                                child: Stack(
+                                  children: [
+                                    // Always mounted, even while loading —
+                                    // the native backend's platform view (and
+                                    // its MethodChannel handler) is only
+                                    // created once this is in the widget
+                                    // tree, so setDataSource/play must never
+                                    // fire before this exists (matches
+                                    // playback_page.dart's pattern; see
+                                    // native_android_backend.dart's
+                                    // _surfaceReady gating for the other half
+                                    // of this fix).
+                                    GestureDetector(
+                                      behavior: HitTestBehavior.opaque,
+                                      onTap: _togglePlayPause,
+                                      onLongPress: _openSelector,
+                                      child: _backend.buildSurface(),
+                                    ),
+                                    if (_loading)
+                                      // The native backend's SurfaceView is
+                                      // transparent until the first decoded
+                                      // frame arrives — an opaque scrim is
+                                      // required here, not just the spinner,
+                                      // or the app behind the dialog shows
+                                      // through (same pattern as
+                                      // playback_page.dart's loading scrim).
+                                      const Positioned.fill(
+                                        child: ColoredBox(
+                                          color: Colors.black,
+                                          child: Center(
+                                            child: CircularProgressIndicator(
+                                              color: Color(0xFF0DB2E2),
+                                              strokeWidth: 2,
+                                            ),
+                                          ),
                                         ),
                                       )
-                                    : _error != null
-                                    ? _ErrorBody(
-                                        message: _error!,
-                                        url: _trailers[_selectedIndex].url,
-                                        t: t,
-                                      )
-                                    : GestureDetector(
-                                        behavior: HitTestBehavior.opaque,
-                                        onTap: _togglePlayPause,
-                                        onLongPress: _openSelector,
-                                        child: BetterTrailerPlayerSurface(
-                                          controller: _player,
+                                    else if (_error != null)
+                                      // Same opaque-scrim requirement as the
+                                      // loading state above — on error the
+                                      // SurfaceView never received a decoded
+                                      // frame either, so it's still a
+                                      // transparent hole without this.
+                                      Positioned.fill(
+                                        child: ColoredBox(
+                                          color: Colors.black,
+                                          child: _ErrorBody(
+                                            message: _error!,
+                                            url: _trailers[_selectedIndex].url,
+                                            t: t,
+                                          ),
                                         ),
                                       ),
+                                  ],
+                                ),
                               ),
                             ),
                           ),
@@ -527,12 +601,6 @@ class _TrailerDialogState extends ConsumerState<TrailerDialog>
       ),
     );
   }
-}
-
-class _TrailerStreams {
-  final String videoUrl;
-
-  const _TrailerStreams(this.videoUrl);
 }
 
 class _TrailerOptionRow extends StatelessWidget {

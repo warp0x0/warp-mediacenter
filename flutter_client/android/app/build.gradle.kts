@@ -43,3 +43,18 @@ kotlin {
 flutter {
     source = "../.."
 }
+
+// ── WarpPlayer — native Media3/ExoPlayer SurfaceView player for Android TV ──
+// media3-ui is required for the native SubtitleView (subtitles are rendered
+// natively, in the same view hierarchy as the SurfaceView, so they stay
+// frame-synced with video under Flutter-side jank — see PLAYER_PROTOTYPE.md
+// and the native player implementation plan for why).
+dependencies {
+    val media3Version = "1.4.1"
+    implementation("androidx.media3:media3-exoplayer:$media3Version")
+    implementation("androidx.media3:media3-common:$media3Version")
+    implementation("androidx.media3:media3-datasource:$media3Version")
+    implementation("androidx.media3:media3-exoplayer-hls:$media3Version")
+    implementation("androidx.media3:media3-exoplayer-dash:$media3Version")
+    implementation("androidx.media3:media3-ui:$media3Version")
+}
