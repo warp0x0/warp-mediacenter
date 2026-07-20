@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:window_manager/window_manager.dart';
 import '../api/api_client.dart';
+import '../player/external_mpv_player.dart';
 import '../player/playback_backend.dart';
 import '../providers/detail_provider.dart';
 import '../theme/warp_tokens.dart';
@@ -40,6 +41,7 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
   StreamSubscription<Duration>? _positionSub;
   StreamSubscription<bool>? _completedSub;
   StreamSubscription<bool>? _firstFrameSub;
+  StreamSubscription<ExternalMpvResult>? _externalResultSub;
 
   // ── D-pad navigation focus nodes ────────────────────────────────────────
   // Initial focus lands on the progress bar. LHS icons (Menu/Subtitles/
@@ -73,6 +75,11 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
   int _subtitleSizeIndex = 1;
   double _audioAmplification = 0;
   Timer? _hideTimer;
+  Timer? _externalWatchdog;
+  late final bool _externalMode;
+  String _externalStatus = 'Opening external player…';
+  bool _externalResultHandled = false;
+  bool _externalScrobbleStarted = false;
 
   bool get _overlayHasFocus => [
     _seekBarFocus,
@@ -98,17 +105,21 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
     WidgetsBinding.instance.addObserver(this);
     if (_isDesktop) windowManager.addListener(this);
     _playback = createPlaybackBackend();
+    _externalMode =
+        Platform.isAndroid && widget.payload['externalPlayerRequired'] == true;
 
     final src = widget.payload['source'] as String? ?? '';
     final resumeFromFrac = (widget.payload['resumeFromFrac'] as num?)
         ?.toDouble();
 
-    if (src.isNotEmpty) {
+    if (_externalMode) {
+      unawaited(_launchExternalMpv(src, resumeFromFrac: resumeFromFrac));
+    } else if (src.isNotEmpty) {
       unawaited(_playback.open(src));
     }
 
     // Seek to resume position once duration is known
-    if (resumeFromFrac != null && resumeFromFrac > 0) {
+    if (!_externalMode && resumeFromFrac != null && resumeFromFrac > 0) {
       _playback.durationStream.firstWhere((d) => d.inSeconds > 0).then((dur) {
         final seekTo = Duration(
           milliseconds: (resumeFromFrac * dur.inMilliseconds).round(),
@@ -134,12 +145,14 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
 
     _resetHideTimer();
 
-    // Scrobble start after first progress tick
-    _positionSub = _playback.positionStream.listen(_onPosition);
-    _completedSub = _playback.completedStream.listen(_onCompleted);
-    _firstFrameSub = _playback.firstFrameStream.listen((rendered) {
-      if (mounted) setState(() => _firstFrameRendered = rendered);
-    });
+    if (!_externalMode) {
+      // Scrobble start after first progress tick
+      _positionSub = _playback.positionStream.listen(_onPosition);
+      _completedSub = _playback.completedStream.listen(_onCompleted);
+      _firstFrameSub = _playback.firstFrameStream.listen((rendered) {
+        if (mounted) setState(() => _firstFrameRendered = rendered);
+      });
+    }
   }
 
   @override
@@ -174,6 +187,8 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
     _positionSub?.cancel();
     _completedSub?.cancel();
     _firstFrameSub?.cancel();
+    _externalResultSub?.cancel();
+    _externalWatchdog?.cancel();
     unawaited(_playback.dispose());
     super.dispose();
   }
@@ -212,6 +227,147 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
   }
 
   Duration? _scrobbleStartedAt;
+
+  Duration get _externalDuration {
+    final ms = (widget.payload['playbackDurationMs'] as num?)?.toInt() ?? 0;
+    return ms > 0 ? Duration(milliseconds: ms) : Duration.zero;
+  }
+
+  Duration _externalStartPosition(double? resumeFromFrac) {
+    final dur = _externalDuration;
+    if (resumeFromFrac == null || resumeFromFrac <= 0 || dur == Duration.zero) {
+      return Duration.zero;
+    }
+    return Duration(
+      milliseconds: (resumeFromFrac.clamp(0.0, 1.0) * dur.inMilliseconds)
+          .round(),
+    );
+  }
+
+  Future<void> _launchExternalMpv(
+    String src, {
+    required double? resumeFromFrac,
+  }) async {
+    if (src.isEmpty) {
+      if (mounted) setState(() => _externalStatus = 'No stream URL available.');
+      return;
+    }
+
+    final startPos = _externalStartPosition(resumeFromFrac);
+    final title =
+        widget.payload['selectedSourceTitle'] as String? ??
+        widget.payload['title'] as String?;
+
+    try {
+      if (!await ExternalMpvPlayer.isInstalled()) {
+        if (mounted) {
+          setState(
+            () => _externalStatus =
+                'mpv-android is required for this source. Opening Play Store…',
+          );
+        }
+        await ExternalMpvPlayer.openInstallPage();
+        return;
+      }
+
+      _externalResultSub = ExternalMpvPlayer.results.listen(
+        (result) => unawaited(_handleExternalResult(result, startPos)),
+      );
+      final launched = await ExternalMpvPlayer.launch(
+        url: src,
+        title: title,
+        positionMs: startPos.inMilliseconds,
+      );
+      if (!mounted) return;
+      if (!launched) {
+        await _externalResultSub?.cancel();
+        _externalResultSub = null;
+        setState(
+          () => _externalStatus =
+              'Could not launch mpv-android. Opening Play Store…',
+        );
+        await ExternalMpvPlayer.openInstallPage();
+        return;
+      }
+
+      setState(
+        () => _externalStatus =
+            'Playing in mpv-android. Press Back in mpv to return to Warp.',
+      );
+      _externalWatchdog = Timer(const Duration(seconds: 120), () {
+        unawaited(_sendExternalScrobbleStart(startPos));
+      });
+    } catch (_) {
+      if (mounted) {
+        setState(
+          () => _externalStatus =
+              'External player launch failed. Press Back to return.',
+        );
+      }
+    }
+  }
+
+  Future<void> _sendExternalScrobbleStart(Duration startPos) async {
+    if (_externalResultHandled || _externalScrobbleStarted || _exiting) return;
+    _externalScrobbleStarted = true;
+    await _sendScrobble('start', startPos, _externalDuration);
+  }
+
+  Future<void> _handleExternalResult(
+    ExternalMpvResult result,
+    Duration startPos,
+  ) async {
+    if (_externalResultHandled || _exiting) return;
+    _externalResultHandled = true;
+    _externalWatchdog?.cancel();
+
+    if (result.code == ExternalMpvResultCode.canceled) {
+      if (_externalScrobbleStarted) {
+        await _sendScrobble('stop', startPos, _externalDuration);
+      }
+      await _finishExternalPlayback();
+      return;
+    }
+
+    final resultDur = result.durationMs != null && result.durationMs! > 0
+        ? Duration(milliseconds: result.durationMs!)
+        : _externalDuration;
+    final resultPos = result.positionMs != null && result.positionMs! >= 0
+        ? Duration(milliseconds: result.positionMs!)
+        : resultDur;
+    final hasPositionResult =
+        result.positionMs != null || result.durationMs != null;
+    await _sendScrobble(
+      'stop',
+      resultPos,
+      resultDur,
+      progressOverride: hasPositionResult ? null : 100.0,
+    );
+    await _finishExternalPlayback();
+  }
+
+  Future<void> _finishExternalPlayback() async {
+    if (_exiting) return;
+    _exiting = true;
+    _hideTimer?.cancel();
+    _externalWatchdog?.cancel();
+    await _externalResultSub?.cancel();
+    _externalResultSub = null;
+
+    if (!mounted) return;
+    await _cleanupSession();
+
+    if (!mounted) return;
+    _triggerRefresh();
+
+    if (!mounted) return;
+    setState(() => _allowPop = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && context.canPop()) {
+        context.pop(true);
+      }
+    });
+  }
 
   void _onPosition(Duration pos) {
     final dur = _playback.duration;
@@ -255,6 +411,10 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
   }
 
   Future<void> _finishPlayback({bool completed = false}) async {
+    if (_externalMode) {
+      await _finishExternalPlayback();
+      return;
+    }
     if (_exiting) return;
     _exiting = true;
     _hideTimer?.cancel();
@@ -284,13 +444,20 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
     });
   }
 
-  Future<void> _sendScrobble(String action, Duration pos, Duration dur) async {
+  Future<void> _sendScrobble(
+    String action,
+    Duration pos,
+    Duration dur, {
+    double? progressOverride,
+  }) async {
     final tmdbId = widget.payload['tmdbId'] as String?;
     if (tmdbId == null) return;
 
-    final progress = dur.inSeconds > 0
-        ? (pos.inSeconds / dur.inSeconds * 100).clamp(0.0, 100.0)
-        : 0.0;
+    final progress =
+        progressOverride ??
+        (dur.inSeconds > 0
+            ? (pos.inSeconds / dur.inSeconds * 100).clamp(0.0, 100.0)
+            : 0.0);
 
     final mediaType = widget.payload['mediaType'] as String? ?? 'movie';
     final season = widget.payload['season'] as int?;
@@ -375,18 +542,25 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
                 fit: StackFit.expand,
                 children: [
                   // ── Video surface ─────────────────────────────────────────────
-                  _playback.buildView(
-                    controlsOverlay: _ControlsShortcuts(
-                      onBack: _handlePlaybackBack,
-                      onStop: _exitPlayback,
-                      onPlayPause: _togglePlay,
-                      onPlay: _play,
-                      onPause: _pause,
-                      onRewind: () => _seek(-10),
-                      onFastForward: () => _seek(10),
-                      child: _buildPlaybackOverlay(t, title),
+                  if (_externalMode)
+                    _ExternalPlayerStatus(
+                      title: title,
+                      status: _externalStatus,
+                      onBack: _exitPlayback,
+                    )
+                  else
+                    _playback.buildView(
+                      controlsOverlay: _ControlsShortcuts(
+                        onBack: _handlePlaybackBack,
+                        onStop: _exitPlayback,
+                        onPlayPause: _togglePlay,
+                        onPlay: _play,
+                        onPause: _pause,
+                        onRewind: () => _seek(-10),
+                        onFastForward: () => _seek(10),
+                        child: _buildPlaybackOverlay(t, title),
+                      ),
                     ),
-                  ),
                 ],
               ),
             ),
@@ -412,6 +586,10 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
   );
 
   void _handlePlaybackBack() {
+    if (_externalMode) {
+      _exitPlayback();
+      return;
+    }
     if (_showControls) {
       _hideControlsOverlay();
       return;
@@ -516,24 +694,28 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
       setState(() => _adjustingVolume = !_adjustingVolume);
 
   void _togglePlay() {
+    if (_externalMode) return;
     _resetHideTimer();
     _playback.playing ? _playback.pause() : _playback.play();
     setState(() {});
   }
 
   void _play() {
+    if (_externalMode) return;
     _resetHideTimer();
     _playback.play();
     setState(() {});
   }
 
   void _pause() {
+    if (_externalMode) return;
     _resetHideTimer();
     _playback.pause();
     setState(() {});
   }
 
   void _seek(int seconds) {
+    if (_externalMode) return;
     _resetHideTimer();
     final pos = _playback.position + Duration(seconds: seconds);
     _playback.seek(pos.isNegative ? Duration.zero : pos);
@@ -546,6 +728,7 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
   }
 
   void _setVolume(double value) {
+    if (_externalMode) return;
     final v = value.clamp(0.0, 100.0);
     unawaited(_playback.setVolume(v));
   }
@@ -2180,6 +2363,87 @@ class _AspectRatioOption {
     required this.title,
     required this.subtitle,
   });
+}
+
+class _ExternalPlayerStatus extends StatelessWidget {
+  final String title;
+  final String status;
+  final VoidCallback onBack;
+
+  const _ExternalPlayerStatus({
+    required this.title,
+    required this.status,
+    required this.onBack,
+  });
+
+  @override
+  Widget build(BuildContext context) => Container(
+    color: Colors.black,
+    padding: const EdgeInsets.all(48),
+    child: Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 680),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.open_in_new, color: Colors.white70, size: 46),
+            const SizedBox(height: 18),
+            Text(
+              title.isEmpty ? 'External playback' : title,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 24,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              status,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.white.withAlpha(170),
+                fontSize: 15,
+              ),
+            ),
+            const SizedBox(height: 26),
+            DpadFocusable(
+              autofocus: true,
+              onSelect: onBack,
+              builder: (context, state, child) => InkWell(
+                borderRadius: BorderRadius.circular(16),
+                onTap: onBack,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 12,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withAlpha(18),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: state.focused
+                          ? _uoscAccentLight
+                          : Colors.white.withAlpha(40),
+                      width: state.focused ? 2 : 1,
+                    ),
+                  ),
+                  child: const Text(
+                    'Back to details',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ),
+              child: const SizedBox.shrink(),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
 }
 
 class _AspectRatioTile extends StatelessWidget {

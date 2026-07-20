@@ -9,6 +9,7 @@ import '../../api/api_client.dart';
 import '../../models/torrent.dart';
 import '../../models/preload.dart';
 import '../../models/debrid.dart';
+import '../../player/external_mpv_player.dart';
 import '../../theme/warp_tokens.dart';
 import '../shared/dpad_controls.dart';
 import '../shared/modal_focus_restore.dart';
@@ -45,6 +46,7 @@ class TorrentDialog extends ConsumerStatefulWidget {
   final int? season;
   final int? episode;
   final double? resumePercent;
+  final int? playbackDurationMs;
   final void Function(Map<String, dynamic> payload)? onPlaybackReady;
   final VoidCallback onClose;
 
@@ -58,6 +60,7 @@ class TorrentDialog extends ConsumerStatefulWidget {
     this.season,
     this.episode,
     this.resumePercent,
+    this.playbackDurationMs,
     this.onPlaybackReady,
   });
 
@@ -447,7 +450,7 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
       final streamUrl = await _waitForStream(resolve.torrentId);
       if (_cancelled || streamUrl == null) return;
 
-      await _startPreload(streamUrl);
+      await _startPreload(streamUrl, selectedSourceTitle: result.name);
     } catch (e) {
       if (_cancelled) return;
       final msg = _msg(e);
@@ -596,7 +599,11 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
       if (_cancelled || !mounted) return;
 
       final session = PreloadSessionCreateResponse.fromJson(raw);
-      await _pollPreload(session, fallbackUrl: session.playbackUrl);
+      await _pollPreload(
+        session,
+        fallbackUrl: session.playbackUrl,
+        selectedSourceTitle: result.name,
+      );
     } catch (e) {
       if (mounted) {
         setState(
@@ -614,7 +621,10 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
 
   // ── Start preload session → poll → navigate ───────────────────────────────────
 
-  Future<void> _startPreload(String streamUrl) async {
+  Future<void> _startPreload(
+    String streamUrl, {
+    required String selectedSourceTitle,
+  }) async {
     if (!mounted) return;
     setState(
       () => _banner = const _BannerState(
@@ -638,11 +648,19 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
       if (_cancelled || !mounted) return;
 
       session = PreloadSessionCreateResponse.fromJson(raw);
-      await _pollPreload(session, fallbackUrl: streamUrl);
+      await _pollPreload(
+        session,
+        fallbackUrl: streamUrl,
+        selectedSourceTitle: selectedSourceTitle,
+      );
     } catch (_) {
       // Preload session creation failed — navigate directly to stream URL
       if (_cancelled || !mounted) return;
-      _navigateToPlayback(source: streamUrl, sessionId: session?.sessionId);
+      _navigateToPlayback(
+        source: streamUrl,
+        sessionId: session?.sessionId,
+        selectedSourceTitle: selectedSourceTitle,
+      );
     }
   }
 
@@ -654,6 +672,7 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
   Future<void> _pollPreload(
     PreloadSessionCreateResponse session, {
     required String fallbackUrl,
+    required String selectedSourceTitle,
   }) async {
     setState(() => _preloadSessionId = session.sessionId);
 
@@ -762,7 +781,11 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
             source = session.localUrl ?? session.playbackUrl;
           }
 
-          _navigateToPlayback(source: source, sessionId: session.sessionId);
+          _navigateToPlayback(
+            source: source,
+            sessionId: session.sessionId,
+            selectedSourceTitle: selectedSourceTitle,
+          );
           return;
         }
       } catch (_) {
@@ -781,12 +804,20 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
     // Timeout (RD/CDN path only) — fall through to direct playback
     if (!mounted) return;
     setState(() => _preloadSessionId = null);
-    _navigateToPlayback(source: fallbackUrl, sessionId: session.sessionId);
+    _navigateToPlayback(
+      source: fallbackUrl,
+      sessionId: session.sessionId,
+      selectedSourceTitle: selectedSourceTitle,
+    );
   }
 
   // ── Navigate to playback ──────────────────────────────────────────────────────
 
-  void _navigateToPlayback({required String source, String? sessionId}) {
+  void _navigateToPlayback({
+    required String source,
+    String? sessionId,
+    String? selectedSourceTitle,
+  }) {
     // resumePercent is 0–100 from Trakt; PlaybackPage expects resumeFromFrac as 0.0–1.0
     final resumeFromFrac = widget.resumePercent != null
         ? widget.resumePercent! / 100.0
@@ -800,6 +831,11 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
       'episode': widget.episode,
       'sessionId': sessionId,
       'resumeFromFrac': resumeFromFrac,
+      'playbackDurationMs': widget.playbackDurationMs,
+      'selectedSourceTitle': selectedSourceTitle,
+      'externalPlayerRequired': shouldUseExternalMpv(selectedSourceTitle),
+      if (shouldUseExternalMpv(selectedSourceTitle))
+        'externalPlayerReason': 'risky_codec',
     };
 
     widget.onClose();

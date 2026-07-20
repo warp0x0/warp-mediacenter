@@ -13,6 +13,7 @@ import '../api/catalog_constants.dart';
 import '../models/detail.dart';
 import '../models/library.dart';
 import '../models/media.dart';
+import '../player/external_mpv_player.dart';
 import '../providers/detail_provider.dart';
 import '../providers/catalog_provider.dart';
 import '../providers/library_provider.dart';
@@ -76,6 +77,48 @@ Duration _detailScrollDuration(BuildContext context) =>
     ? const Duration(milliseconds: 150)
     : const Duration(milliseconds: 240);
 
+int? _durationMsFromMinutes(int? minutes) =>
+    minutes == null ? null : Duration(minutes: minutes).inMilliseconds;
+
+int? _episodeDurationMs(ShowDetail? show, int season, int episode) {
+  if (show == null) return null;
+  for (final seasonDetail in show.seasons) {
+    if (seasonDetail.seasonNumber != season) continue;
+    for (final ep in seasonDetail.episodes ?? const <EpisodeDetail>[]) {
+      if (ep.episodeNumber == episode) {
+        return _durationMsFromMinutes(ep.runtimeMinutes);
+      }
+    }
+  }
+  return null;
+}
+
+int? _seasonEpisodeDurationMs(
+  ShowSeasonsResponse? seasons,
+  int season,
+  int episode,
+) {
+  if (seasons == null) return null;
+  for (final seasonDetail in seasons.seasons) {
+    if (seasonDetail.seasonNumber != season) continue;
+    for (final ep in seasonDetail.episodes ?? const <EpisodeDetail>[]) {
+      if (ep.episodeNumber == episode) {
+        return _durationMsFromMinutes(ep.runtimeMinutes);
+      }
+    }
+  }
+  return null;
+}
+
+int _fallbackEpisodeDurationMs() => const Duration(minutes: 45).inMilliseconds;
+
+String _sourceTitle(SourceRow source) {
+  final path = source.filePath;
+  if (path == null || path.isEmpty) return source.url;
+  final parts = path.split('/');
+  return parts.isEmpty ? path : parts.last;
+}
+
 void _revealFocusedNode(BuildContext context, FocusNode node) {
   WidgetsBinding.instance.addPostFrameCallback((_) {
     final nodeContext = node.context;
@@ -124,6 +167,7 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
   int _selectedSeasonIdx = 0;
   int? _torrentSeason;
   int? _torrentEpisode;
+  int? _torrentPlaybackDurationMs;
   bool _resumeModalOpen = false;
   double? _resumePercent;
   String? _markingEpisodeKey;
@@ -622,6 +666,7 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
     int? season,
     int? episode,
     double? resumeFromFrac,
+    int? playbackDurationMs,
   }) {
     unawaited(
       _playLocalSourceChecked(
@@ -629,6 +674,7 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
         season: season,
         episode: episode,
         resumeFromFrac: resumeFromFrac,
+        playbackDurationMs: playbackDurationMs,
       ),
     );
   }
@@ -638,10 +684,12 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
     int? season,
     int? episode,
     double? resumeFromFrac,
+    int? playbackDurationMs,
   }) async {
     final playable = await _isLocalSourcePlayable(source);
     if (!mounted) return;
     if (!playable) {
+      setState(() => _torrentPlaybackDurationMs = playbackDurationMs);
       _openTorrentDialog(
         resumePercent: resumeFromFrac != null ? resumeFromFrac * 100 : null,
       );
@@ -653,6 +701,8 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
       season: season,
       episode: episode,
       resumeFromFrac: resumeFromFrac,
+      playbackDurationMs: playbackDurationMs,
+      selectedSourceTitle: _sourceTitle(source),
     );
   }
 
@@ -757,19 +807,40 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
     }
   }
 
-  void _handlePlay({
+  Future<void> _handlePlay({
     required bool isShow,
     required _ShowResumeInfo? showResumeInfo,
     required bool isMovieResumeAvailable,
     required double? movieResumeProgress,
     required SourceRow? localSource,
     required List<SourceRow> sources,
-  }) {
+    required int? moviePlaybackDurationMs,
+    required ShowDetail? showDetail,
+    required ShowSeasonsResponse? showSeasons,
+  }) async {
     if (isShow && showResumeInfo != null) {
       final info = showResumeInfo;
+      var durationMs =
+          _seasonEpisodeDurationMs(showSeasons, info.season, info.episode) ??
+          _episodeDurationMs(showDetail, info.season, info.episode);
+      if (durationMs == null) {
+        try {
+          final loadedSeasons = await ref.read(
+            showSeasonsListProvider(widget.mediaId).future,
+          );
+          if (!mounted) return;
+          durationMs = _seasonEpisodeDurationMs(
+            loadedSeasons,
+            info.season,
+            info.episode,
+          );
+        } catch (_) {}
+      }
+      durationMs ??= _fallbackEpisodeDurationMs();
       setState(() {
         _torrentSeason = info.season;
         _torrentEpisode = info.episode;
+        _torrentPlaybackDurationMs = durationMs;
       });
       if (info.isScrobbled) {
         setState(() {
@@ -781,7 +852,12 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
       // No scrobble — play immediately via local source if available
       final epSrc = _findLocalEpisodeSource(info.season, info.episode, sources);
       if (epSrc != null) {
-        _playLocalSource(epSrc, season: info.season, episode: info.episode);
+        _playLocalSource(
+          epSrc,
+          season: info.season,
+          episode: info.episode,
+          playbackDurationMs: _torrentPlaybackDurationMs,
+        );
         return;
       }
       _openTorrentDialog();
@@ -790,13 +866,24 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
     if (!isShow && isMovieResumeAvailable && movieResumeProgress != null) {
       setState(() {
         _resumePercent = movieResumeProgress;
+        _torrentSeason = null;
+        _torrentEpisode = null;
+        _torrentPlaybackDurationMs = moviePlaybackDurationMs;
         _resumeModalOpen = true;
       });
       return;
     }
     if (!isShow && localSource != null) {
-      _playLocalSource(localSource, season: null, episode: null);
+      _playLocalSource(
+        localSource,
+        season: null,
+        episode: null,
+        playbackDurationMs: moviePlaybackDurationMs,
+      );
       return;
+    }
+    if (!isShow) {
+      setState(() => _torrentPlaybackDurationMs = moviePlaybackDurationMs);
     }
     _openTorrentDialog();
   }
@@ -808,9 +895,13 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
     required List<SourceRow> sources,
   }) {
     final epNum = ep.episodeNumber;
+    final durationMs =
+        _durationMsFromMinutes(ep.runtimeMinutes) ??
+        _fallbackEpisodeDurationMs();
     setState(() {
       _torrentSeason = seasonNum;
       _torrentEpisode = epNum;
+      _torrentPlaybackDurationMs = durationMs;
     });
     if (epScrobblePct != null && epScrobblePct > 0) {
       setState(() {
@@ -823,7 +914,12 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
         ? _findLocalEpisodeSource(seasonNum, epNum, sources)
         : null;
     if (epSrc != null && epNum != null) {
-      _playLocalSource(epSrc, season: seasonNum, episode: epNum);
+      _playLocalSource(
+        epSrc,
+        season: seasonNum,
+        episode: epNum,
+        playbackDurationMs: durationMs,
+      );
       return;
     }
     _openTorrentDialog();
@@ -841,6 +937,7 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
         season: _torrentSeason,
         episode: _torrentEpisode,
         resumePercent: resumePercent,
+        playbackDurationMs: _torrentPlaybackDurationMs,
         onPlaybackReady: (payload) => unawaited(_pushPlayback(payload)),
         onClose: () => Navigator.of(context, rootNavigator: true).pop(),
       ),
@@ -852,7 +949,11 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
     int? season,
     int? episode,
     double? resumeFromFrac,
+    int? playbackDurationMs,
+    String? selectedSourceTitle,
   }) {
+    final sourceTitle = selectedSourceTitle ?? url;
+    final externalRequired = shouldUseExternalMpv(sourceTitle);
     unawaited(
       _pushPlayback({
         'source': url,
@@ -862,6 +963,10 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
         'season': season,
         'episode': episode,
         'resumeFromFrac': resumeFromFrac,
+        'playbackDurationMs': playbackDurationMs,
+        'selectedSourceTitle': sourceTitle,
+        'externalPlayerRequired': externalRequired,
+        if (externalRequired) 'externalPlayerReason': 'risky_codec',
       }),
     );
   }
@@ -1152,15 +1257,24 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
                                         _playResumeFocusNode,
                                         d,
                                       ),
-                                      onTap: () => _handlePlay(
-                                        isShow: _isShow,
-                                        showResumeInfo: showResumeInfo,
-                                        isMovieResumeAvailable:
-                                            isMovieResumeAvailable,
-                                        movieResumeProgress:
-                                            movieResumeProgress,
-                                        localSource: localSource,
-                                        sources: sources,
+                                      onTap: () => unawaited(
+                                        _handlePlay(
+                                          isShow: _isShow,
+                                          showResumeInfo: showResumeInfo,
+                                          isMovieResumeAvailable:
+                                              isMovieResumeAvailable,
+                                          movieResumeProgress:
+                                              movieResumeProgress,
+                                          localSource: localSource,
+                                          sources: sources,
+                                          moviePlaybackDurationMs:
+                                              _durationMsFromMinutes(
+                                                movieDetail?.runtimeMinutes,
+                                              ),
+                                          showDetail: showDetail,
+                                          showSeasons:
+                                              seasonsAsync?.asData?.value,
+                                        ),
                                       ),
                                     ),
                                     const SizedBox(width: 12),
@@ -1644,8 +1758,14 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
                       entryFocusNode: _localSourcesEntryFocusNode,
                       onEntryUp: _localSourcesFirstUp,
                       onFocusRail: () => _focus(_scrollRailFocusNode),
-                      onPlay: (src) =>
-                          _playLocalSource(src, season: null, episode: null),
+                      onPlay: (src) => _playLocalSource(
+                        src,
+                        season: null,
+                        episode: null,
+                        playbackDurationMs: _durationMsFromMinutes(
+                          movieDetail?.runtimeMinutes,
+                        ),
+                      ),
                     ),
                   ),
 
@@ -1701,6 +1821,7 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
                         season: _torrentSeason,
                         episode: _torrentEpisode,
                         resumeFromFrac: pct != null ? pct / 100 : null,
+                        playbackDurationMs: _torrentPlaybackDurationMs,
                       );
                       return;
                     }
@@ -1710,6 +1831,7 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
                       season: null,
                       episode: null,
                       resumeFromFrac: pct != null ? pct / 100 : null,
+                      playbackDurationMs: _torrentPlaybackDurationMs,
                     );
                     return;
                   }
@@ -1733,11 +1855,17 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
                         epSrc,
                         season: _torrentSeason,
                         episode: _torrentEpisode,
+                        playbackDurationMs: _torrentPlaybackDurationMs,
                       );
                       return;
                     }
                   } else if (!_isShow && localSource != null) {
-                    _playLocalSource(localSource, season: null, episode: null);
+                    _playLocalSource(
+                      localSource,
+                      season: null,
+                      episode: null,
+                      playbackDurationMs: _torrentPlaybackDurationMs,
+                    );
                     return;
                   }
                   _openTorrentDialog();
