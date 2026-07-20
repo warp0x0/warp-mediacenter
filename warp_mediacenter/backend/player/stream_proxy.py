@@ -616,9 +616,19 @@ class StreamProxy:
             # ── Full (non-range) response ─────────────────────────────
 
             def _serve_full(self) -> None:
-                tmpfile, _, total, _, _, _ = self._snap()
+                tmpfile, cdn_url, total, _, _, _ = self._snap()
                 if not tmpfile:
                     self.send_error(503, "No stream active")
+                    return
+
+                # Resume preloads start writing the temp file at a byte offset.
+                # Media3 may make an initial non-range GET for extractor sniffing;
+                # serving the sparse temp file from byte 0 returns zero-filled
+                # bytes instead of the real container header, so fall back to the
+                # CDN for that initial full response. Range requests still use
+                # the preloaded temp-file path below.
+                if proxy._download_start > 0 and cdn_url:
+                    self._serve_full_from_cdn(cdn_url, total)
                     return
 
                 self.send_response(200)
@@ -634,6 +644,40 @@ class StreamProxy:
                     pass
                 except Exception as exc:
                     log.debug("proxy_full_serve_err", error=str(exc)[:120])
+
+            def _serve_full_from_cdn(self, cdn_url: str, total: int) -> None:
+                log.info(
+                    "proxy_full_resume_cdn",
+                    offset_mb=proxy._download_start // (1024 * 1024),
+                )
+                try:
+                    with requests.get(
+                        cdn_url,
+                        stream=True,
+                        timeout=(10, 60),
+                        headers={"User-Agent": "VLC/3.0"},
+                    ) as r:
+                        r.raise_for_status()
+                        content_type = r.headers.get("Content-Type") or proxy._content_type
+                        content_length = r.headers.get("Content-Length")
+
+                        self.send_response(200)
+                        self.send_header("Content-Type", content_type)
+                        self.send_header("Accept-Ranges", "bytes")
+                        if content_length:
+                            self.send_header("Content-Length", content_length)
+                        elif total:
+                            self.send_header("Content-Length", str(total))
+                        self.send_header("Connection", "close")
+                        self.end_headers()
+
+                        for chunk in r.iter_content(chunk_size=65536):
+                            if chunk:
+                                self.wfile.write(chunk)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+                except Exception as exc:
+                    log.debug("proxy_full_resume_cdn_err", error=str(exc)[:120])
 
             # ── Range (206) response ──────────────────────────────────
 

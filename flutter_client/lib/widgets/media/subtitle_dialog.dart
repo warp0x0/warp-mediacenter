@@ -1,21 +1,19 @@
-import 'dart:ui';
-
 import 'package:dio/dio.dart';
 import 'package:dpad/dpad.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:media_kit/media_kit.dart' as mk;
 
 import '../../api/api_client.dart';
 import '../../models/subtitle.dart' as subtitle_models;
+import '../../player/playback_backend.dart';
 import '../../theme/warp_tokens.dart';
 import 'file_browser_modal.dart';
 import '../shared/modal_focus_restore.dart';
 import '../shared/tv_modal_chrome_scale.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SubtitleDialog — live media_kit subtitle search, file load, and track switcher
+// SubtitleDialog — live subtitle search, file load, and track switcher
 // ─────────────────────────────────────────────────────────────────────────────
 
 const _accent = Color(0xFF0DB2E2);
@@ -23,7 +21,7 @@ const _accentLight = Color(0xFF78F4FF);
 const _glass = Color(0xE50A0E14);
 
 class SubtitleDialog extends ConsumerStatefulWidget {
-  final mk.Player player;
+  final PlaybackBackend player;
   final String tmdbId;
   final String mediaKind; // 'movie' or 'show'
   final String? title;
@@ -96,63 +94,53 @@ class _SubtitleDialogState extends ConsumerState<SubtitleDialog>
                 constraints: BoxConstraints(maxWidth: width, maxHeight: height),
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(28),
-                  child: BackdropFilter(
-                    filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
-                    child: Container(
-                      width: width,
-                      height: height,
-                      decoration: BoxDecoration(
-                        gradient: const LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: [Color(0xF20A0E14), Color(0xE5091A24)],
+                  child: Container(
+                    width: width,
+                    height: height,
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [Color(0xFF0A0E14), Color(0xFF091A24)],
+                      ),
+                      borderRadius: BorderRadius.circular(28),
+                      border: Border.all(color: _accent.withAlpha(76)),
+                    ),
+                    child: Column(
+                      children: [
+                        _DialogHeader(
+                          title: 'Subtitles',
+                          subtitle: _headerSubtitle(),
+                          onClose: () => Navigator.of(context).pop(),
+                          t: t,
                         ),
-                        borderRadius: BorderRadius.circular(28),
-                        border: Border.all(color: _accent.withAlpha(76)),
-                        boxShadow: const [
-                          BoxShadow(
-                            color: Colors.black87,
-                            blurRadius: 36,
-                            offset: Offset(0, 18),
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
+                          child: _Tabs(controller: _tabs, t: t),
+                        ),
+                        Expanded(
+                          child: TabBarView(
+                            controller: _tabs,
+                            physics: const NeverScrollableScrollPhysics(),
+                            children: [
+                              _SearchTab(
+                                player: widget.player,
+                                tmdbId: widget.tmdbId,
+                                mediaKind: widget.mediaKind == 'show'
+                                    ? 'show'
+                                    : 'movie',
+                                title: widget.title,
+                                season: widget.season,
+                                episode: widget.episode,
+                                sourceUrl: widget.sourceUrl,
+                                t: t,
+                              ),
+                              _BrowseTab(player: widget.player, t: t),
+                              _ActiveTracksTab(player: widget.player, t: t),
+                            ],
                           ),
-                        ],
-                      ),
-                      child: Column(
-                        children: [
-                          _DialogHeader(
-                            title: 'Subtitles',
-                            subtitle: _headerSubtitle(),
-                            onClose: () => Navigator.of(context).pop(),
-                            t: t,
-                          ),
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
-                            child: _Tabs(controller: _tabs, t: t),
-                          ),
-                          Expanded(
-                            child: TabBarView(
-                              controller: _tabs,
-                              physics: const NeverScrollableScrollPhysics(),
-                              children: [
-                                _SearchTab(
-                                  player: widget.player,
-                                  tmdbId: widget.tmdbId,
-                                  mediaKind: widget.mediaKind == 'show'
-                                      ? 'show'
-                                      : 'movie',
-                                  title: widget.title,
-                                  season: widget.season,
-                                  episode: widget.episode,
-                                  sourceUrl: widget.sourceUrl,
-                                  t: t,
-                                ),
-                                _BrowseTab(player: widget.player, t: t),
-                                _ActiveTracksTab(player: widget.player, t: t),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
@@ -247,20 +235,6 @@ class _DialogHeader extends StatelessWidget {
                     : Colors.transparent,
                 width: 2,
               ),
-              boxShadow: state.focused
-                  ? [
-                      BoxShadow(
-                        color: Colors.white.withAlpha(130),
-                        blurRadius: 10,
-                        spreadRadius: 1,
-                      ),
-                      BoxShadow(
-                        color: _accent.withAlpha(140),
-                        blurRadius: 22,
-                        spreadRadius: 4,
-                      ),
-                    ]
-                  : null,
             ),
             child: IconButton(
               onPressed: onClose,
@@ -324,7 +298,7 @@ class _TabsState extends State<_Tabs> {
   }
 
   void _selectTab(int index) {
-    widget.controller.animateTo(index);
+    widget.controller.animateTo(index, duration: Duration.zero);
   }
 
   bool _tabDirection(int index, TraversalDirection direction) {
@@ -413,8 +387,7 @@ class _SubtitleTabPillState extends State<_SubtitleTabPill> {
           widget.focusNode.requestFocus();
           widget.onTap();
         },
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
+        child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
           decoration: BoxDecoration(
             color: widget.selected
@@ -429,18 +402,6 @@ class _SubtitleTabPillState extends State<_SubtitleTabPill> {
                 : (widget.selected
                       ? null
                       : Border.all(color: Colors.transparent)),
-            boxShadow: state.focused
-                ? const [
-                    BoxShadow(
-                      color: Color(0xCC000000),
-                      blurRadius: 12,
-                      spreadRadius: 1,
-                    ),
-                    BoxShadow(color: Color(0x9901B4E4), blurRadius: 18),
-                  ]
-                : widget.selected
-                ? const [BoxShadow(color: Color(0x5901B4E4), blurRadius: 14)]
-                : null,
           ),
           child: Center(
             child: Text(
@@ -464,7 +425,7 @@ class _SubtitleTabPillState extends State<_SubtitleTabPill> {
 }
 
 class _SearchTab extends ConsumerStatefulWidget {
-  final mk.Player player;
+  final PlaybackBackend player;
   final String tmdbId;
   final String mediaKind;
   final String? title;
@@ -583,35 +544,11 @@ class _SearchTabState extends ConsumerState<_SearchTab> {
       final uri = _subtitleUri(
         download.url.isNotEmpty ? download.url : download.path,
       );
-      await widget.player.setSubtitleTrack(
-        mk.SubtitleTrack.uri(
-          uri,
-          title: result.release.isNotEmpty ? result.release : download.fileName,
-          language: result.language,
-        ),
+      await widget.player.loadSubtitle(
+        uri: uri,
+        title: result.release.isNotEmpty ? result.release : download.fileName,
+        language: result.language,
       );
-
-      // Wait for mpv to register the external track, then explicitly
-      // select it by its mpv-assigned numeric ID to force activation.
-      try {
-        final tracks = await widget.player.stream.tracks
-            .firstWhere(
-              (t) =>
-                  t.subtitle
-                      .where((s) => s.id != 'auto' && s.id != 'no')
-                      .length >
-                  widget.player.state.tracks.subtitle
-                      .where((s) => s.id != 'auto' && s.id != 'no')
-                      .length,
-            )
-            .timeout(const Duration(seconds: 5));
-        final external = tracks.subtitle
-            .where((s) => s.id != 'auto' && s.id != 'no')
-            .last;
-        await widget.player.setSubtitleTrack(external);
-      } catch (_) {
-        // sub-add with select should have already activated it; this is a fallback.
-      }
 
       if (mounted) Navigator.of(context).pop();
     } catch (error) {
@@ -739,8 +676,7 @@ class _LangChip extends StatelessWidget {
     onSelect: onTap,
     builder: (context, state, child) => GestureDetector(
       onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
+      child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
         decoration: BoxDecoration(
           color: selected ? _accent.withAlpha(40) : Colors.white.withAlpha(13),
@@ -787,8 +723,7 @@ class _SubtitleResultRow extends StatelessWidget {
     tapToSelect: false,
     builder: (context, state, child) => GestureDetector(
       onTap: loading ? null : onLoad,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
+      child: Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
           color: Colors.white.withAlpha(12),
@@ -797,15 +732,6 @@ class _SubtitleResultRow extends StatelessWidget {
             color: state.focused ? _accentLight : Colors.white.withAlpha(22),
             width: state.focused ? 2 : 1,
           ),
-          boxShadow: state.focused
-              ? [
-                  BoxShadow(
-                    color: _accent.withAlpha(120),
-                    blurRadius: 18,
-                    spreadRadius: 2,
-                  ),
-                ]
-              : null,
         ),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -877,7 +803,7 @@ class _SubtitleResultRow extends StatelessWidget {
 }
 
 class _BrowseTab extends ConsumerStatefulWidget {
-  final mk.Player player;
+  final PlaybackBackend player;
   final WarpTokens t;
 
   const _BrowseTab({required this.player, required this.t});
@@ -900,8 +826,9 @@ class _BrowseTabState extends ConsumerState<_BrowseTab> {
     });
 
     try {
-      await widget.player.setSubtitleTrack(
-        mk.SubtitleTrack.uri(_subtitleUri(path), title: _fileName(path)),
+      await widget.player.loadSubtitle(
+        uri: _subtitleUri(path),
+        title: _fileName(path),
       );
       if (mounted) Navigator.of(context).pop();
     } catch (error) {
@@ -976,22 +903,21 @@ class _BrowseTabState extends ConsumerState<_BrowseTab> {
 }
 
 class _ActiveTracksTab extends StatelessWidget {
-  final mk.Player player;
+  final PlaybackBackend player;
   final WarpTokens t;
 
   const _ActiveTracksTab({required this.player, required this.t});
 
   @override
-  Widget build(BuildContext context) => StreamBuilder<mk.Tracks>(
-    stream: player.stream.tracks,
-    initialData: player.state.tracks,
-    builder: (context, tracksSnap) => StreamBuilder<mk.Track>(
-      stream: player.stream.track,
-      initialData: player.state.track,
+  Widget build(BuildContext context) => StreamBuilder<List<PlaybackTrackInfo>>(
+    stream: player.subtitleTracksStream,
+    initialData: player.currentSubtitleTracks,
+    builder: (context, tracksSnap) => StreamBuilder<PlaybackTrackInfo?>(
+      stream: player.selectedSubtitleTrackStream,
+      initialData: player.currentSelectedSubtitleTrack,
       builder: (context, trackSnap) {
-        final tracks = tracksSnap.data?.subtitle ?? const <mk.SubtitleTrack>[];
-        final selected =
-            trackSnap.data?.subtitle ?? player.state.track.subtitle;
+        final tracks = tracksSnap.data ?? const <PlaybackTrackInfo>[];
+        final selected = trackSnap.data;
 
         if (tracks.isEmpty) {
           return _EmptyState(
@@ -1011,8 +937,8 @@ class _ActiveTracksTab extends StatelessWidget {
             final track = tracks[index];
             return _SubtitleTrackRow(
               track: track,
-              selected: track == selected,
-              onTap: () => player.setSubtitleTrack(track),
+              selected: track.id == selected?.id || track.selected,
+              onTap: () => player.selectSubtitleTrack(track),
               t: t,
             );
           },
@@ -1023,7 +949,7 @@ class _ActiveTracksTab extends StatelessWidget {
 }
 
 class _SubtitleTrackRow extends StatelessWidget {
-  final mk.SubtitleTrack track;
+  final PlaybackTrackInfo track;
   final bool selected;
   final VoidCallback onTap;
   final WarpTokens t;
@@ -1040,8 +966,7 @@ class _SubtitleTrackRow extends StatelessWidget {
     onSelect: onTap,
     builder: (context, state, child) => GestureDetector(
       onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
+      child: Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
           color: selected ? _accent.withAlpha(34) : Colors.white.withAlpha(12),
@@ -1124,11 +1049,9 @@ class _GlassButton extends StatelessWidget {
     onSelect: onTap ?? () {},
     builder: (context, state, child) => GestureDetector(
       onTap: onTap,
-      child: AnimatedOpacity(
+      child: Opacity(
         opacity: onTap == null ? 0.65 : 1,
-        duration: const Duration(milliseconds: 150),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
+        child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 10),
           decoration: BoxDecoration(
             color: state.focused ? _accent : _glass,
@@ -1137,12 +1060,6 @@ class _GlassButton extends StatelessWidget {
               color: state.focused ? _accentLight : _accent,
               width: 1.2,
             ),
-            boxShadow: [
-              BoxShadow(
-                color: _accent.withAlpha(state.focused ? 130 : 48),
-                blurRadius: state.focused ? 24 : 16,
-              ),
-            ],
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
@@ -1197,16 +1114,10 @@ class _GlassIconButton extends StatelessWidget {
         decoration: BoxDecoration(
           color: _glass,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: Colors.white.withAlpha(24)),
-          boxShadow: state.focused
-              ? [
-                  BoxShadow(
-                    color: _accent.withAlpha(140),
-                    blurRadius: 18,
-                    spreadRadius: 2,
-                  ),
-                ]
-              : null,
+          border: Border.all(
+            color: state.focused ? _accentLight : Colors.white.withAlpha(24),
+            width: state.focused ? 2 : 1,
+          ),
         ),
         child: Center(child: _GradientIcon(icon: icon, size: 19)),
       ),
@@ -1367,21 +1278,21 @@ String _friendlyError(Object error) {
   return error.toString();
 }
 
-String _subtitleTrackTitle(mk.SubtitleTrack track) {
-  if (track.id == 'auto') return 'Auto';
-  if (track.id == 'no') return 'Disabled';
-  final title = track.title?.trim();
-  if (title != null && title.isNotEmpty) return title;
+String _subtitleTrackTitle(PlaybackTrackInfo track) {
+  if (track.isAuto) return 'Auto';
+  if (track.isNone) return 'Disabled';
+  final title = track.title.trim();
+  if (title.isNotEmpty) return title;
   final language = track.language?.trim();
   if (language != null && language.isNotEmpty) return language.toUpperCase();
   return 'Subtitle ${track.id}';
 }
 
-String _subtitleTrackSubtitle(mk.SubtitleTrack track) {
-  if (track.id == 'auto') {
+String _subtitleTrackSubtitle(PlaybackTrackInfo track) {
+  if (track.isAuto) {
     return 'Let the player choose the preferred subtitle.';
   }
-  if (track.id == 'no') return 'Disable subtitle rendering.';
+  if (track.isNone) return 'Disable subtitle rendering.';
   final parts = <String>[];
   final language = track.language?.trim();
   if (language != null && language.isNotEmpty) {
@@ -1391,7 +1302,6 @@ String _subtitleTrackSubtitle(mk.SubtitleTrack track) {
   if (codec != null && codec.isNotEmpty) {
     parts.add(codec.toUpperCase());
   }
-  if (track.uri) parts.add('External');
-  if (track.data) parts.add('Data');
+  if (track.isExternal) parts.add('External');
   return parts.isEmpty ? 'Track id ${track.id}' : parts.join(' · ');
 }

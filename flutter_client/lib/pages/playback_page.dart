@@ -1,22 +1,20 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:ui';
 import 'package:dpad/dpad.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:media_kit/media_kit.dart';
-import 'package:media_kit_video/media_kit_video.dart';
 import 'package:window_manager/window_manager.dart';
 import '../api/api_client.dart';
+import '../player/playback_backend.dart';
 import '../providers/detail_provider.dart';
 import '../theme/warp_tokens.dart';
 import '../widgets/media/subtitle_dialog.dart';
 import '../widgets/shared/tv_modal_chrome_scale.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PlaybackPage — full-screen media_kit video player
+// PlaybackPage — full-screen video player
 //
 // Receives via go_router extra (Map<String, dynamic>):
 //   source     String   — stream or local file URL
@@ -38,8 +36,10 @@ class PlaybackPage extends ConsumerStatefulWidget {
 
 class _PlaybackPageState extends ConsumerState<PlaybackPage>
     with WindowListener, WidgetsBindingObserver {
-  late final Player _player;
-  late final VideoController _controller;
+  late final PlaybackBackend _playback;
+  StreamSubscription<Duration>? _positionSub;
+  StreamSubscription<bool>? _completedSub;
+  StreamSubscription<bool>? _firstFrameSub;
 
   // ── D-pad navigation focus nodes ────────────────────────────────────────
   // Initial focus lands on the progress bar. LHS icons (Menu/Subtitles/
@@ -52,6 +52,7 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
   final _subtitlesFocus = FocusNode(debugLabel: 'SubtitlesIcon');
   final _audioTracksFocus = FocusNode(debugLabel: 'AudioTracksIcon');
   final _playPauseRowFocus = FocusNode(debugLabel: 'PlayPauseRowIcon');
+  final _aspectRatioFocus = FocusNode(debugLabel: 'AspectRatioIcon');
   final _fullscreenFocus = FocusNode(debugLabel: 'FullscreenIcon');
   final _stopFocus = FocusNode(debugLabel: 'StopIcon');
   final _centerPlayFocus = FocusNode(debugLabel: 'CenterPlayButton');
@@ -65,9 +66,12 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
   bool _audioPassthrough = false;
   bool _dolbyMode = false;
   bool _isFullscreen = false;
+  bool _firstFrameRendered = false;
+  String _aspectRatioMode = 'fit';
   double _seekValue = 0;
   double _subtitleDelaySeconds = 0;
-  double _audioAmplification = 100;
+  int _subtitleSizeIndex = 1;
+  double _audioAmplification = 0;
   Timer? _hideTimer;
 
   bool get _overlayHasFocus => [
@@ -76,6 +80,7 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
     _subtitlesFocus,
     _audioTracksFocus,
     _playPauseRowFocus,
+    _aspectRatioFocus,
     _fullscreenFocus,
     _stopFocus,
     _centerPlayFocus,
@@ -92,24 +97,23 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     if (_isDesktop) windowManager.addListener(this);
-    _player = Player();
-    _controller = VideoController(_player);
+    _playback = createPlaybackBackend();
 
     final src = widget.payload['source'] as String? ?? '';
     final resumeFromFrac = (widget.payload['resumeFromFrac'] as num?)
         ?.toDouble();
 
     if (src.isNotEmpty) {
-      _player.open(Media(src));
+      unawaited(_playback.open(src));
     }
 
     // Seek to resume position once duration is known
     if (resumeFromFrac != null && resumeFromFrac > 0) {
-      _player.stream.duration.firstWhere((d) => d.inSeconds > 0).then((dur) {
+      _playback.durationStream.firstWhere((d) => d.inSeconds > 0).then((dur) {
         final seekTo = Duration(
           milliseconds: (resumeFromFrac * dur.inMilliseconds).round(),
         );
-        _player.seek(seekTo);
+        _playback.seek(seekTo);
       }).ignore();
     }
 
@@ -119,6 +123,7 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
       _subtitlesFocus,
       _audioTracksFocus,
       _playPauseRowFocus,
+      _aspectRatioFocus,
       _fullscreenFocus,
       _stopFocus,
       _centerPlayFocus,
@@ -130,8 +135,11 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
     _resetHideTimer();
 
     // Scrobble start after first progress tick
-    _player.stream.position.listen(_onPosition);
-    _player.stream.completed.listen(_onCompleted);
+    _positionSub = _playback.positionStream.listen(_onPosition);
+    _completedSub = _playback.completedStream.listen(_onCompleted);
+    _firstFrameSub = _playback.firstFrameStream.listen((rendered) {
+      if (mounted) setState(() => _firstFrameRendered = rendered);
+    });
   }
 
   @override
@@ -145,6 +153,7 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
       _subtitlesFocus,
       _audioTracksFocus,
       _playPauseRowFocus,
+      _aspectRatioFocus,
       _fullscreenFocus,
       _stopFocus,
       _centerPlayFocus,
@@ -157,12 +166,15 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
     _subtitlesFocus.dispose();
     _audioTracksFocus.dispose();
     _playPauseRowFocus.dispose();
+    _aspectRatioFocus.dispose();
     _fullscreenFocus.dispose();
     _stopFocus.dispose();
     _centerPlayFocus.dispose();
     _volumeBarFocus.dispose();
-    _player.stop();
-    _player.dispose();
+    _positionSub?.cancel();
+    _completedSub?.cancel();
+    _firstFrameSub?.cancel();
+    unawaited(_playback.dispose());
     super.dispose();
   }
 
@@ -202,7 +214,7 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
   Duration? _scrobbleStartedAt;
 
   void _onPosition(Duration pos) {
-    final dur = _player.state.duration;
+    final dur = _playback.duration;
     if (dur.inSeconds == 0) return;
 
     // Fire scrobble start once playback is 5 seconds in
@@ -253,8 +265,8 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
       } catch (_) {}
     }
 
-    final dur = _player.state.duration;
-    final pos = completed ? dur : _player.state.position;
+    final dur = _playback.duration;
+    final pos = completed ? dur : _playback.position;
     await _sendScrobble('stop', pos, dur);
 
     if (!mounted) return;
@@ -363,9 +375,8 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
                 fit: StackFit.expand,
                 children: [
                   // ── Video surface ─────────────────────────────────────────────
-                  Video(
-                    controller: _controller,
-                    controls: (_) => _ControlsShortcuts(
+                  _playback.buildView(
+                    controlsOverlay: _ControlsShortcuts(
                       onBack: _handlePlaybackBack,
                       onStop: _exitPlayback,
                       onPlayPause: _togglePlay,
@@ -373,39 +384,7 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
                       onPause: _pause,
                       onRewind: () => _seek(-10),
                       onFastForward: () => _seek(10),
-                      child: IgnorePointer(
-                        ignoring: !_showControls,
-                        child: AnimatedOpacity(
-                          opacity: _showControls ? 1.0 : 0.0,
-                          duration: const Duration(milliseconds: 250),
-                          child: _buildControlsOverlay(t, title),
-                        ),
-                      ),
-                    ),
-                    fit: BoxFit.contain,
-                    subtitleViewConfiguration: const SubtitleViewConfiguration(
-                      style: TextStyle(
-                        height: 1.4,
-                        fontSize: 40.0,
-                        letterSpacing: 0.0,
-                        wordSpacing: 0.0,
-                        color: Color(0xffffffff),
-                        fontWeight: FontWeight.w600,
-                        backgroundColor: Colors.transparent,
-                        shadows: [
-                          Shadow(
-                            color: Color(0xDD000000),
-                            blurRadius: 6,
-                            offset: Offset(1, 1),
-                          ),
-                          Shadow(
-                            color: Color(0xAA000000),
-                            blurRadius: 3,
-                            offset: Offset(0, 0),
-                          ),
-                        ],
-                      ),
-                      padding: EdgeInsets.fromLTRB(24.0, 0.0, 24.0, 48.0),
+                      child: _buildPlaybackOverlay(t, title),
                     ),
                   ),
                 ],
@@ -416,6 +395,21 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
       ),
     );
   }
+
+  Widget _buildPlaybackOverlay(WarpTokens t, String title) => Stack(
+    fit: StackFit.expand,
+    children: [
+      if (_playback.isNativeAndroid && !_firstFrameRendered)
+        const IgnorePointer(child: _LoadingScrim()),
+      IgnorePointer(
+        ignoring: !_showControls,
+        child: Opacity(
+          opacity: _showControls ? 1.0 : 0.0,
+          child: _buildControlsOverlay(t, title),
+        ),
+      ),
+    ],
+  );
 
   void _handlePlaybackBack() {
     if (_showControls) {
@@ -523,38 +517,37 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
 
   void _togglePlay() {
     _resetHideTimer();
-    _player.state.playing ? _player.pause() : _player.play();
+    _playback.playing ? _playback.pause() : _playback.play();
     setState(() {});
   }
 
   void _play() {
     _resetHideTimer();
-    _player.play();
+    _playback.play();
     setState(() {});
   }
 
   void _pause() {
     _resetHideTimer();
-    _player.pause();
+    _playback.pause();
     setState(() {});
   }
 
   void _seek(int seconds) {
     _resetHideTimer();
-    final pos = _player.state.position + Duration(seconds: seconds);
-    _player.seek(pos.isNegative ? Duration.zero : pos);
+    final pos = _playback.position + Duration(seconds: seconds);
+    _playback.seek(pos.isNegative ? Duration.zero : pos);
   }
 
   void _adjustVolume(double delta) {
-    final v = (_player.state.volume + delta * 100).clamp(0.0, 100.0);
+    final v = (_playback.volume + delta * 100).clamp(0.0, 100.0);
     _setVolume(v);
     setState(() {});
   }
 
   void _setVolume(double value) {
-    final v = value.clamp(0.0, 200.0);
-    _audioAmplification = v;
-    unawaited(_player.setVolume(v));
+    final v = value.clamp(0.0, 100.0);
+    unawaited(_playback.setVolume(v));
   }
 
   void _exitPlayback() {
@@ -565,6 +558,21 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
     _resetHideTimer();
     if (!_isDesktop) return;
     unawaited(_setWindowFullscreen(!_isFullscreen));
+  }
+
+  void _openAspectRatioMenu() {
+    _resetHideTimer();
+    showDialog<void>(
+      context: context,
+      barrierColor: Colors.black54,
+      builder: (_) => _AspectRatioDialog(
+        selectedMode: _aspectRatioMode,
+        onSelect: (mode) {
+          setState(() => _aspectRatioMode = mode);
+          unawaited(_playback.setAspectRatioMode(mode));
+        },
+      ),
+    );
   }
 
   Future<void> _setWindowFullscreen(bool enabled) async {
@@ -606,53 +614,49 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
     });
   }
 
-  Future<void> _setMpvProperty(String property, String value) async {
-    final platform = _player.platform;
-    if (platform == null) return;
-    try {
-      await (platform as dynamic).setProperty(property, value);
-    } catch (_) {
-      // Advanced mpv options are unavailable on some platforms/backends.
-    }
-  }
-
   void _setSubtitleDelay(double seconds) {
     final value = seconds.clamp(-5.0, 5.0);
     if (mounted) setState(() => _subtitleDelaySeconds = value);
-    unawaited(_setMpvProperty('sub-delay', value.toStringAsFixed(2)));
-  }
-
-  void _setAudioAmplification(double value) {
-    final v = value.clamp(0.0, 200.0);
-    if (mounted) setState(() => _audioAmplification = v);
-    unawaited(_player.setVolume(v));
-  }
-
-  void _setAudioPassthrough(bool enabled) {
-    if (mounted) setState(() => _audioPassthrough = enabled);
     unawaited(
-      _setMpvProperty(
-        'audio-spdif',
-        enabled ? 'ac3,dts,dts-hd,eac3,truehd' : '',
+      _playback.setSubtitleDelay(
+        Duration(milliseconds: (value * 1000).round()),
       ),
     );
   }
 
+  void _setSubtitleSizeIndex(int index) {
+    final value = index.clamp(0, _subtitleSizeOptions.length - 1).toInt();
+    if (mounted) setState(() => _subtitleSizeIndex = value);
+    unawaited(_playback.setSubtitleTextSizeSp(_subtitleSizeOptions[value].sp));
+  }
+
+  void _setAudioAmplification(double value) {
+    final v = value.clamp(0.0, 30.0);
+    if (mounted) setState(() => _audioAmplification = v);
+    unawaited(_playback.setAudioAmplificationDb(v));
+  }
+
+  void _setAudioPassthrough(bool enabled) {
+    if (mounted) setState(() => _audioPassthrough = enabled);
+    unawaited(_playback.setAudioPassthrough(enabled));
+  }
+
   void _setDolbyMode(bool enabled) {
     if (mounted) setState(() => _dolbyMode = enabled);
-    unawaited(_setMpvProperty('audio-channels', enabled ? 'auto' : 'stereo'));
+    unawaited(_playback.setDolbyMode(enabled));
   }
 
   void _openSubtitles() {
     _resetHideTimer();
+    unawaited(_playback.refreshTracks());
     final mediaType = widget.payload['mediaType'] as String? ?? 'movie';
-    final wasPlaying = _player.state.playing;
-    if (wasPlaying) _player.pause();
+    final wasPlaying = _playback.playing;
+    if (wasPlaying) _playback.pause();
     showDialog<void>(
       context: context,
       barrierDismissible: true,
       builder: (_) => SubtitleDialog(
-        player: _player,
+        player: _playback,
         tmdbId: widget.payload['tmdbId'] as String? ?? '',
         mediaKind: mediaType == 'show' ? 'show' : 'movie',
         title: widget.payload['title'] as String?,
@@ -661,7 +665,7 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
         sourceUrl: widget.payload['source'] as String?,
       ),
     ).whenComplete(() {
-      if (mounted && !_exiting && wasPlaying) _player.play();
+      if (mounted && !_exiting && wasPlaying) _playback.play();
     });
   }
 
@@ -686,6 +690,7 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
   void _openSubtitleSettings() {
     _resetHideTimer();
     var delay = _subtitleDelaySeconds;
+    var sizeIndex = _subtitleSizeIndex;
     showDialog<void>(
       context: context,
       barrierColor: Colors.black54,
@@ -743,6 +748,28 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
                   height: 1.35,
                 ),
               ),
+              const SizedBox(height: 22),
+              _SettingsValueHeader(
+                label: 'Subtitle size',
+                value: _subtitleSizeOptions[sizeIndex].label,
+              ),
+              const SizedBox(height: 10),
+              _AccentSlider(
+                value: sizeIndex.toDouble(),
+                min: 0,
+                max: (_subtitleSizeOptions.length - 1).toDouble(),
+                divisions: _subtitleSizeOptions.length - 1,
+                onChanged: (value) {
+                  sizeIndex = value
+                      .round()
+                      .clamp(0, _subtitleSizeOptions.length - 1)
+                      .toInt();
+                  setDialogState(() {});
+                  _setSubtitleSizeIndex(sizeIndex);
+                },
+              ),
+              const SizedBox(height: 6),
+              const _SubtitleSizeScale(),
               const SizedBox(height: 20),
               Row(
                 children: [
@@ -750,8 +777,10 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
                     label: 'Reset',
                     onTap: () {
                       delay = 0;
+                      sizeIndex = 1;
                       setDialogState(() {});
                       _setSubtitleDelay(0);
+                      _setSubtitleSizeIndex(sizeIndex);
                     },
                   ),
                   const Spacer(),
@@ -787,14 +816,14 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
             children: [
               _SettingsValueHeader(
                 label: 'Audio amplification',
-                value: '${amplification.round()}%',
+                value: '+${amplification.round()} dB',
               ),
               const SizedBox(height: 12),
               _AccentSlider(
                 value: amplification,
                 min: 0,
-                max: 200,
-                divisions: 40,
+                max: 30,
+                divisions: 30,
                 onChanged: (value) {
                   amplification = value;
                   setDialogState(() {});
@@ -850,15 +879,16 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
 
   void _openAudioTracks() {
     _resetHideTimer();
+    unawaited(_playback.refreshTracks());
     showDialog<void>(
       context: context,
       barrierColor: Colors.black54,
       builder: (_) => _AudioTracksDialog(
-        tracksStream: _player.stream.tracks,
-        trackStream: _player.stream.track,
-        initialTracks: _player.state.tracks,
-        initialTrack: _player.state.track,
-        onSelect: (track) => unawaited(_player.setAudioTrack(track)),
+        tracksStream: _playback.audioTracksStream,
+        trackStream: _playback.selectedAudioTrackStream,
+        initialTracks: _playback.currentAudioTracks,
+        initialTrack: _playback.currentSelectedAudioTrack,
+        onSelect: (track) => unawaited(_playback.selectAudioTrack(track)),
       ),
     );
   }
@@ -902,9 +932,6 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
                         fontSize: t.fontSection,
                         fontWeight: FontWeight.w600,
                         letterSpacing: 0.2,
-                        shadows: const [
-                          Shadow(color: Colors.black87, blurRadius: 12),
-                        ],
                       ),
                     ),
                   ),
@@ -915,9 +942,9 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
         ),
         Center(
           child: StreamBuilder<bool>(
-            stream: _player.stream.playing,
+            stream: _playback.playingStream,
             builder: (_, snap) => _CenterPlayButton(
-              playing: snap.data ?? _player.state.playing,
+              playing: snap.data ?? _playback.playing,
               onTap: _togglePlay,
               focusNode: _centerPlayFocus,
               onDirection: _centerPlayDirection,
@@ -928,12 +955,9 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
           child: Align(
             alignment: Alignment.centerRight,
             child: StreamBuilder<double>(
-              stream: _player.stream.volume,
+              stream: _playback.volumeStream,
               builder: (_, snap) => _VerticalVolumeBar(
-                value: ((snap.data ?? _player.state.volume) / 100).clamp(
-                  0.0,
-                  1.0,
-                ),
+                value: ((snap.data ?? _playback.volume) / 100).clamp(0.0, 1.0),
                 onChanged: (value) => _setVolume(value * 100),
                 focusNode: _volumeBarFocus,
                 onDirection: _volumeBarDirection,
@@ -949,10 +973,10 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
             child: Align(
               alignment: Alignment.bottomCenter,
               child: StreamBuilder<Duration>(
-                stream: _player.stream.position,
+                stream: _playback.positionStream,
                 builder: (context, posSnap) {
                   return StreamBuilder<Duration>(
-                    stream: _player.stream.duration,
+                    stream: _playback.durationStream,
                     builder: (context, durSnap) {
                       final pos = posSnap.data ?? Duration.zero;
                       final dur = durSnap.data ?? Duration.zero;
@@ -990,9 +1014,9 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
                               ),
                               const Spacer(),
                               StreamBuilder<bool>(
-                                stream: _player.stream.playing,
+                                stream: _playback.playingStream,
                                 builder: (_, snap) => _OverlayIconButton(
-                                  icon: (snap.data ?? _player.state.playing)
+                                  icon: (snap.data ?? _playback.playing)
                                       ? Icons.pause
                                       : Icons.play_arrow,
                                   tooltip: 'Play/Pause',
@@ -1000,6 +1024,14 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
                                   focusNode: _playPauseRowFocus,
                                   onDirection: _rhsIconDirection,
                                 ),
+                              ),
+                              const SizedBox(width: 10),
+                              _OverlayIconButton(
+                                icon: Icons.aspect_ratio,
+                                tooltip: 'Aspect Ratio',
+                                onTap: _openAspectRatioMenu,
+                                focusNode: _aspectRatioFocus,
+                                onDirection: _rhsIconDirection,
                               ),
                               if (_isDesktop) ...[
                                 const SizedBox(width: 10),
@@ -1040,7 +1072,7 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
                               }),
                               onChangeEnd: (v) {
                                 setState(() => _seeking = false);
-                                _player.seek(
+                                _playback.seek(
                                   Duration(
                                     milliseconds: (v * dur.inMilliseconds)
                                         .round(),
@@ -1069,7 +1101,21 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
 
 const _uoscAccent = Color(0xFF0DB2E2);
 const _uoscAccentLight = Color(0xFF78F4FF);
-const _uoscGlass = Color(0xB30B1118);
+const _uoscGlass = Color(0xFF0B1118);
+const _subtitleSizeOptions = [
+  _SubtitleSizeOption('XSmall', 30),
+  _SubtitleSizeOption('Small', 40),
+  _SubtitleSizeOption('Medium', 55),
+  _SubtitleSizeOption('Large', 70),
+  _SubtitleSizeOption('XLarge', 85),
+];
+
+class _SubtitleSizeOption {
+  final String label;
+  final double sp;
+
+  const _SubtitleSizeOption(this.label, this.sp);
+}
 
 class _ControlsShortcuts extends StatelessWidget {
   final VoidCallback onBack;
@@ -1110,6 +1156,40 @@ class _ControlsShortcuts extends StatelessWidget {
   );
 }
 
+class _LoadingScrim extends StatelessWidget {
+  const _LoadingScrim();
+
+  @override
+  Widget build(BuildContext context) => const ColoredBox(
+    color: Colors.black,
+    child: Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            width: 34,
+            height: 34,
+            child: CircularProgressIndicator(
+              color: _uoscAccentLight,
+              strokeWidth: 2,
+            ),
+          ),
+          SizedBox(height: 16),
+          Text(
+            'Loading',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.3,
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
 class _SeekBar extends StatelessWidget {
   final double value;
   final ValueChanged<double> onChanged;
@@ -1135,8 +1215,7 @@ class _SeekBar extends StatelessWidget {
     onDirection: onDirection,
     onSelect: onSelect ?? () {},
     tapToSelect: false,
-    builder: (context, state, child) => AnimatedContainer(
-      duration: const Duration(milliseconds: 150),
+    builder: (context, state, child) => Container(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(8),
         border: Border.all(
@@ -1177,45 +1256,28 @@ class _ProgressDock extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) => ClipRRect(
-    borderRadius: BorderRadius.circular(18),
-    child: BackdropFilter(
-      filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-        decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [Color(0xD90A0E14), Color(0xA8061820)],
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+    decoration: BoxDecoration(
+      color: const Color(0xE60A0E14),
+      borderRadius: BorderRadius.circular(18),
+      border: Border.all(color: _uoscAccent.withAlpha(70)),
+    ),
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        child,
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: Row(
+            children: [
+              _TimeLabel(positionLabel),
+              const Spacer(),
+              _TimeLabel(durationLabel),
+            ],
           ),
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: _uoscAccent.withAlpha(70)),
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0xAA000000),
-              blurRadius: 28,
-              offset: Offset(0, 14),
-            ),
-          ],
         ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            child,
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              child: Row(
-                children: [
-                  _TimeLabel(positionLabel),
-                  const Spacer(),
-                  _TimeLabel(durationLabel),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
+      ],
     ),
   );
 }
@@ -1264,8 +1326,7 @@ class _OverlayIconButton extends StatelessWidget {
           focusNode?.requestFocus();
           onTap();
         },
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
+        child: Container(
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
             color: state.focused ? _uoscAccent : Colors.transparent,
@@ -1274,15 +1335,6 @@ class _OverlayIconButton extends StatelessWidget {
               color: state.focused ? _uoscAccentLight : Colors.transparent,
               width: 2,
             ),
-            boxShadow: state.focused
-                ? [
-                    BoxShadow(
-                      color: _uoscAccent.withAlpha(170),
-                      blurRadius: 22,
-                      spreadRadius: 3,
-                    ),
-                  ]
-                : null,
           ),
           child: _GradientIcon(icon: icon, size: 24),
         ),
@@ -1310,11 +1362,7 @@ class _GradientIcon extends StatelessWidget {
       colors: [Colors.white, Color(0xFFF3FFFF), _uoscAccentLight],
       stops: [0, 0.72, 1],
     ).createShader(bounds),
-    child: Icon(
-      icon,
-      size: size,
-      shadows: const [Shadow(color: Colors.black, blurRadius: 16)],
-    ),
+    child: Icon(icon, size: size),
   );
 }
 
@@ -1342,36 +1390,18 @@ class _CenterPlayButton extends StatelessWidget {
         focusNode?.requestFocus();
         onTap();
       },
-      child: ClipOval(
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-          child: Container(
-            width: 104,
-            height: 104,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              gradient: RadialGradient(
-                colors: [
-                  _uoscAccent.withAlpha(48),
-                  Colors.black.withAlpha(120),
-                ],
-              ),
-              border: Border.all(color: Colors.white.withAlpha(38)),
-              boxShadow: [
-                BoxShadow(
-                  color: _uoscAccent.withAlpha(state.focused ? 200 : 44),
-                  blurRadius: state.focused ? 44 : 34,
-                  spreadRadius: state.focused ? 8 : 4,
-                ),
-                const BoxShadow(color: Colors.black87, blurRadius: 28),
-              ],
-            ),
-            child: Center(
-              child: _GradientIcon(
-                icon: playing ? Icons.pause : Icons.play_arrow,
-                size: 62,
-              ),
-            ),
+      child: Container(
+        width: 104,
+        height: 104,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: state.focused ? _uoscAccent.withAlpha(120) : Colors.black87,
+          border: Border.all(color: Colors.white.withAlpha(70)),
+        ),
+        child: Center(
+          child: _GradientIcon(
+            icon: playing ? Icons.pause : Icons.play_arrow,
+            size: 62,
           ),
         ),
       ),
@@ -1428,101 +1458,75 @@ class _VerticalVolumeBar extends StatelessWidget {
                 borderRadius: const BorderRadius.horizontal(
                   left: Radius.circular(24),
                 ),
-                child: BackdropFilter(
-                  filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-                  child: Container(
-                    decoration: BoxDecoration(
-                      gradient: const LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: [Color(0xC90A0F16), Color(0x8A082331)],
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: const Color(0xE60A0F16),
+                    border: Border(
+                      left: BorderSide(
+                        color: (state.focused || adjusting)
+                            ? _uoscAccentLight
+                            : _uoscAccent.withAlpha(70),
+                        width: (state.focused || adjusting) ? 2 : 1,
                       ),
-                      border: Border(
-                        left: BorderSide(
-                          color: (state.focused || adjusting)
-                              ? _uoscAccentLight
-                              : _uoscAccent.withAlpha(70),
-                          width: (state.focused || adjusting) ? 2 : 1,
-                        ),
-                        top: BorderSide(color: Colors.white.withAlpha(18)),
-                        bottom: BorderSide(color: Colors.white.withAlpha(18)),
-                      ),
+                      top: BorderSide(color: Colors.white.withAlpha(18)),
+                      bottom: BorderSide(color: Colors.white.withAlpha(18)),
                     ),
-                    child: Column(
-                      children: [
-                        const SizedBox(height: 16),
-                        _GradientIcon(
-                          icon: v == 0
-                              ? Icons.volume_off
-                              : v < 0.5
-                              ? Icons.volume_down
-                              : Icons.volume_up,
-                          size: 22,
-                        ),
-                        const SizedBox(height: 12),
-                        Expanded(
-                          child: Center(
-                            child: Container(
-                              width: 5,
-                              margin: const EdgeInsets.only(bottom: 18),
-                              decoration: BoxDecoration(
-                                color: Colors.white.withAlpha(35),
-                                borderRadius: BorderRadius.circular(999),
-                                // "Volume level pill" activatable highlight —
-                                // Select enters adjust mode, Up/Down changes
-                                // the value directly while this glow is shown.
-                                boxShadow: adjusting
-                                    ? [
-                                        BoxShadow(
-                                          color: _uoscAccentLight.withAlpha(
-                                            180,
-                                          ),
-                                          blurRadius: 16,
-                                          spreadRadius: 2,
-                                        ),
-                                      ]
-                                    : null,
-                              ),
-                              child: Align(
-                                alignment: Alignment.bottomCenter,
-                                child: FractionallySizedBox(
-                                  heightFactor: v,
-                                  child: Container(
-                                    decoration: BoxDecoration(
-                                      gradient: const LinearGradient(
-                                        begin: Alignment.bottomCenter,
-                                        end: Alignment.topCenter,
-                                        colors: [_uoscAccent, _uoscAccentLight],
-                                      ),
-                                      borderRadius: BorderRadius.circular(999),
-                                      boxShadow: [
-                                        BoxShadow(
-                                          color: _uoscAccentLight.withAlpha(
-                                            110,
-                                          ),
-                                          blurRadius: 14,
-                                        ),
-                                      ],
+                  ),
+                  child: Column(
+                    children: [
+                      const SizedBox(height: 16),
+                      _GradientIcon(
+                        icon: v == 0
+                            ? Icons.volume_off
+                            : v < 0.5
+                            ? Icons.volume_down
+                            : Icons.volume_up,
+                        size: 22,
+                      ),
+                      const SizedBox(height: 12),
+                      Expanded(
+                        child: Center(
+                          child: Container(
+                            width: 5,
+                            margin: const EdgeInsets.only(bottom: 18),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withAlpha(35),
+                              borderRadius: BorderRadius.circular(999),
+                              border: adjusting
+                                  ? Border.all(color: _uoscAccentLight)
+                                  : null,
+                            ),
+                            child: Align(
+                              alignment: Alignment.bottomCenter,
+                              child: FractionallySizedBox(
+                                heightFactor: v,
+                                child: Container(
+                                  decoration: BoxDecoration(
+                                    gradient: const LinearGradient(
+                                      begin: Alignment.bottomCenter,
+                                      end: Alignment.topCenter,
+                                      colors: [_uoscAccent, _uoscAccentLight],
                                     ),
+                                    borderRadius: BorderRadius.circular(999),
                                   ),
                                 ),
                               ),
                             ),
                           ),
                         ),
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 15),
-                          child: Text(
-                            '${(v * 100).round()}',
-                            style: const TextStyle(
-                              color: Colors.white70,
-                              fontSize: 11,
-                              fontFeatures: [FontFeature.tabularFigures()],
-                            ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 15),
+                        child: Text(
+                          '${(v * 100).round()}',
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 11,
+                            fontFeatures: [FontFeature.tabularFigures()],
                           ),
                         ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -1566,45 +1570,35 @@ class _PlayerMenuDialog extends StatelessWidget {
           child: Align(
             alignment: Alignment.bottomLeft,
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(28, 0, 0, 124),
+              padding: const EdgeInsets.fromLTRB(85, 0, 0, 124),
               child: TvModalChromeScale(
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(22),
-                  child: BackdropFilter(
-                    filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-                    child: Container(
-                      width: 300,
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: _uoscGlass,
-                        borderRadius: BorderRadius.circular(22),
-                        border: Border.all(color: _uoscAccent.withAlpha(72)),
-                        boxShadow: const [
-                          BoxShadow(
-                            color: Colors.black87,
-                            blurRadius: 28,
-                            offset: Offset(0, 16),
-                          ),
-                        ],
-                      ),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          _MenuTile(
-                            icon: Icons.subtitles,
-                            title: 'Subtitle Settings',
-                            subtitle: 'Delay or hasten subtitle timing',
-                            onTap: onSubtitleSettings,
-                            autofocus: true,
-                          ),
-                          _MenuTile(
-                            icon: Icons.volume_up,
-                            title: 'Audio Settings',
-                            subtitle: 'Amplification, passthrough, Dolby',
-                            onTap: onAudioSettings,
-                          ),
-                        ],
-                      ),
+                  child: Container(
+                    width: 300,
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: _uoscGlass,
+                      borderRadius: BorderRadius.circular(22),
+                      border: Border.all(color: _uoscAccent.withAlpha(72)),
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _MenuTile(
+                          icon: Icons.subtitles,
+                          title: 'Subtitle Settings',
+                          subtitle: 'Delay or hasten subtitle timing',
+                          onTap: onSubtitleSettings,
+                          autofocus: true,
+                        ),
+                        _MenuTile(
+                          icon: Icons.volume_up,
+                          title: 'Audio Settings',
+                          subtitle: 'Amplification, passthrough, Dolby',
+                          onTap: onAudioSettings,
+                        ),
+                      ],
                     ),
                   ),
                 ),
@@ -1735,109 +1729,85 @@ class _SettingsDialogFrame extends StatelessWidget {
             constraints: const BoxConstraints(maxWidth: 540),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(26),
-              child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
-                child: Container(
-                  padding: const EdgeInsets.all(22),
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [Color(0xF20A0E14), Color(0xE50A1A24)],
-                    ),
-                    borderRadius: BorderRadius.circular(26),
-                    border: Border.all(color: _uoscAccent.withAlpha(76)),
-                    boxShadow: const [
-                      BoxShadow(
-                        color: Colors.black87,
-                        blurRadius: 36,
-                        offset: Offset(0, 18),
-                      ),
-                    ],
+              child: Container(
+                padding: const EdgeInsets.all(22),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [Color(0xFF0A0E14), Color(0xFF0A1A24)],
                   ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Container(
-                            width: 44,
-                            height: 44,
+                  borderRadius: BorderRadius.circular(26),
+                  border: Border.all(color: _uoscAccent.withAlpha(76)),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          width: 44,
+                          height: 44,
+                          decoration: BoxDecoration(
+                            color: _uoscAccent.withAlpha(30),
+                            borderRadius: BorderRadius.circular(15),
+                            border: Border.all(
+                              color: _uoscAccent.withAlpha(60),
+                            ),
+                          ),
+                          child: Center(
+                            child: _GradientIcon(icon: icon, size: 23),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            title,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 20,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                        DpadFocusable(
+                          autofocus: true,
+                          entry: true,
+                          onSelect: () => Navigator.of(context).pop(),
+                          builder: (context, state, child) => Container(
                             decoration: BoxDecoration(
-                              color: _uoscAccent.withAlpha(30),
-                              borderRadius: BorderRadius.circular(15),
+                              shape: BoxShape.circle,
+                              color: state.focused
+                                  ? Colors.white.withAlpha(24)
+                                  : Colors.transparent,
                               border: Border.all(
-                                color: _uoscAccent.withAlpha(60),
-                              ),
-                            ),
-                            child: Center(
-                              child: _GradientIcon(icon: icon, size: 23),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Text(
-                              title,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 20,
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
-                          ),
-                          DpadFocusable(
-                            autofocus: true,
-                            entry: true,
-                            onSelect: () => Navigator.of(context).pop(),
-                            builder: (context, state, child) => Container(
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
                                 color: state.focused
-                                    ? Colors.white.withAlpha(24)
+                                    ? Colors.white.withAlpha(220)
                                     : Colors.transparent,
-                                border: Border.all(
-                                  color: state.focused
-                                      ? Colors.white.withAlpha(220)
-                                      : Colors.transparent,
-                                  width: 2,
-                                ),
-                                boxShadow: state.focused
-                                    ? [
-                                        BoxShadow(
-                                          color: Colors.white.withAlpha(130),
-                                          blurRadius: 10,
-                                          spreadRadius: 1,
-                                        ),
-                                        BoxShadow(
-                                          color: _uoscAccent.withAlpha(160),
-                                          blurRadius: 22,
-                                          spreadRadius: 4,
-                                        ),
-                                      ]
-                                    : null,
+                                width: 2,
                               ),
-                              child: GestureDetector(
-                                onTap: () => Navigator.of(context).pop(),
-                                child: Padding(
-                                  padding: const EdgeInsets.all(8),
-                                  child: Icon(
-                                    Icons.close,
-                                    color: state.focused
-                                        ? Colors.white
-                                        : Colors.white70,
-                                  ),
+                            ),
+                            child: GestureDetector(
+                              onTap: () => Navigator.of(context).pop(),
+                              child: Padding(
+                                padding: const EdgeInsets.all(8),
+                                child: Icon(
+                                  Icons.close,
+                                  color: state.focused
+                                      ? Colors.white
+                                      : Colors.white70,
                                 ),
                               ),
                             ),
-                            child: const SizedBox.shrink(),
                           ),
-                        ],
-                      ),
-                      const SizedBox(height: 22),
-                      child,
-                    ],
-                  ),
+                          child: const SizedBox.shrink(),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 22),
+                    child,
+                  ],
                 ),
               ),
             ),
@@ -1876,6 +1846,33 @@ class _SettingsValueHeader extends StatelessWidget {
         ),
       ),
     ],
+  );
+}
+
+class _SubtitleSizeScale extends StatelessWidget {
+  const _SubtitleSizeScale();
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 20),
+    child: Row(
+      children: [
+        for (var i = 0; i < _subtitleSizeOptions.length; i++) ...[
+          Expanded(
+            child: Text(
+              _subtitleSizeOptions[i].label,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.white.withAlpha(145),
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          if (i < _subtitleSizeOptions.length - 1) const SizedBox(width: 4),
+        ],
+      ],
+    ),
   );
 }
 
@@ -1963,16 +1960,8 @@ class _RoundIconAction extends StatelessWidget {
           shape: BoxShape.circle,
           border: Border.all(
             color: state.focused ? _uoscAccentLight : _uoscAccent.withAlpha(58),
+            width: state.focused ? 2 : 1,
           ),
-          boxShadow: state.focused
-              ? [
-                  BoxShadow(
-                    color: _uoscAccent.withAlpha(140),
-                    blurRadius: 16,
-                    spreadRadius: 2,
-                  ),
-                ]
-              : null,
         ),
         child: Center(child: _GradientIcon(icon: icon, size: 20)),
       ),
@@ -1997,8 +1986,7 @@ class _DialogTextButton extends StatelessWidget {
     onSelect: onTap,
     builder: (context, state, child) => GestureDetector(
       onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
+      child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
         decoration: BoxDecoration(
           color: filled ? _uoscAccentLight : Colors.white.withAlpha(16),
@@ -2007,15 +1995,6 @@ class _DialogTextButton extends StatelessWidget {
             color: state.focused ? Colors.white : Colors.transparent,
             width: 2,
           ),
-          boxShadow: state.focused
-              ? [
-                  BoxShadow(
-                    color: _uoscAccent.withAlpha(120),
-                    blurRadius: 16,
-                    spreadRadius: 2,
-                  ),
-                ]
-              : null,
         ),
         child: Text(
           label,
@@ -2049,8 +2028,7 @@ class _SettingsSwitchRow extends StatelessWidget {
     tapToSelect: false,
     builder: (context, state, child) => GestureDetector(
       onTap: () => onChanged(!value),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
+      child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         decoration: BoxDecoration(
           color: Colors.white.withAlpha(12),
@@ -2061,15 +2039,6 @@ class _SettingsSwitchRow extends StatelessWidget {
                 : Colors.white.withAlpha(22),
             width: state.focused ? 2 : 1,
           ),
-          boxShadow: state.focused
-              ? [
-                  BoxShadow(
-                    color: _uoscAccent.withAlpha(135),
-                    blurRadius: 18,
-                    spreadRadius: 2,
-                  ),
-                ]
-              : null,
         ),
         child: Row(
           children: [
@@ -2113,12 +2082,194 @@ class _SettingsSwitchRow extends StatelessWidget {
   );
 }
 
+class _AspectRatioDialog extends StatelessWidget {
+  final String selectedMode;
+  final ValueChanged<String> onSelect;
+
+  const _AspectRatioDialog({
+    required this.selectedMode,
+    required this.onSelect,
+  });
+
+  static const _options = [
+    _AspectRatioOption(
+      mode: 'fit',
+      title: 'Fit',
+      subtitle: 'Preserve source aspect ratio inside the screen.',
+    ),
+    _AspectRatioOption(
+      mode: 'fill',
+      title: 'Fill',
+      subtitle: 'Fill the full player area without preserving letterbox.',
+    ),
+    _AspectRatioOption(
+      mode: 'zoom',
+      title: 'Zoom',
+      subtitle: 'Crop evenly to remove surrounding black bars.',
+    ),
+    _AspectRatioOption(
+      mode: '16:9',
+      title: '16:9',
+      subtitle: 'HDTV and widescreen broadcast standard.',
+    ),
+    _AspectRatioOption(
+      mode: '4:3',
+      title: '4:3',
+      subtitle: 'Classic TV and legacy broadcast standard.',
+    ),
+    _AspectRatioOption(
+      mode: '14:9',
+      title: '14:9',
+      subtitle: 'Broadcast compromise between 4:3 and 16:9.',
+    ),
+    _AspectRatioOption(
+      mode: '18:9',
+      title: '18:9',
+      subtitle: '2:1 Univisium / modern streaming frame.',
+    ),
+    _AspectRatioOption(
+      mode: '21:9',
+      title: '21:9',
+      subtitle: 'Ultrawide/cinema-style display frame.',
+    ),
+    _AspectRatioOption(
+      mode: '2.35:1',
+      title: '2.35:1',
+      subtitle: 'CinemaScope theatrical ratio.',
+    ),
+    _AspectRatioOption(
+      mode: '2.39:1',
+      title: '2.39:1',
+      subtitle: 'Modern anamorphic theatrical ratio.',
+    ),
+  ];
+
+  @override
+  Widget build(BuildContext context) => _SettingsDialogFrame(
+    icon: Icons.aspect_ratio,
+    title: 'Aspect Ratio',
+    child: ConstrainedBox(
+      constraints: const BoxConstraints(maxHeight: 430),
+      child: ListView.separated(
+        shrinkWrap: true,
+        itemCount: _options.length,
+        separatorBuilder: (_, _) => const SizedBox(height: 8),
+        itemBuilder: (context, index) {
+          final option = _options[index];
+          return _AspectRatioTile(
+            option: option,
+            selected: option.mode == selectedMode,
+            onTap: () {
+              onSelect(option.mode);
+              Navigator.of(context).pop();
+            },
+          );
+        },
+      ),
+    ),
+  );
+}
+
+class _AspectRatioOption {
+  final String mode;
+  final String title;
+  final String subtitle;
+
+  const _AspectRatioOption({
+    required this.mode,
+    required this.title,
+    required this.subtitle,
+  });
+}
+
+class _AspectRatioTile extends StatelessWidget {
+  final _AspectRatioOption option;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _AspectRatioTile({
+    required this.option,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) => DpadFocusable(
+    onSelect: onTap,
+    builder: (context, state, child) => InkWell(
+      borderRadius: BorderRadius.circular(18),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: selected
+              ? _uoscAccent.withAlpha(34)
+              : Colors.white.withAlpha(10),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: state.focused
+                ? _uoscAccentLight
+                : (selected
+                      ? _uoscAccentLight.withAlpha(120)
+                      : Colors.white.withAlpha(20)),
+            width: state.focused ? 2 : 1,
+          ),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: selected
+                    ? _uoscAccent.withAlpha(46)
+                    : Colors.white.withAlpha(14),
+              ),
+              child: Center(
+                child: selected
+                    ? const Icon(Icons.check, color: _uoscAccentLight, size: 20)
+                    : _GradientIcon(icon: Icons.aspect_ratio, size: 20),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    option.title,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 14,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    option.subtitle,
+                    style: TextStyle(
+                      color: Colors.white.withAlpha(145),
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+    child: const SizedBox.shrink(),
+  );
+}
+
 class _AudioTracksDialog extends StatelessWidget {
-  final Stream<Tracks> tracksStream;
-  final Stream<Track> trackStream;
-  final Tracks initialTracks;
-  final Track initialTrack;
-  final ValueChanged<AudioTrack> onSelect;
+  final Stream<List<PlaybackTrackInfo>> tracksStream;
+  final Stream<PlaybackTrackInfo?> trackStream;
+  final List<PlaybackTrackInfo> initialTracks;
+  final PlaybackTrackInfo? initialTrack;
+  final ValueChanged<PlaybackTrackInfo> onSelect;
 
   const _AudioTracksDialog({
     required this.tracksStream,
@@ -2132,15 +2283,15 @@ class _AudioTracksDialog extends StatelessWidget {
   Widget build(BuildContext context) => _SettingsDialogFrame(
     icon: Icons.audiotrack,
     title: 'Audio Tracks',
-    child: StreamBuilder<Tracks>(
+    child: StreamBuilder<List<PlaybackTrackInfo>>(
       stream: tracksStream,
       initialData: initialTracks,
-      builder: (context, tracksSnap) => StreamBuilder<Track>(
+      builder: (context, tracksSnap) => StreamBuilder<PlaybackTrackInfo?>(
         stream: trackStream,
         initialData: initialTrack,
         builder: (context, trackSnap) {
-          final tracks = tracksSnap.data?.audio ?? const <AudioTrack>[];
-          final selected = trackSnap.data?.audio ?? initialTrack.audio;
+          final tracks = tracksSnap.data ?? const <PlaybackTrackInfo>[];
+          final selected = trackSnap.data;
           if (tracks.isEmpty) {
             return Text(
               'No audio tracks are available for this media.',
@@ -2158,7 +2309,7 @@ class _AudioTracksDialog extends StatelessWidget {
                 final track = tracks[index];
                 return _TrackTile(
                   track: track,
-                  selected: track == selected,
+                  selected: track.id == selected?.id || track.selected,
                   onTap: () => onSelect(track),
                 );
               },
@@ -2171,7 +2322,7 @@ class _AudioTracksDialog extends StatelessWidget {
 }
 
 class _TrackTile extends StatelessWidget {
-  final AudioTrack track;
+  final PlaybackTrackInfo track;
   final bool selected;
   final VoidCallback onTap;
 
@@ -2252,19 +2403,19 @@ class _TrackTile extends StatelessWidget {
   );
 }
 
-String _audioTrackTitle(AudioTrack track) {
-  if (track.id == 'auto') return 'Auto';
-  if (track.id == 'no') return 'Disabled';
-  final title = track.title?.trim();
-  if (title != null && title.isNotEmpty) return title;
+String _audioTrackTitle(PlaybackTrackInfo track) {
+  if (track.isAuto) return 'Auto';
+  if (track.isNone) return 'Disabled';
+  final title = track.title.trim();
+  if (title.isNotEmpty) return title;
   final language = track.language?.trim();
   if (language != null && language.isNotEmpty) return language.toUpperCase();
   return 'Audio ${track.id}';
 }
 
-String _audioTrackSubtitle(AudioTrack track) {
-  if (track.id == 'auto') return 'Let the player choose the best track.';
-  if (track.id == 'no') return 'Disable audio output.';
+String _audioTrackSubtitle(PlaybackTrackInfo track) {
+  if (track.isAuto) return 'Let the player choose the best track.';
+  if (track.isNone) return 'Disable audio output.';
   final parts = <String>[];
   final language = track.language?.trim();
   if (language != null && language.isNotEmpty) {
@@ -2275,10 +2426,10 @@ String _audioTrackSubtitle(AudioTrack track) {
   final channels = track.channels?.trim();
   if (channels != null && channels.isNotEmpty) {
     parts.add(channels);
-  } else if (track.channelscount != null) {
-    parts.add('${track.channelscount} channels');
+  } else if (track.channelCount != null) {
+    parts.add('${track.channelCount} channels');
   }
-  final samplerate = track.samplerate;
+  final samplerate = track.sampleRate;
   if (samplerate != null && samplerate > 0) {
     parts.add('${(samplerate / 1000).toStringAsFixed(1)} kHz');
   }
