@@ -966,6 +966,7 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
         'playbackDurationMs': playbackDurationMs,
         'selectedSourceTitle': sourceTitle,
         'externalPlayerRequired': externalRequired,
+        if (externalRequired) 'externalPlayerTarget': 'mxPlayer',
         if (externalRequired) 'externalPlayerReason': 'risky_codec',
       }),
     );

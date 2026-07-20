@@ -651,6 +651,7 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
       await _pollPreload(
         session,
         fallbackUrl: streamUrl,
+        externalPlaybackUrl: raw['external_playback_url'] as String?,
         selectedSourceTitle: selectedSourceTitle,
       );
     } catch (_) {
@@ -672,6 +673,7 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
   Future<void> _pollPreload(
     PreloadSessionCreateResponse session, {
     required String fallbackUrl,
+    String? externalPlaybackUrl,
     required String selectedSourceTitle,
   }) async {
     setState(() => _preloadSessionId = session.sessionId);
@@ -777,6 +779,10 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
                 ? filePath.substring(1)
                 : filePath;
             source = '$base/api/v1/stream/${Uri.encodeFull(relPath)}';
+          } else if (shouldUseExternalMpv(selectedSourceTitle) &&
+              externalPlaybackUrl != null &&
+              externalPlaybackUrl.isNotEmpty) {
+            source = externalPlaybackUrl;
           } else {
             source = session.localUrl ?? session.playbackUrl;
           }
@@ -834,6 +840,8 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
       'playbackDurationMs': widget.playbackDurationMs,
       'selectedSourceTitle': selectedSourceTitle,
       'externalPlayerRequired': shouldUseExternalMpv(selectedSourceTitle),
+      if (shouldUseExternalMpv(selectedSourceTitle))
+        'externalPlayerTarget': 'mxPlayer',
       if (shouldUseExternalMpv(selectedSourceTitle))
         'externalPlayerReason': 'risky_codec',
     };

@@ -8,6 +8,36 @@ const _events = EventChannel('warp/external_player/events');
 
 enum ExternalMpvResultCode { ok, canceled }
 
+enum ExternalPlayerTarget {
+  mpv,
+  mxPlayer;
+
+  String get label => switch (this) {
+    ExternalPlayerTarget.mpv => 'mpv-android',
+    ExternalPlayerTarget.mxPlayer => 'MX Player',
+  };
+
+  String get isInstalledMethod => switch (this) {
+    ExternalPlayerTarget.mpv => 'isMpvInstalled',
+    ExternalPlayerTarget.mxPlayer => 'isMxPlayerInstalled',
+  };
+
+  String get openInstallMethod => switch (this) {
+    ExternalPlayerTarget.mpv => 'openMpvInstallPage',
+    ExternalPlayerTarget.mxPlayer => 'openMxPlayerInstallPage',
+  };
+
+  String get launchMethod => switch (this) {
+    ExternalPlayerTarget.mpv => 'launchMpv',
+    ExternalPlayerTarget.mxPlayer => 'launchMxPlayer',
+  };
+
+  static ExternalPlayerTarget fromPayload(Object? value) =>
+      value?.toString() == 'mpv'
+      ? ExternalPlayerTarget.mpv
+      : ExternalPlayerTarget.mxPlayer;
+}
+
 class ExternalMpvResult {
   final ExternalMpvResultCode code;
   final int? positionMs;
@@ -57,6 +87,35 @@ class ExternalMpvPlayer {
   }) async {
     if (!Platform.isAndroid) return false;
     return await _methods.invokeMethod<bool>('launchMpv', {
+          'url': url,
+          if (title != null && title.isNotEmpty) 'title': title,
+          if (positionMs != null && positionMs > 0) 'positionMs': positionMs,
+        }) ??
+        false;
+  }
+}
+
+class ExternalVideoPlayer {
+  static Stream<ExternalMpvResult> get results => ExternalMpvPlayer.results;
+
+  static Future<bool> isInstalled(ExternalPlayerTarget target) async {
+    if (!Platform.isAndroid) return false;
+    return await _methods.invokeMethod<bool>(target.isInstalledMethod) ?? false;
+  }
+
+  static Future<bool> openInstallPage(ExternalPlayerTarget target) async {
+    if (!Platform.isAndroid) return false;
+    return await _methods.invokeMethod<bool>(target.openInstallMethod) ?? false;
+  }
+
+  static Future<bool> launch({
+    required ExternalPlayerTarget target,
+    required String url,
+    String? title,
+    int? positionMs,
+  }) async {
+    if (!Platform.isAndroid) return false;
+    return await _methods.invokeMethod<bool>(target.launchMethod, {
           'url': url,
           if (title != null && title.isNotEmpty) 'title': title,
           if (positionMs != null && positionMs > 0) 'positionMs': positionMs,

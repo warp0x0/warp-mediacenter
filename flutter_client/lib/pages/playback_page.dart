@@ -77,6 +77,7 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
   Timer? _hideTimer;
   Timer? _externalWatchdog;
   late final bool _externalMode;
+  late final ExternalPlayerTarget _externalTarget;
   String _externalStatus = 'Opening external player…';
   bool _externalResultHandled = false;
   bool _externalScrobbleStarted = false;
@@ -107,6 +108,9 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
     _playback = createPlaybackBackend();
     _externalMode =
         Platform.isAndroid && widget.payload['externalPlayerRequired'] == true;
+    _externalTarget = ExternalPlayerTarget.fromPayload(
+      widget.payload['externalPlayerTarget'],
+    );
 
     final src = widget.payload['source'] as String? ?? '';
     final resumeFromFrac = (widget.payload['resumeFromFrac'] as num?)
@@ -259,21 +263,22 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
         widget.payload['title'] as String?;
 
     try {
-      if (!await ExternalMpvPlayer.isInstalled()) {
+      if (!await ExternalVideoPlayer.isInstalled(_externalTarget)) {
         if (mounted) {
           setState(
             () => _externalStatus =
-                'mpv-android is required for this source. Opening Play Store…',
+                '${_externalTarget.label} is required for this source. Opening Play Store…',
           );
         }
-        await ExternalMpvPlayer.openInstallPage();
+        await ExternalVideoPlayer.openInstallPage(_externalTarget);
         return;
       }
 
-      _externalResultSub = ExternalMpvPlayer.results.listen(
+      _externalResultSub = ExternalVideoPlayer.results.listen(
         (result) => unawaited(_handleExternalResult(result, startPos)),
       );
-      final launched = await ExternalMpvPlayer.launch(
+      final launched = await ExternalVideoPlayer.launch(
+        target: _externalTarget,
         url: src,
         title: title,
         positionMs: startPos.inMilliseconds,
@@ -284,15 +289,15 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
         _externalResultSub = null;
         setState(
           () => _externalStatus =
-              'Could not launch mpv-android. Opening Play Store…',
+              'Could not launch ${_externalTarget.label}. Opening Play Store…',
         );
-        await ExternalMpvPlayer.openInstallPage();
+        await ExternalVideoPlayer.openInstallPage(_externalTarget);
         return;
       }
 
       setState(
         () => _externalStatus =
-            'Playing in mpv-android. Press Back in mpv to return to Warp.',
+            'Playing in ${_externalTarget.label}. Press Back there to return to Warp.',
       );
       _externalWatchdog = Timer(const Duration(seconds: 120), () {
         unawaited(_sendExternalScrobbleStart(startPos));
