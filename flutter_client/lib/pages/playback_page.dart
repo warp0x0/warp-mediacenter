@@ -7,7 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:window_manager/window_manager.dart';
 import '../api/api_client.dart';
-import '../player/external_mpv_player.dart';
+import '../player/external_video_player.dart';
 import '../player/playback_backend.dart';
 import '../providers/detail_provider.dart';
 import '../theme/warp_tokens.dart';
@@ -41,7 +41,7 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
   StreamSubscription<Duration>? _positionSub;
   StreamSubscription<bool>? _completedSub;
   StreamSubscription<bool>? _firstFrameSub;
-  StreamSubscription<ExternalMpvResult>? _externalResultSub;
+  StreamSubscription<ExternalPlayerResult>? _externalResultSub;
 
   // ── D-pad navigation focus nodes ────────────────────────────────────────
   // Initial focus lands on the progress bar. LHS icons (Menu/Subtitles/
@@ -77,7 +77,6 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
   Timer? _hideTimer;
   Timer? _externalWatchdog;
   late final bool _externalMode;
-  late final ExternalPlayerTarget _externalTarget;
   String _externalStatus = 'Opening external player…';
   bool _externalResultHandled = false;
   bool _externalScrobbleStarted = false;
@@ -108,16 +107,13 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
     _playback = createPlaybackBackend();
     _externalMode =
         Platform.isAndroid && widget.payload['externalPlayerRequired'] == true;
-    _externalTarget = ExternalPlayerTarget.fromPayload(
-      widget.payload['externalPlayerTarget'],
-    );
 
     final src = widget.payload['source'] as String? ?? '';
     final resumeFromFrac = (widget.payload['resumeFromFrac'] as num?)
         ?.toDouble();
 
     if (_externalMode) {
-      unawaited(_launchExternalMpv(src, resumeFromFrac: resumeFromFrac));
+      unawaited(_launchExternalPlayer(src, resumeFromFrac: resumeFromFrac));
     } else if (src.isNotEmpty) {
       unawaited(_playback.open(src));
     }
@@ -248,7 +244,7 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
     );
   }
 
-  Future<void> _launchExternalMpv(
+  Future<void> _launchExternalPlayer(
     String src, {
     required double? resumeFromFrac,
   }) async {
@@ -263,14 +259,14 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
         widget.payload['title'] as String?;
 
     try {
-      if (!await ExternalVideoPlayer.isInstalled(_externalTarget)) {
+      if (!await ExternalVideoPlayer.isInstalled()) {
         if (mounted) {
           setState(
             () => _externalStatus =
-                '${_externalTarget.label} is required for this source. Opening Play Store…',
+                '${ExternalVideoPlayer.label} is required for this source. Opening Play Store...',
           );
         }
-        await ExternalVideoPlayer.openInstallPage(_externalTarget);
+        await ExternalVideoPlayer.openInstallPage();
         return;
       }
 
@@ -278,7 +274,6 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
         (result) => unawaited(_handleExternalResult(result, startPos)),
       );
       final launched = await ExternalVideoPlayer.launch(
-        target: _externalTarget,
         url: src,
         title: title,
         positionMs: startPos.inMilliseconds,
@@ -289,15 +284,15 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
         _externalResultSub = null;
         setState(
           () => _externalStatus =
-              'Could not launch ${_externalTarget.label}. Opening Play Store…',
+              'Could not launch ${ExternalVideoPlayer.label}. Opening Play Store...',
         );
-        await ExternalVideoPlayer.openInstallPage(_externalTarget);
+        await ExternalVideoPlayer.openInstallPage();
         return;
       }
 
       setState(
         () => _externalStatus =
-            'Playing in ${_externalTarget.label}. Press Back there to return to Warp.',
+            'Playing in ${ExternalVideoPlayer.label}. Press Back there to return to Warp.',
       );
       _externalWatchdog = Timer(const Duration(seconds: 120), () {
         unawaited(_sendExternalScrobbleStart(startPos));
@@ -319,14 +314,14 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
   }
 
   Future<void> _handleExternalResult(
-    ExternalMpvResult result,
+    ExternalPlayerResult result,
     Duration startPos,
   ) async {
     if (_externalResultHandled || _exiting) return;
     _externalResultHandled = true;
     _externalWatchdog?.cancel();
 
-    if (result.code == ExternalMpvResultCode.canceled) {
+    if (result.code == ExternalPlayerResultCode.canceled) {
       if (_externalScrobbleStarted) {
         await _sendScrobble('stop', startPos, _externalDuration);
       }

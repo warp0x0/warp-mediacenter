@@ -9,7 +9,7 @@ import '../../api/api_client.dart';
 import '../../models/torrent.dart';
 import '../../models/preload.dart';
 import '../../models/debrid.dart';
-import '../../player/external_mpv_player.dart';
+import '../../player/external_video_player.dart';
 import '../../theme/warp_tokens.dart';
 import '../shared/dpad_controls.dart';
 import '../shared/modal_focus_restore.dart';
@@ -779,7 +779,7 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
                 ? filePath.substring(1)
                 : filePath;
             source = '$base/api/v1/stream/${Uri.encodeFull(relPath)}';
-          } else if (shouldUseExternalMpv(selectedSourceTitle) &&
+          } else if (shouldUseExternalMxPlayer(selectedSourceTitle) &&
               externalPlaybackUrl != null &&
               externalPlaybackUrl.isNotEmpty) {
             source = externalPlaybackUrl;
@@ -839,10 +839,8 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
       'resumeFromFrac': resumeFromFrac,
       'playbackDurationMs': widget.playbackDurationMs,
       'selectedSourceTitle': selectedSourceTitle,
-      'externalPlayerRequired': shouldUseExternalMpv(selectedSourceTitle),
-      if (shouldUseExternalMpv(selectedSourceTitle))
-        'externalPlayerTarget': 'mxPlayer',
-      if (shouldUseExternalMpv(selectedSourceTitle))
+      'externalPlayerRequired': shouldUseExternalMxPlayer(selectedSourceTitle),
+      if (shouldUseExternalMxPlayer(selectedSourceTitle))
         'externalPlayerReason': 'risky_codec',
     };
 

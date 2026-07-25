@@ -13,7 +13,7 @@ import '../api/catalog_constants.dart';
 import '../models/detail.dart';
 import '../models/library.dart';
 import '../models/media.dart';
-import '../player/external_mpv_player.dart';
+import '../player/external_video_player.dart';
 import '../providers/detail_provider.dart';
 import '../providers/catalog_provider.dart';
 import '../providers/library_provider.dart';
@@ -953,7 +953,7 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
     String? selectedSourceTitle,
   }) {
     final sourceTitle = selectedSourceTitle ?? url;
-    final externalRequired = shouldUseExternalMpv(sourceTitle);
+    final externalRequired = shouldUseExternalMxPlayer(sourceTitle);
     unawaited(
       _pushPlayback({
         'source': url,
@@ -966,7 +966,6 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
         'playbackDurationMs': playbackDurationMs,
         'selectedSourceTitle': sourceTitle,
         'externalPlayerRequired': externalRequired,
-        if (externalRequired) 'externalPlayerTarget': 'mxPlayer',
         if (externalRequired) 'externalPlayerReason': 'risky_codec',
       }),
     );

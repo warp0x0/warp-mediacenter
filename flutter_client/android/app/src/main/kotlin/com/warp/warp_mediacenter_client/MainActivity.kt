@@ -96,20 +96,8 @@ class MainActivity : FlutterActivity() {
     private fun handleExternalPlayerCall(call: MethodCall, result: MethodChannel.Result) {
         try {
             when (call.method) {
-                "isMpvInstalled" -> result.success(isPackageInstalled(MPV_PACKAGE))
                 "isMxPlayerInstalled" -> result.success(isPackageInstalled(MX_PLAYER_FREE_PACKAGE))
-                "openMpvInstallPage" -> result.success(openMpvInstallPage())
                 "openMxPlayerInstallPage" -> result.success(openInstallPage(MX_PLAYER_FREE_PACKAGE))
-                "launchMpv" -> {
-                    val url = call.argument<String>("url") ?: ""
-                    if (url.isBlank()) {
-                        result.error("MPV_ARGUMENT_ERROR", "url is required", null)
-                        return
-                    }
-                    val title = call.argument<String>("title")
-                    val positionMs = call.argument<Number>("positionMs")?.toLong()
-                    result.success(launchMpv(url, title, positionMs))
-                }
                 "launchMxPlayer" -> {
                     val url = call.argument<String>("url") ?: ""
                     if (url.isBlank()) {
@@ -126,22 +114,6 @@ class MainActivity : FlutterActivity() {
         } catch (error: Throwable) {
             result.error("EXTERNAL_PLAYER_ERROR", error.message, null)
         }
-    }
-
-    private fun launchMpv(url: String, title: String?, positionMs: Long?): Boolean {
-        if (!isPackageInstalled(MPV_PACKAGE)) return false
-        Log.i(TAG, "launchMpv positionMs=${positionMs ?: 0L} title=${!title.isNullOrBlank()} url=$url")
-        val intent = Intent(Intent.ACTION_VIEW).apply {
-            setPackage(MPV_PACKAGE)
-            setDataAndType(Uri.parse(url), "video/*")
-            title?.takeIf { it.isNotBlank() }?.let { putExtra("title", it) }
-            positionMs?.takeIf { it > 0L }?.let {
-                // mpv-android reads this extra with Bundle.getInt("position", 0).
-                putExtra("position", it.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
-            }
-        }
-        startActivityForResult(intent, EXTERNAL_PLAYER_REQUEST_CODE)
-        return true
     }
 
     private fun launchMxPlayer(url: String, title: String?, positionMs: Long?): Boolean {
@@ -182,10 +154,6 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun openMpvInstallPage(): Boolean {
-        return openInstallPage(MPV_PACKAGE)
-    }
-
     private fun openInstallPage(packageName: String): Boolean {
         val marketIntent = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$packageName"))
         if (tryStartActivity(marketIntent)) return true
@@ -220,7 +188,6 @@ class MainActivity : FlutterActivity() {
     companion object {
         private const val EXTERNAL_PLAYER_METHODS = "warp/external_player/methods"
         private const val EXTERNAL_PLAYER_EVENTS = "warp/external_player/events"
-        private const val MPV_PACKAGE = "is.xyz.mpv"
         private const val MX_PLAYER_FREE_PACKAGE = "com.mxtech.videoplayer.ad"
         private const val MX_PLAYER_FREE_ACTIVITY = "com.mxtech.videoplayer.ad.ActivityScreen"
         private const val EXTERNAL_PLAYER_REQUEST_CODE = 8104
