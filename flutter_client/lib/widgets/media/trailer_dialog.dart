@@ -7,7 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart' hide Video;
 
 import '../../models/media.dart';
-import '../../player/better_trailer_player.dart';
+import '../../player/native_android_player.dart';
 import '../../theme/warp_theme.dart';
 import '../../theme/warp_tokens.dart';
 import '../shared/modal_focus_restore.dart';
@@ -35,17 +35,20 @@ class TrailerDialog extends ConsumerStatefulWidget {
 
 class _TrailerDialogState extends ConsumerState<TrailerDialog>
     with WidgetsBindingObserver, ModalFocusRestore<TrailerDialog> {
-  late final BetterTrailerPlayerController _player;
+  late final NativeAndroidPlayerController _player;
   final _surfaceFocus = FocusNode(debugLabel: 'TrailerVideoSurface');
   final _selectorScroll = ScrollController();
   final _selectorRailFocus = FocusNode(debugLabel: 'TrailerSelectorScrollRail');
   final List<FocusNode> _selectorFocusNodes = [];
+  StreamSubscription<NativePlayerEvent>? _playerEventsSub;
 
   bool _loading = true;
   bool _selectorOpen = false;
   String? _error;
   int _selectedIndex = 0;
   int _loadGeneration = 0;
+  double _volume = 1.0;
+  bool _playing = false;
   late List<Trailer> _orderedTrailers;
 
   List<Trailer> get _trailers => _orderedTrailers;
@@ -53,12 +56,8 @@ class _TrailerDialogState extends ConsumerState<TrailerDialog>
   @override
   void initState() {
     super.initState();
-    _player = BetterTrailerPlayerController(
-      onError: (message) {
-        if (!mounted || _loading) return;
-        setState(() => _error = message);
-      },
-    );
+    _player = NativeAndroidPlayerController();
+    _playerEventsSub = _player.events.listen(_handlePlayerEvent);
     _orderedTrailers = _buildOrderedTrailers();
     _selectedIndex = 0;
     _syncSelectorFocusNodes();
@@ -84,14 +83,29 @@ class _TrailerDialogState extends ConsumerState<TrailerDialog>
 
   @override
   void dispose() {
+    _playerEventsSub?.cancel();
     _surfaceFocus.dispose();
     _selectorScroll.dispose();
     _selectorRailFocus.dispose();
     for (final node in _selectorFocusNodes) {
       node.dispose();
     }
-    _player.dispose();
+    unawaited(_player.dispose());
     super.dispose();
+  }
+
+  void _handlePlayerEvent(NativePlayerEvent event) {
+    if (!mounted) return;
+    if (event.type == 'error') {
+      setState(() {
+        _loading = false;
+        _error = event.message ?? 'Native trailer playback failed.';
+      });
+      return;
+    }
+    if (_playing != event.playing) {
+      setState(() => _playing = event.playing);
+    }
   }
 
   void _syncSelectorFocusNodes() {
@@ -151,7 +165,13 @@ class _TrailerDialogState extends ConsumerState<TrailerDialog>
   }
 
   Future<void> _openStreams(_TrailerStreams streams) async {
-    await _player.load(streams.videoUrl);
+    await _player.setDataSource(
+      source: streams.audioUrl == null ? streams.videoUrl : null,
+      videoUrl: streams.audioUrl == null ? null : streams.videoUrl,
+      audioUrl: streams.audioUrl,
+      autoplay: true,
+      youtubeTrailerMode: true,
+    );
   }
 
   Future<_TrailerStreams> _extractStreams(String youtubeUrl) async {
@@ -163,20 +183,30 @@ class _TrailerDialogState extends ConsumerState<TrailerDialog>
         ytClients: [YoutubeApiClient.safari, YoutubeApiClient.androidVr],
       );
       final muxed = manifest.muxed;
+      final videoOnly = manifest.videoOnly;
+      final audioOnly = manifest.audioOnly;
       debugPrint(
-        'Manifest loaded for $videoId: muxed=${muxed.length}, videoOnly=${manifest.videoOnly.length}, audioOnly=${manifest.audioOnly.length}',
+        'Manifest loaded for $videoId: muxed=${muxed.length}, videoOnly=${videoOnly.length}, audioOnly=${audioOnly.length}',
       );
+      if (videoOnly.isNotEmpty && audioOnly.isNotEmpty) {
+        final video = videoOnly.withHighestBitrate();
+        final audio = audioOnly.withHighestBitrate();
+        return _TrailerStreams(
+          video.url.toString(),
+          audioUrl: audio.url.toString(),
+        );
+      }
       if (muxed.isNotEmpty) {
         return _TrailerStreams(muxed.withHighestBitrate().url.toString());
       }
-      throw Exception('No muxed playable stream found');
+      throw Exception('No playable stream found');
     } finally {
       yt.close();
     }
   }
 
   void _togglePlayPause() {
-    unawaited(_player.togglePlayPause());
+    unawaited(_playing ? _player.pause() : _player.play());
   }
 
   void _seek(int seconds) {
@@ -184,7 +214,8 @@ class _TrailerDialogState extends ConsumerState<TrailerDialog>
   }
 
   void _adjustVolume(double delta) {
-    unawaited(_player.adjustVolume(delta / 100));
+    _volume = (_volume + delta / 100).clamp(0.0, 1.0);
+    unawaited(_player.setVolume(_volume));
   }
 
   bool _surfaceDirection(TraversalDirection direction) {
@@ -402,27 +433,39 @@ class _TrailerDialogState extends ConsumerState<TrailerDialog>
                                       ),
                                       child: child,
                                     ),
-                                child: _loading
-                                    ? const Center(
-                                        child: CircularProgressIndicator(
-                                          color: Color(0xFF0DB2E2),
-                                          strokeWidth: 2,
-                                        ),
-                                      )
-                                    : _error != null
-                                    ? _ErrorBody(
-                                        message: _error!,
-                                        url: _trailers[_selectedIndex].url,
-                                        t: t,
-                                      )
-                                    : GestureDetector(
-                                        behavior: HitTestBehavior.opaque,
-                                        onTap: _togglePlayPause,
-                                        onLongPress: _openSelector,
-                                        child: BetterTrailerPlayerSurface(
-                                          controller: _player,
-                                        ),
+                                child: GestureDetector(
+                                  behavior: HitTestBehavior.opaque,
+                                  onTap: _togglePlayPause,
+                                  onLongPress: _openSelector,
+                                  child: Stack(
+                                    fit: StackFit.expand,
+                                    children: [
+                                      NativeAndroidPlayerSurface(
+                                        controller: _player,
+                                        fill: true,
                                       ),
+                                      if (_loading)
+                                        const ColoredBox(
+                                          color: Colors.black,
+                                          child: Center(
+                                            child: CircularProgressIndicator(
+                                              color: Color(0xFF0DB2E2),
+                                              strokeWidth: 2,
+                                            ),
+                                          ),
+                                        )
+                                      else if (_error != null)
+                                        ColoredBox(
+                                          color: Colors.black,
+                                          child: _ErrorBody(
+                                            message: _error!,
+                                            url: _trailers[_selectedIndex].url,
+                                            t: t,
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ),
                               ),
                             ),
                           ),
@@ -531,8 +574,9 @@ class _TrailerDialogState extends ConsumerState<TrailerDialog>
 
 class _TrailerStreams {
   final String videoUrl;
+  final String? audioUrl;
 
-  const _TrailerStreams(this.videoUrl);
+  const _TrailerStreams(this.videoUrl, {this.audioUrl});
 }
 
 class _TrailerOptionRow extends StatelessWidget {

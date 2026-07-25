@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 import json
+import os
+import re
 from typing import Any, AsyncGenerator, Dict, Optional
 
 import aiohttp
@@ -28,6 +30,17 @@ log = get_logger(__name__)
 router = APIRouter()
 
 _player_controller: Optional[PlayerController] = None
+
+_EXT_TO_EXTERNAL_MIME = {
+    ".mkv": "video/x-matroska",
+    ".mp4": "video/mp4",
+    ".m4v": "video/mp4",
+    ".mov": "video/quicktime",
+    ".webm": "video/webm",
+    ".avi": "video/x-msvideo",
+    ".ts": "video/mp2t",
+    ".m2ts": "video/mp2t",
+}
 
 
 def set_player_controller(controller: PlayerController) -> None:
@@ -174,10 +187,39 @@ def _run_scrobble(action: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _session_response(request: Request, session_id: str, playback_url: str) -> Dict[str, Any]:
+def _safe_stream_filename(value: Any) -> str:
+    name = os.path.basename(str(value or "").strip()) or "stream"
+    name = re.sub(r"[^A-Za-z0-9._ -]+", "_", name).strip(" .")
+    return name or "stream"
+
+
+def _session_stream_filename(session: Any) -> str:
+    proxy_name = getattr(session.proxy, "_filename", None)
+    if proxy_name:
+        return _safe_stream_filename(proxy_name)
+
+    snapshot = session.snapshot()
+    file_path = snapshot.get("file_path")
+    if file_path:
+        return _safe_stream_filename(file_path)
+
+    return _safe_stream_filename(session.title)
+
+
+def _external_content_type(filename: str) -> Optional[str]:
+    return _EXT_TO_EXTERNAL_MIME.get(os.path.splitext(filename)[1].lower())
+
+
+def _session_response(
+    request: Request,
+    session_id: str,
+    playback_url: str,
+    external_playback_url: Optional[str] = None,
+) -> Dict[str, Any]:
     return {
         "session_id": session_id,
         "playback_url": playback_url,
+        "external_playback_url": external_playback_url or playback_url,
         "status_url": str(
             request.url_for(
                 "player_preload_session_status",
@@ -244,11 +286,24 @@ async def create_preload_session(payload: Dict[str, Any], request: Request) -> D
     # playback URL.  The StreamProxy loopback is an internal server-side detail
     # proxied by that endpoint — clients (mpv) never need to know about it, and
     # it won't be reachable when the backend is on a separate server.
+    filename = _session_stream_filename(session)
     playback_url = str(
         request.url_for("player_preload_session_stream", session_id=session.session_id)
     )
+    external_playback_url = str(
+        request.url_for(
+            "player_preload_session_stream_named",
+            session_id=session.session_id,
+            filename=filename,
+        )
+    )
 
-    response = _session_response(request, session.session_id, playback_url)
+    response = _session_response(
+        request,
+        session.session_id,
+        playback_url,
+        external_playback_url,
+    )
     response["created_at"] = session.created_at.isoformat()
     return response
 
@@ -259,10 +314,18 @@ async def preload_session_status(session_id: str, request: Request) -> Dict[str,
     manager = _get_preload_manager()
     try:
         payload = manager.get_status(session_id)
+        filename = _session_stream_filename(manager.require_session(session_id))
         payload["playback_url"] = str(
             request.url_for(
                 "player_preload_session_stream",
                 session_id=session_id,
+            )
+        )
+        payload["external_playback_url"] = str(
+            request.url_for(
+                "player_preload_session_stream_named",
+                session_id=session_id,
+                filename=filename,
             )
         )
         return payload
@@ -280,8 +343,16 @@ async def delete_preload_session(session_id: str) -> Dict[str, Any]:
     return {"session_id": session_id, "removed": True}
 
 
+@router.get(
+    "/preload/session/{session_id}/stream/{filename:path}",
+    name="player_preload_session_stream_named",
+)
 @router.get("/preload/session/{session_id}/stream", name="player_preload_session_stream")
-async def preload_session_stream(session_id: str, request: Request) -> StreamingResponse:
+async def preload_session_stream(
+    session_id: str,
+    request: Request,
+    filename: str = "",
+) -> StreamingResponse:
     """Proxy bytes from a preload session's local stream URL."""
     manager = _get_preload_manager()
     try:
@@ -319,7 +390,12 @@ async def preload_session_stream(session_id: str, request: Request) -> Streaming
     # Forward the original filename as a Content-Disposition hint so that mpv
     # (and other players) can use the file extension for demuxer selection even
     # when the endpoint URL has no extension.
-    filename = getattr(session.proxy, "_filename", None) or "stream"
+    named_stream_requested = bool(filename)
+    filename = _safe_stream_filename(
+        filename or getattr(session.proxy, "_filename", None) or "stream"
+    )
+    if named_stream_requested:
+        content_type = _external_content_type(filename) or content_type
     response_headers: Dict[str, str] = {
         "Accept-Ranges": "bytes",
         "Content-Type": content_type,

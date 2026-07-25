@@ -10,6 +10,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../api/api_client.dart';
 import '../navigation/tab_bar_focus_registry.dart';
+import '../player/native_player_smoke_test.dart';
 import '../theme/warp_theme.dart';
 import '../theme/warp_tokens.dart';
 import '../widgets/layout/backdrop_layer.dart';
@@ -217,6 +218,15 @@ class _PowerPageState extends ConsumerState<PowerPage>
 
   void _quitApp() => exit(0);
 
+  void _openNativePlayerSmokeTest() {
+    Navigator.of(context, rootNavigator: true).push(
+      MaterialPageRoute<void>(
+        fullscreenDialog: true,
+        builder: (_) => const NativePlayerSmokeTestPage(),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final t = WarpTokens.watch(context, ref);
@@ -262,6 +272,7 @@ class _PowerPageState extends ConsumerState<PowerPage>
                 _ActionsCard(
                   onOpenDocs: _openApiDocs,
                   onClearCache: _clearCache,
+                  onNativePlayerSmokeTest: _openNativePlayerSmokeTest,
                   onQuit: _quitApp,
                   onDirection: _upToTab,
                   t: t,
@@ -705,6 +716,7 @@ class _ActionsCard extends StatelessWidget {
   const _ActionsCard({
     required this.onOpenDocs,
     required this.onClearCache,
+    required this.onNativePlayerSmokeTest,
     required this.onQuit,
     required this.onDirection,
     required this.t,
@@ -712,6 +724,7 @@ class _ActionsCard extends StatelessWidget {
 
   final VoidCallback onOpenDocs;
   final VoidCallback onClearCache;
+  final VoidCallback onNativePlayerSmokeTest;
   final VoidCallback onQuit;
   final DpadDirectionCallback onDirection;
   final WarpTokens t;
@@ -750,6 +763,16 @@ class _ActionsCard extends StatelessWidget {
                   paddingVertical: 12,
                   onDirection: onDirection,
                   onSelect: onClearCache,
+                ),
+                WarpAccentButton(
+                  label: 'Native Player Smoke Test',
+                  icon: Icons.smart_display_outlined,
+                  accentColor: WarpColors.accent,
+                  fontSize: t.fontSubtitle,
+                  paddingHorizontal: 20,
+                  paddingVertical: 12,
+                  onDirection: onDirection,
+                  onSelect: onNativePlayerSmokeTest,
                 ),
                 WarpAccentButton(
                   label: 'Quit App',
