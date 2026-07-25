@@ -78,6 +78,24 @@ Map<String, dynamic> _$SeasonDetailToJson(_SeasonDetail instance) =>
       'episodes': instance.episodes?.map((e) => e.toJson()).toList(),
     };
 
+_MovieCollectionSummary _$MovieCollectionSummaryFromJson(
+  Map<String, dynamic> json,
+) => _MovieCollectionSummary(
+  id: (json['id'] as num).toInt(),
+  name: json['name'] as String,
+  posterPath: json['poster_path'] as String?,
+  backdropPath: json['backdrop_path'] as String?,
+);
+
+Map<String, dynamic> _$MovieCollectionSummaryToJson(
+  _MovieCollectionSummary instance,
+) => <String, dynamic>{
+  'id': instance.id,
+  'name': instance.name,
+  'poster_path': instance.posterPath,
+  'backdrop_path': instance.backdropPath,
+};
+
 _MovieDetail _$MovieDetailFromJson(Map<String, dynamic> json) => _MovieDetail(
   id: json['id'] as String,
   title: json['title'] as String,
@@ -103,6 +121,11 @@ _MovieDetail _$MovieDetailFromJson(Map<String, dynamic> json) => _MovieDetail(
           .toList() ??
       const [],
   imdbId: json['imdb_id'] as String?,
+  belongsToCollection: json['belongs_to_collection'] == null
+      ? null
+      : MovieCollectionSummary.fromJson(
+          json['belongs_to_collection'] as Map<String, dynamic>,
+        ),
 );
 
 Map<String, dynamic> _$MovieDetailToJson(_MovieDetail instance) =>
@@ -121,6 +144,7 @@ Map<String, dynamic> _$MovieDetailToJson(_MovieDetail instance) =>
       'credits': instance.credits.toJson(),
       'trailers': instance.trailers.map((e) => e.toJson()).toList(),
       'imdb_id': instance.imdbId,
+      'belongs_to_collection': instance.belongsToCollection?.toJson(),
     };
 
 _ShowDetail _$ShowDetailFromJson(Map<String, dynamic> json) => _ShowDetail(

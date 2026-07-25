@@ -13,12 +13,14 @@ import '../api/catalog_constants.dart';
 import '../models/detail.dart';
 import '../models/library.dart';
 import '../models/media.dart';
+import '../navigation/detail_route_extra.dart';
 import '../player/external_video_player.dart';
 import '../providers/detail_provider.dart';
 import '../providers/catalog_provider.dart';
 import '../providers/library_provider.dart';
 import '../theme/warp_theme.dart';
 import '../theme/warp_tokens.dart';
+import '../widgets/cards/poster_card.dart';
 import '../widgets/layout/backdrop_layer.dart';
 import '../widgets/media/torrent_dialog.dart';
 import '../widgets/media/trailer_dialog.dart';
@@ -201,6 +203,7 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
   final _localSourcesEntryFocusNode = FocusNode(
     debugLabel: 'LocalSourcesEntry',
   ); // 1st source row
+  final _collectionEntryFocusNode = FocusNode(debugLabel: 'CollectionEntry');
   final _scrollRailFocusNode = FocusNode(debugLabel: 'DetailScrollRail');
   final _seasonEntryController = _SeasonEntryController();
 
@@ -209,6 +212,7 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
   bool _hasCast = false;
   bool _hasWhereToWatch = false;
   bool _hasLocalSources = false;
+  bool _hasCollection = false;
   bool _initialFocusRequested = false;
 
   FocusNode get _heroEntryNode =>
@@ -235,6 +239,15 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
       context.pop();
       _restoreOriginFocus();
     }
+  }
+
+  void _navigateToCollectionItem(MediaItem item, FocusNode? returnFocusNode) {
+    final id = item.tmdbId?.isNotEmpty == true ? item.tmdbId! : item.id;
+    if (id.isEmpty || id == widget.mediaId) return;
+    context.push(
+      '/detail/movie/$id',
+      extra: DetailRouteExtra(item: item, returnFocusNode: returnFocusNode),
+    );
   }
 
   void _scrollDetail(double direction) {
@@ -282,6 +295,10 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
     }
     if (_hasLocalSources) {
       _focus(_localSourcesEntryFocusNode);
+      return true;
+    }
+    if (_hasCollection) {
+      _focus(_collectionEntryFocusNode);
       return true;
     }
     return false;
@@ -372,6 +389,10 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
       _focus(_localSourcesEntryFocusNode);
       return true;
     }
+    if (_hasCollection) {
+      _focus(_collectionEntryFocusNode);
+      return true;
+    }
     return false;
   }
 
@@ -391,6 +412,10 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
     if (d == TraversalDirection.down) {
       if (_hasLocalSources) {
         _focus(_localSourcesEntryFocusNode);
+        return true;
+      }
+      if (_hasCollection) {
+        _focus(_collectionEntryFocusNode);
         return true;
       }
       return false;
@@ -419,6 +444,10 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
       _focus(_localSourcesEntryFocusNode);
       return true;
     }
+    if (_hasCollection) {
+      _focus(_collectionEntryFocusNode);
+      return true;
+    }
     return true;
   }
 
@@ -443,6 +472,45 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
       return true;
     }
     _focus(_heroEntryNode);
+    return true;
+  }
+
+  bool _localSourcesLastDown(TraversalDirection d) {
+    if (d != TraversalDirection.down) return false;
+    if (_hasCollection) {
+      _focus(_collectionEntryFocusNode);
+    }
+    return true;
+  }
+
+  bool _collectionUp(TraversalDirection d) {
+    if (d == TraversalDirection.right) {
+      _focus(_scrollRailFocusNode);
+      return true;
+    }
+    if (d != TraversalDirection.up) return false;
+    if (_hasLocalSources) {
+      _focus(_localSourcesEntryFocusNode);
+      return true;
+    }
+    if (_hasWhereToWatch) {
+      _focus(_whereToWatchEntryFocusNode);
+      return true;
+    }
+    if (_hasCast) {
+      _focus(_castEntryFocusNode);
+      return true;
+    }
+    if (_hasEpisodes) {
+      _focus(_episodesEntryFocusNode);
+      return true;
+    }
+    _focus(_heroEntryNode);
+    return true;
+  }
+
+  bool _collectionDown(TraversalDirection d) {
+    if (d != TraversalDirection.down) return false;
     return true;
   }
 
@@ -483,6 +551,7 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
     _castEntryFocusNode.dispose();
     _whereToWatchEntryFocusNode.dispose();
     _localSourcesEntryFocusNode.dispose();
+    _collectionEntryFocusNode.dispose();
     _scrollRailFocusNode.dispose();
     super.dispose();
   }
@@ -1002,6 +1071,17 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
 
     final movieDetail = movieAsync?.asData?.value;
     final showDetail = showAsync?.asData?.value;
+    final movieCollection = movieDetail?.belongsToCollection;
+    final collectionAsync = !_isShow && movieCollection != null
+        ? ref.watch(
+            movieCollectionItemsProvider(
+              movieCollection.id,
+              movieCollection.name,
+            ),
+          )
+        : null;
+    final collectionItems =
+        collectionAsync?.asData?.value ?? const <MediaItem>[];
     final sources = sourcesAsync.asData?.value ?? [];
     final showProgress = progressAsync?.value;
     final watchProviders = providersAsync.asData?.value;
@@ -1124,6 +1204,8 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
             watchProviders.rent.isNotEmpty ||
             watchProviders.buy.isNotEmpty);
     _hasLocalSources = _showDeferredSections && sources.isNotEmpty;
+    _hasCollection =
+        _showDeferredSections && !_isShow && collectionItems.isNotEmpty;
     if (!_initialFocusRequested && !isDetailLoading) {
       _initialFocusRequested = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1757,6 +1839,7 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
                       hPad: hPad,
                       entryFocusNode: _localSourcesEntryFocusNode,
                       onEntryUp: _localSourcesFirstUp,
+                      onLastDown: _localSourcesLastDown,
                       onFocusRail: () => _focus(_scrollRailFocusNode),
                       onPlay: (src) => _playLocalSource(
                         src,
@@ -1766,6 +1849,26 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
                           movieDetail?.runtimeMinutes,
                         ),
                       ),
+                    ),
+                  ),
+
+                // ── Part of Collection (movies only) ───────────────────────────
+                if (_showDeferredSections &&
+                    !_isShow &&
+                    movieCollection != null &&
+                    collectionItems.isNotEmpty)
+                  SliverToBoxAdapter(
+                    child: _MovieCollectionSection(
+                      collectionName: movieCollection.name,
+                      items: collectionItems,
+                      hPad: hPad,
+                      tokens: tokens,
+                      currentMovieId: widget.mediaId,
+                      entryFocusNode: _collectionEntryFocusNode,
+                      onUp: _collectionUp,
+                      onDown: _collectionDown,
+                      onFocusRail: () => _focus(_scrollRailFocusNode),
+                      onTap: _navigateToCollectionItem,
                     ),
                   ),
 
@@ -4378,6 +4481,265 @@ class _ProviderFallback extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Movie Collection Section
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _MovieCollectionSection extends StatefulWidget {
+  final String collectionName;
+  final List<MediaItem> items;
+  final double hPad;
+  final WarpTokens tokens;
+  final String currentMovieId;
+  final FocusNode entryFocusNode;
+  final DpadDirectionCallback onUp;
+  final DpadDirectionCallback onDown;
+  final VoidCallback onFocusRail;
+  final void Function(MediaItem item, FocusNode? returnFocusNode) onTap;
+
+  const _MovieCollectionSection({
+    required this.collectionName,
+    required this.items,
+    required this.hPad,
+    required this.tokens,
+    required this.currentMovieId,
+    required this.entryFocusNode,
+    required this.onUp,
+    required this.onDown,
+    required this.onFocusRail,
+    required this.onTap,
+  });
+
+  @override
+  State<_MovieCollectionSection> createState() =>
+      _MovieCollectionSectionState();
+}
+
+class _MovieCollectionSectionState extends State<_MovieCollectionSection> {
+  final _scroll = ScrollController();
+  List<FocusNode> _focusNodes = [];
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    for (var i = 1; i < _focusNodes.length; i++) {
+      _focusNodes[i].dispose();
+    }
+    super.dispose();
+  }
+
+  void _syncFocusNodes(int count) {
+    if (_focusNodes.length == count) return;
+    for (var i = 1; i < _focusNodes.length; i++) {
+      _focusNodes[i].dispose();
+    }
+    _focusNodes = List.generate(
+      count,
+      (i) => i == 0 ? widget.entryFocusNode : FocusNode(),
+    );
+    for (final node in _focusNodes) {
+      node.addListener(() {
+        if (node.hasFocus) _centerFocusedCard(node);
+      });
+    }
+  }
+
+  void _focusCard(int index) {
+    if (index < 0 || index >= _focusNodes.length) return;
+    final node = _focusNodes[index];
+    Dpad.of(context).requestFocus(node);
+    _centerFocusedCard(node);
+  }
+
+  bool _cardDirection(int index, TraversalDirection direction) {
+    if (direction == TraversalDirection.left) {
+      if (index > 0) _focusCard(index - 1);
+      return true;
+    }
+    if (direction == TraversalDirection.right) {
+      if (index + 1 < _focusNodes.length) {
+        _focusCard(index + 1);
+      } else {
+        widget.onFocusRail();
+      }
+      return true;
+    }
+    if (direction == TraversalDirection.up) return widget.onUp(direction);
+    if (direction == TraversalDirection.down) return widget.onDown(direction);
+    return false;
+  }
+
+  void _centerFocusedCard(FocusNode node) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final cardContext = node.context;
+      if (cardContext == null) return;
+      final renderBox = cardContext.findRenderObject();
+      if (renderBox is! RenderBox || !renderBox.hasSize) return;
+
+      final ribbon = Scrollable.maybeOf(cardContext, axis: Axis.horizontal);
+      if (ribbon != null) _centerInScrollable(renderBox, ribbon);
+
+      final page = Scrollable.maybeOf(cardContext, axis: Axis.vertical);
+      if (page != null) _centerInScrollable(renderBox, page);
+    });
+  }
+
+  void _centerInScrollable(RenderBox target, ScrollableState scrollable) {
+    final viewport = scrollable.context.findRenderObject();
+    if (viewport is! RenderBox || !viewport.hasSize) return;
+    final position = scrollable.position;
+    if (!position.hasPixels || !position.hasContentDimensions) return;
+
+    final bounds = MatrixUtils.transformRect(
+      target.getTransformTo(viewport),
+      Offset.zero & target.size,
+    );
+    final horizontal =
+        axisDirectionToAxis(scrollable.axisDirection) == Axis.horizontal;
+    final targetCenter = horizontal
+        ? (bounds.left + bounds.right) / 2
+        : (bounds.top + bounds.bottom) / 2;
+    final viewportExtent = horizontal
+        ? viewport.size.width
+        : viewport.size.height;
+    final delta = targetCenter - viewportExtent / 2;
+    final offset = (position.pixels + delta).clamp(
+      position.minScrollExtent,
+      position.maxScrollExtent,
+    );
+    if ((offset - position.pixels).abs() < 0.5) return;
+    position.animateTo(
+      offset,
+      duration: _detailFocusDuration(context),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  void _scrollBy(double delta) {
+    if (!_scroll.hasClients) return;
+    _scroll.animateTo(
+      (_scroll.offset + delta).clamp(0.0, _scroll.position.maxScrollExtent),
+      duration: _detailScrollDuration(context),
+      curve: Curves.easeOut,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
+    final t = widget.tokens;
+    _syncFocusNodes(widget.items.length);
+
+    return Container(
+      padding: EdgeInsets.fromLTRB(widget.hPad, 48, 0, 56),
+      decoration: const BoxDecoration(
+        color: Color(0xFF0A0A0A),
+        border: Border(top: BorderSide(color: Color(0x0DFFFFFF))),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: EdgeInsets.only(right: widget.hPad),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.baseline,
+              textBaseline: TextBaseline.alphabetic,
+              children: [
+                Text(
+                  'Part of Collection',
+                  style: TextStyle(
+                    fontSize: (size.width * 0.0175).clamp(22.0, 28.0),
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white,
+                  ),
+                ),
+                if (widget.collectionName.isNotEmpty) ...[
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Text(
+                      widget.collectionName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        color: Color(0x66FFFFFF),
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 20),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              _CastChevron(
+                icon: Icons.chevron_left,
+                onTap: () => _scrollBy(-400),
+              ),
+              const SizedBox(width: 4),
+              Expanded(
+                child: SizedBox(
+                  height: t.posterHeight + 65,
+                  child: DpadRegion(
+                    memoryKey:
+                        'detail-movie-collection-${widget.currentMovieId}',
+                    horizontalEdge: DpadEdgeBehavior.stop,
+                    verticalEdge: DpadEdgeBehavior.stop,
+                    child: ScrollConfiguration(
+                      behavior: ScrollConfiguration.of(
+                        context,
+                      ).copyWith(scrollbars: false),
+                      child: ListView.separated(
+                        controller: _scroll,
+                        scrollDirection: Axis.horizontal,
+                        padding: EdgeInsets.only(
+                          right: widget.hPad - 4,
+                          top: 4,
+                          bottom: 8,
+                        ),
+                        separatorBuilder: (_, _) => SizedBox(width: t.cardGap),
+                        itemCount: widget.items.length,
+                        itemBuilder: (_, i) {
+                          final item = widget.items[i];
+                          final focusNode = i < _focusNodes.length
+                              ? _focusNodes[i]
+                              : null;
+                          return PosterCard(
+                            key: ValueKey(
+                              'collection-${item.tmdbId ?? item.id}',
+                            ),
+                            item: item,
+                            isSelected: false,
+                            tokens: t,
+                            focusNode: focusNode,
+                            entry: i == 0,
+                            autoScroll: false,
+                            onDirection: (direction) =>
+                                _cardDirection(i, direction),
+                            onTap: () => widget.onTap(item, focusNode),
+                            onDoubleTap: () => widget.onTap(item, focusNode),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              _CastChevron(
+                icon: Icons.chevron_right,
+                onTap: () => _scrollBy(400),
+              ),
+              SizedBox(width: widget.hPad - 8),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Local Sources Section
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -4391,6 +4753,7 @@ class _LocalSourcesSection extends StatefulWidget {
   // beam nav, and there's nothing below Local Sources.
   final FocusNode entryFocusNode;
   final DpadDirectionCallback onEntryUp;
+  final DpadDirectionCallback onLastDown;
   final VoidCallback onFocusRail;
 
   const _LocalSourcesSection({
@@ -4399,6 +4762,7 @@ class _LocalSourcesSection extends StatefulWidget {
     required this.onPlay,
     required this.entryFocusNode,
     required this.onEntryUp,
+    required this.onLastDown,
     required this.onFocusRail,
   });
 
@@ -4457,7 +4821,7 @@ class _LocalSourcesSectionState extends State<_LocalSourcesSection> {
           _focusSource(index + 1);
           return true;
         }
-        return true;
+        return widget.onLastDown(d);
       }
       return false;
     }

@@ -4,6 +4,7 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 import '../api/api_client.dart';
 import '../models/detail.dart';
 import '../models/library.dart';
+import '../models/media.dart';
 
 part 'detail_provider.g.dart';
 
@@ -19,8 +20,9 @@ class PlaybackEndedNotifier extends Notifier<int> {
   void increment() => state++;
 }
 
-final playbackEndedProvider =
-    NotifierProvider<PlaybackEndedNotifier, int>(PlaybackEndedNotifier.new);
+final playbackEndedProvider = NotifierProvider<PlaybackEndedNotifier, int>(
+  PlaybackEndedNotifier.new,
+);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Library title detail — returns null if not in library (404)
@@ -31,7 +33,9 @@ final playbackEndedProvider =
 Future<LibraryTitleDetail?> titleDetail(Ref ref, String tmdbId) async {
   final client = ref.watch(apiClientProvider);
   try {
-    final raw = await client.get<Map<String, dynamic>>('/api/v1/library/title/$tmdbId');
+    final raw = await client.get<Map<String, dynamic>>(
+      '/api/v1/library/title/$tmdbId',
+    );
     return LibraryTitleDetail.fromJson(raw);
   } on ApiError catch (e) {
     if (e.isNotFound) return null;
@@ -48,7 +52,9 @@ Future<LibraryTitleDetail?> titleDetail(Ref ref, String tmdbId) async {
 Future<List<SourceRow>> titleSources(Ref ref, String tmdbId) async {
   final client = ref.watch(apiClientProvider);
   try {
-    final raw = await client.get<Map<String, dynamic>>('/api/v1/library/title/$tmdbId/sources');
+    final raw = await client.get<Map<String, dynamic>>(
+      '/api/v1/library/title/$tmdbId/sources',
+    );
     return TitleSourcesResponse.fromJson(raw).sources;
   } on ApiError catch (e) {
     if (e.isNotFound) return [];
@@ -65,11 +71,35 @@ Future<List<SourceRow>> titleSources(Ref ref, String tmdbId) async {
 Future<MovieDetail?> movieRichDetail(Ref ref, String tmdbId) async {
   final client = ref.watch(apiClientProvider);
   try {
-    final raw = await client.get<Map<String, dynamic>>('/api/v1/catalog/detail/movie/$tmdbId');
+    final raw = await client.get<Map<String, dynamic>>(
+      '/api/v1/catalog/detail/movie/$tmdbId',
+    );
     return MovieDetail.fromJson(raw);
   } on ApiError catch (e) {
     if (e.isNotFound) return null;
     rethrow;
+  }
+}
+
+@riverpod
+Future<List<MediaItem>> movieCollectionItems(
+  Ref ref,
+  int collectionId,
+  String collectionName,
+) async {
+  final client = ref.watch(apiClientProvider);
+  try {
+    final raw = await client.get<Map<String, dynamic>>(
+      '/api/v1/catalog/collection/$collectionId',
+      params: collectionName.isEmpty ? null : {'name': collectionName},
+    );
+    final list = raw['items'] as List? ?? const [];
+    return list
+        .whereType<Map<String, dynamic>>()
+        .map(MediaItem.fromJson)
+        .toList(growable: false);
+  } catch (_) {
+    return const [];
   }
 }
 
@@ -82,7 +112,9 @@ Future<MovieDetail?> movieRichDetail(Ref ref, String tmdbId) async {
 Future<ShowDetail?> showRichDetail(Ref ref, String tmdbId) async {
   final client = ref.watch(apiClientProvider);
   try {
-    final raw = await client.get<Map<String, dynamic>>('/api/v1/catalog/detail/show/$tmdbId');
+    final raw = await client.get<Map<String, dynamic>>(
+      '/api/v1/catalog/detail/show/$tmdbId',
+    );
     return ShowDetail.fromJson(raw);
   } on ApiError catch (e) {
     if (e.isNotFound) return null;
@@ -99,7 +131,9 @@ Future<ShowDetail?> showRichDetail(Ref ref, String tmdbId) async {
 Future<ShowSeasonsResponse?> showSeasonsList(Ref ref, String tmdbId) async {
   final client = ref.watch(apiClientProvider);
   try {
-    final raw = await client.get<Map<String, dynamic>>('/api/v1/catalog/show/$tmdbId/seasons');
+    final raw = await client.get<Map<String, dynamic>>(
+      '/api/v1/catalog/show/$tmdbId/seasons',
+    );
     return ShowSeasonsResponse.fromJson(raw);
   } on ApiError catch (e) {
     if (e.isNotFound) return null;
@@ -157,7 +191,9 @@ Future<WatchProvidersResponse?> watchProviders(
 Future<ImdbRatingResponse?> imdbRating(Ref ref, String imdbId) async {
   final client = ref.watch(apiClientProvider);
   try {
-    final raw = await client.get<Map<String, dynamic>>('/api/v1/catalog/imdb-rating/$imdbId');
+    final raw = await client.get<Map<String, dynamic>>(
+      '/api/v1/catalog/imdb-rating/$imdbId',
+    );
     return ImdbRatingResponse.fromJson(raw);
   } catch (_) {
     return null;
@@ -174,16 +210,16 @@ typedef MovieProgressData = ({double progress, bool resumeAvailable});
 
 final movieProgressProvider = FutureProvider.autoDispose
     .family<MovieProgressData, String>((ref, tmdbId) async {
-  final client = ref.watch(apiClientProvider);
-  try {
-    final raw = await client.get<Map<String, dynamic>>(
-      '/api/v1/catalog/trakt/movie_progress/$tmdbId',
-    );
-    return (
-      progress: (raw['progress'] as num?)?.toDouble() ?? 0.0,
-      resumeAvailable: raw['resume_available'] as bool? ?? false,
-    );
-  } catch (_) {
-    return (progress: 0.0, resumeAvailable: false);
-  }
-});
+      final client = ref.watch(apiClientProvider);
+      try {
+        final raw = await client.get<Map<String, dynamic>>(
+          '/api/v1/catalog/trakt/movie_progress/$tmdbId',
+        );
+        return (
+          progress: (raw['progress'] as num?)?.toDouble() ?? 0.0,
+          resumeAvailable: raw['resume_available'] as bool? ?? false,
+        );
+      } catch (_) {
+        return (progress: 0.0, resumeAvailable: false);
+      }
+    });

@@ -153,6 +153,7 @@ class Movie(MediaBase):
     runtime_minutes: Optional[int] = Field(default=None, ge=0)
     tagline: Optional[str] = None
     status: Optional[str] = None
+    belongs_to_collection: Optional[Mapping[str, Any]] = None
 
 
 class Show(MediaBase):
@@ -491,6 +492,7 @@ class MediaModelFacade:
                 "runtime_minutes": runtime,
                 "tagline": payload.get("tagline"),
                 "status": payload.get("status"),
+                "belongs_to_collection": payload.get("belongs_to_collection"),
                 "credits": credits,
             }
         )

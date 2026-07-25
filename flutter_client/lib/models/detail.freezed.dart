@@ -939,9 +939,281 @@ $ImageAssetCopyWith<$Res>? get poster {
 
 
 /// @nodoc
+mixin _$MovieCollectionSummary {
+
+ int get id; String get name; String? get posterPath; String? get backdropPath;
+/// Create a copy of MovieCollectionSummary
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$MovieCollectionSummaryCopyWith<MovieCollectionSummary> get copyWith => _$MovieCollectionSummaryCopyWithImpl<MovieCollectionSummary>(this as MovieCollectionSummary, _$identity);
+
+  /// Serializes this MovieCollectionSummary to a JSON map.
+  Map<String, dynamic> toJson();
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is MovieCollectionSummary&&(identical(other.id, id) || other.id == id)&&(identical(other.name, name) || other.name == name)&&(identical(other.posterPath, posterPath) || other.posterPath == posterPath)&&(identical(other.backdropPath, backdropPath) || other.backdropPath == backdropPath));
+}
+
+@JsonKey(includeFromJson: false, includeToJson: false)
+@override
+int get hashCode => Object.hash(runtimeType,id,name,posterPath,backdropPath);
+
+@override
+String toString() {
+  return 'MovieCollectionSummary(id: $id, name: $name, posterPath: $posterPath, backdropPath: $backdropPath)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $MovieCollectionSummaryCopyWith<$Res>  {
+  factory $MovieCollectionSummaryCopyWith(MovieCollectionSummary value, $Res Function(MovieCollectionSummary) _then) = _$MovieCollectionSummaryCopyWithImpl;
+@useResult
+$Res call({
+ int id, String name, String? posterPath, String? backdropPath
+});
+
+
+
+
+}
+/// @nodoc
+class _$MovieCollectionSummaryCopyWithImpl<$Res>
+    implements $MovieCollectionSummaryCopyWith<$Res> {
+  _$MovieCollectionSummaryCopyWithImpl(this._self, this._then);
+
+  final MovieCollectionSummary _self;
+  final $Res Function(MovieCollectionSummary) _then;
+
+/// Create a copy of MovieCollectionSummary
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') @override $Res call({Object? id = null,Object? name = null,Object? posterPath = freezed,Object? backdropPath = freezed,}) {
+  return _then(_self.copyWith(
+id: null == id ? _self.id : id // ignore: cast_nullable_to_non_nullable
+as int,name: null == name ? _self.name : name // ignore: cast_nullable_to_non_nullable
+as String,posterPath: freezed == posterPath ? _self.posterPath : posterPath // ignore: cast_nullable_to_non_nullable
+as String?,backdropPath: freezed == backdropPath ? _self.backdropPath : backdropPath // ignore: cast_nullable_to_non_nullable
+as String?,
+  ));
+}
+
+}
+
+
+/// Adds pattern-matching-related methods to [MovieCollectionSummary].
+extension MovieCollectionSummaryPatterns on MovieCollectionSummary {
+/// A variant of `map` that fallback to returning `orElse`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>(TResult Function( _MovieCollectionSummary value)?  $default,{required TResult orElse(),}){
+final _that = this;
+switch (_that) {
+case _MovieCollectionSummary() when $default != null:
+return $default(_that);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// Callbacks receives the raw object, upcasted.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case final Subclass2 value:
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult map<TResult extends Object?>(TResult Function( _MovieCollectionSummary value)  $default,){
+final _that = this;
+switch (_that) {
+case _MovieCollectionSummary():
+return $default(_that);case _:
+  throw StateError('Unexpected subclass');
+
+}
+}
+/// A variant of `map` that fallback to returning `null`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>(TResult? Function( _MovieCollectionSummary value)?  $default,){
+final _that = this;
+switch (_that) {
+case _MovieCollectionSummary() when $default != null:
+return $default(_that);case _:
+  return null;
+
+}
+}
+/// A variant of `when` that fallback to an `orElse` callback.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( int id,  String name,  String? posterPath,  String? backdropPath)?  $default,{required TResult orElse(),}) {final _that = this;
+switch (_that) {
+case _MovieCollectionSummary() when $default != null:
+return $default(_that.id,_that.name,_that.posterPath,_that.backdropPath);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// As opposed to `map`, this offers destructuring.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case Subclass2(:final field2):
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( int id,  String name,  String? posterPath,  String? backdropPath)  $default,) {final _that = this;
+switch (_that) {
+case _MovieCollectionSummary():
+return $default(_that.id,_that.name,_that.posterPath,_that.backdropPath);case _:
+  throw StateError('Unexpected subclass');
+
+}
+}
+/// A variant of `when` that fallback to returning `null`
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( int id,  String name,  String? posterPath,  String? backdropPath)?  $default,) {final _that = this;
+switch (_that) {
+case _MovieCollectionSummary() when $default != null:
+return $default(_that.id,_that.name,_that.posterPath,_that.backdropPath);case _:
+  return null;
+
+}
+}
+
+}
+
+/// @nodoc
+@JsonSerializable()
+
+class _MovieCollectionSummary implements MovieCollectionSummary {
+  const _MovieCollectionSummary({required this.id, required this.name, this.posterPath, this.backdropPath});
+  factory _MovieCollectionSummary.fromJson(Map<String, dynamic> json) => _$MovieCollectionSummaryFromJson(json);
+
+@override final  int id;
+@override final  String name;
+@override final  String? posterPath;
+@override final  String? backdropPath;
+
+/// Create a copy of MovieCollectionSummary
+/// with the given fields replaced by the non-null parameter values.
+@override @JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+_$MovieCollectionSummaryCopyWith<_MovieCollectionSummary> get copyWith => __$MovieCollectionSummaryCopyWithImpl<_MovieCollectionSummary>(this, _$identity);
+
+@override
+Map<String, dynamic> toJson() {
+  return _$MovieCollectionSummaryToJson(this, );
+}
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _MovieCollectionSummary&&(identical(other.id, id) || other.id == id)&&(identical(other.name, name) || other.name == name)&&(identical(other.posterPath, posterPath) || other.posterPath == posterPath)&&(identical(other.backdropPath, backdropPath) || other.backdropPath == backdropPath));
+}
+
+@JsonKey(includeFromJson: false, includeToJson: false)
+@override
+int get hashCode => Object.hash(runtimeType,id,name,posterPath,backdropPath);
+
+@override
+String toString() {
+  return 'MovieCollectionSummary(id: $id, name: $name, posterPath: $posterPath, backdropPath: $backdropPath)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class _$MovieCollectionSummaryCopyWith<$Res> implements $MovieCollectionSummaryCopyWith<$Res> {
+  factory _$MovieCollectionSummaryCopyWith(_MovieCollectionSummary value, $Res Function(_MovieCollectionSummary) _then) = __$MovieCollectionSummaryCopyWithImpl;
+@override @useResult
+$Res call({
+ int id, String name, String? posterPath, String? backdropPath
+});
+
+
+
+
+}
+/// @nodoc
+class __$MovieCollectionSummaryCopyWithImpl<$Res>
+    implements _$MovieCollectionSummaryCopyWith<$Res> {
+  __$MovieCollectionSummaryCopyWithImpl(this._self, this._then);
+
+  final _MovieCollectionSummary _self;
+  final $Res Function(_MovieCollectionSummary) _then;
+
+/// Create a copy of MovieCollectionSummary
+/// with the given fields replaced by the non-null parameter values.
+@override @pragma('vm:prefer-inline') $Res call({Object? id = null,Object? name = null,Object? posterPath = freezed,Object? backdropPath = freezed,}) {
+  return _then(_MovieCollectionSummary(
+id: null == id ? _self.id : id // ignore: cast_nullable_to_non_nullable
+as int,name: null == name ? _self.name : name // ignore: cast_nullable_to_non_nullable
+as String,posterPath: freezed == posterPath ? _self.posterPath : posterPath // ignore: cast_nullable_to_non_nullable
+as String?,backdropPath: freezed == backdropPath ? _self.backdropPath : backdropPath // ignore: cast_nullable_to_non_nullable
+as String?,
+  ));
+}
+
+
+}
+
+
+/// @nodoc
 mixin _$MovieDetail {
 
- String get id; String get title; String? get overview; ImageAsset? get poster; ImageAsset? get backdrop; List<String> get genres; String? get releaseDate; int? get runtimeMinutes; String? get tagline; double? get voteAverage; int? get voteCount; MediaCredits get credits; List<Trailer> get trailers; String? get imdbId;
+ String get id; String get title; String? get overview; ImageAsset? get poster; ImageAsset? get backdrop; List<String> get genres; String? get releaseDate; int? get runtimeMinutes; String? get tagline; double? get voteAverage; int? get voteCount; MediaCredits get credits; List<Trailer> get trailers; String? get imdbId; MovieCollectionSummary? get belongsToCollection;
 /// Create a copy of MovieDetail
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
@@ -954,16 +1226,16 @@ $MovieDetailCopyWith<MovieDetail> get copyWith => _$MovieDetailCopyWithImpl<Movi
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is MovieDetail&&(identical(other.id, id) || other.id == id)&&(identical(other.title, title) || other.title == title)&&(identical(other.overview, overview) || other.overview == overview)&&(identical(other.poster, poster) || other.poster == poster)&&(identical(other.backdrop, backdrop) || other.backdrop == backdrop)&&const DeepCollectionEquality().equals(other.genres, genres)&&(identical(other.releaseDate, releaseDate) || other.releaseDate == releaseDate)&&(identical(other.runtimeMinutes, runtimeMinutes) || other.runtimeMinutes == runtimeMinutes)&&(identical(other.tagline, tagline) || other.tagline == tagline)&&(identical(other.voteAverage, voteAverage) || other.voteAverage == voteAverage)&&(identical(other.voteCount, voteCount) || other.voteCount == voteCount)&&(identical(other.credits, credits) || other.credits == credits)&&const DeepCollectionEquality().equals(other.trailers, trailers)&&(identical(other.imdbId, imdbId) || other.imdbId == imdbId));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is MovieDetail&&(identical(other.id, id) || other.id == id)&&(identical(other.title, title) || other.title == title)&&(identical(other.overview, overview) || other.overview == overview)&&(identical(other.poster, poster) || other.poster == poster)&&(identical(other.backdrop, backdrop) || other.backdrop == backdrop)&&const DeepCollectionEquality().equals(other.genres, genres)&&(identical(other.releaseDate, releaseDate) || other.releaseDate == releaseDate)&&(identical(other.runtimeMinutes, runtimeMinutes) || other.runtimeMinutes == runtimeMinutes)&&(identical(other.tagline, tagline) || other.tagline == tagline)&&(identical(other.voteAverage, voteAverage) || other.voteAverage == voteAverage)&&(identical(other.voteCount, voteCount) || other.voteCount == voteCount)&&(identical(other.credits, credits) || other.credits == credits)&&const DeepCollectionEquality().equals(other.trailers, trailers)&&(identical(other.imdbId, imdbId) || other.imdbId == imdbId)&&(identical(other.belongsToCollection, belongsToCollection) || other.belongsToCollection == belongsToCollection));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
-int get hashCode => Object.hash(runtimeType,id,title,overview,poster,backdrop,const DeepCollectionEquality().hash(genres),releaseDate,runtimeMinutes,tagline,voteAverage,voteCount,credits,const DeepCollectionEquality().hash(trailers),imdbId);
+int get hashCode => Object.hash(runtimeType,id,title,overview,poster,backdrop,const DeepCollectionEquality().hash(genres),releaseDate,runtimeMinutes,tagline,voteAverage,voteCount,credits,const DeepCollectionEquality().hash(trailers),imdbId,belongsToCollection);
 
 @override
 String toString() {
-  return 'MovieDetail(id: $id, title: $title, overview: $overview, poster: $poster, backdrop: $backdrop, genres: $genres, releaseDate: $releaseDate, runtimeMinutes: $runtimeMinutes, tagline: $tagline, voteAverage: $voteAverage, voteCount: $voteCount, credits: $credits, trailers: $trailers, imdbId: $imdbId)';
+  return 'MovieDetail(id: $id, title: $title, overview: $overview, poster: $poster, backdrop: $backdrop, genres: $genres, releaseDate: $releaseDate, runtimeMinutes: $runtimeMinutes, tagline: $tagline, voteAverage: $voteAverage, voteCount: $voteCount, credits: $credits, trailers: $trailers, imdbId: $imdbId, belongsToCollection: $belongsToCollection)';
 }
 
 
@@ -974,11 +1246,11 @@ abstract mixin class $MovieDetailCopyWith<$Res>  {
   factory $MovieDetailCopyWith(MovieDetail value, $Res Function(MovieDetail) _then) = _$MovieDetailCopyWithImpl;
 @useResult
 $Res call({
- String id, String title, String? overview, ImageAsset? poster, ImageAsset? backdrop, List<String> genres, String? releaseDate, int? runtimeMinutes, String? tagline, double? voteAverage, int? voteCount, MediaCredits credits, List<Trailer> trailers, String? imdbId
+ String id, String title, String? overview, ImageAsset? poster, ImageAsset? backdrop, List<String> genres, String? releaseDate, int? runtimeMinutes, String? tagline, double? voteAverage, int? voteCount, MediaCredits credits, List<Trailer> trailers, String? imdbId, MovieCollectionSummary? belongsToCollection
 });
 
 
-$ImageAssetCopyWith<$Res>? get poster;$ImageAssetCopyWith<$Res>? get backdrop;$MediaCreditsCopyWith<$Res> get credits;
+$ImageAssetCopyWith<$Res>? get poster;$ImageAssetCopyWith<$Res>? get backdrop;$MediaCreditsCopyWith<$Res> get credits;$MovieCollectionSummaryCopyWith<$Res>? get belongsToCollection;
 
 }
 /// @nodoc
@@ -991,7 +1263,7 @@ class _$MovieDetailCopyWithImpl<$Res>
 
 /// Create a copy of MovieDetail
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? id = null,Object? title = null,Object? overview = freezed,Object? poster = freezed,Object? backdrop = freezed,Object? genres = null,Object? releaseDate = freezed,Object? runtimeMinutes = freezed,Object? tagline = freezed,Object? voteAverage = freezed,Object? voteCount = freezed,Object? credits = null,Object? trailers = null,Object? imdbId = freezed,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? id = null,Object? title = null,Object? overview = freezed,Object? poster = freezed,Object? backdrop = freezed,Object? genres = null,Object? releaseDate = freezed,Object? runtimeMinutes = freezed,Object? tagline = freezed,Object? voteAverage = freezed,Object? voteCount = freezed,Object? credits = null,Object? trailers = null,Object? imdbId = freezed,Object? belongsToCollection = freezed,}) {
   return _then(_self.copyWith(
 id: null == id ? _self.id : id // ignore: cast_nullable_to_non_nullable
 as String,title: null == title ? _self.title : title // ignore: cast_nullable_to_non_nullable
@@ -1007,7 +1279,8 @@ as double?,voteCount: freezed == voteCount ? _self.voteCount : voteCount // igno
 as int?,credits: null == credits ? _self.credits : credits // ignore: cast_nullable_to_non_nullable
 as MediaCredits,trailers: null == trailers ? _self.trailers : trailers // ignore: cast_nullable_to_non_nullable
 as List<Trailer>,imdbId: freezed == imdbId ? _self.imdbId : imdbId // ignore: cast_nullable_to_non_nullable
-as String?,
+as String?,belongsToCollection: freezed == belongsToCollection ? _self.belongsToCollection : belongsToCollection // ignore: cast_nullable_to_non_nullable
+as MovieCollectionSummary?,
   ));
 }
 /// Create a copy of MovieDetail
@@ -1042,6 +1315,18 @@ $MediaCreditsCopyWith<$Res> get credits {
   
   return $MediaCreditsCopyWith<$Res>(_self.credits, (value) {
     return _then(_self.copyWith(credits: value));
+  });
+}/// Create a copy of MovieDetail
+/// with the given fields replaced by the non-null parameter values.
+@override
+@pragma('vm:prefer-inline')
+$MovieCollectionSummaryCopyWith<$Res>? get belongsToCollection {
+    if (_self.belongsToCollection == null) {
+    return null;
+  }
+
+  return $MovieCollectionSummaryCopyWith<$Res>(_self.belongsToCollection!, (value) {
+    return _then(_self.copyWith(belongsToCollection: value));
   });
 }
 }
@@ -1125,10 +1410,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String id,  String title,  String? overview,  ImageAsset? poster,  ImageAsset? backdrop,  List<String> genres,  String? releaseDate,  int? runtimeMinutes,  String? tagline,  double? voteAverage,  int? voteCount,  MediaCredits credits,  List<Trailer> trailers,  String? imdbId)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String id,  String title,  String? overview,  ImageAsset? poster,  ImageAsset? backdrop,  List<String> genres,  String? releaseDate,  int? runtimeMinutes,  String? tagline,  double? voteAverage,  int? voteCount,  MediaCredits credits,  List<Trailer> trailers,  String? imdbId,  MovieCollectionSummary? belongsToCollection)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _MovieDetail() when $default != null:
-return $default(_that.id,_that.title,_that.overview,_that.poster,_that.backdrop,_that.genres,_that.releaseDate,_that.runtimeMinutes,_that.tagline,_that.voteAverage,_that.voteCount,_that.credits,_that.trailers,_that.imdbId);case _:
+return $default(_that.id,_that.title,_that.overview,_that.poster,_that.backdrop,_that.genres,_that.releaseDate,_that.runtimeMinutes,_that.tagline,_that.voteAverage,_that.voteCount,_that.credits,_that.trailers,_that.imdbId,_that.belongsToCollection);case _:
   return orElse();
 
 }
@@ -1146,10 +1431,10 @@ return $default(_that.id,_that.title,_that.overview,_that.poster,_that.backdrop,
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String id,  String title,  String? overview,  ImageAsset? poster,  ImageAsset? backdrop,  List<String> genres,  String? releaseDate,  int? runtimeMinutes,  String? tagline,  double? voteAverage,  int? voteCount,  MediaCredits credits,  List<Trailer> trailers,  String? imdbId)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String id,  String title,  String? overview,  ImageAsset? poster,  ImageAsset? backdrop,  List<String> genres,  String? releaseDate,  int? runtimeMinutes,  String? tagline,  double? voteAverage,  int? voteCount,  MediaCredits credits,  List<Trailer> trailers,  String? imdbId,  MovieCollectionSummary? belongsToCollection)  $default,) {final _that = this;
 switch (_that) {
 case _MovieDetail():
-return $default(_that.id,_that.title,_that.overview,_that.poster,_that.backdrop,_that.genres,_that.releaseDate,_that.runtimeMinutes,_that.tagline,_that.voteAverage,_that.voteCount,_that.credits,_that.trailers,_that.imdbId);case _:
+return $default(_that.id,_that.title,_that.overview,_that.poster,_that.backdrop,_that.genres,_that.releaseDate,_that.runtimeMinutes,_that.tagline,_that.voteAverage,_that.voteCount,_that.credits,_that.trailers,_that.imdbId,_that.belongsToCollection);case _:
   throw StateError('Unexpected subclass');
 
 }
@@ -1166,10 +1451,10 @@ return $default(_that.id,_that.title,_that.overview,_that.poster,_that.backdrop,
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String id,  String title,  String? overview,  ImageAsset? poster,  ImageAsset? backdrop,  List<String> genres,  String? releaseDate,  int? runtimeMinutes,  String? tagline,  double? voteAverage,  int? voteCount,  MediaCredits credits,  List<Trailer> trailers,  String? imdbId)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String id,  String title,  String? overview,  ImageAsset? poster,  ImageAsset? backdrop,  List<String> genres,  String? releaseDate,  int? runtimeMinutes,  String? tagline,  double? voteAverage,  int? voteCount,  MediaCredits credits,  List<Trailer> trailers,  String? imdbId,  MovieCollectionSummary? belongsToCollection)?  $default,) {final _that = this;
 switch (_that) {
 case _MovieDetail() when $default != null:
-return $default(_that.id,_that.title,_that.overview,_that.poster,_that.backdrop,_that.genres,_that.releaseDate,_that.runtimeMinutes,_that.tagline,_that.voteAverage,_that.voteCount,_that.credits,_that.trailers,_that.imdbId);case _:
+return $default(_that.id,_that.title,_that.overview,_that.poster,_that.backdrop,_that.genres,_that.releaseDate,_that.runtimeMinutes,_that.tagline,_that.voteAverage,_that.voteCount,_that.credits,_that.trailers,_that.imdbId,_that.belongsToCollection);case _:
   return null;
 
 }
@@ -1181,7 +1466,7 @@ return $default(_that.id,_that.title,_that.overview,_that.poster,_that.backdrop,
 @JsonSerializable()
 
 class _MovieDetail implements MovieDetail {
-  const _MovieDetail({required this.id, required this.title, this.overview, this.poster, this.backdrop, final  List<String> genres = const [], this.releaseDate, this.runtimeMinutes, this.tagline, this.voteAverage, this.voteCount, required this.credits, final  List<Trailer> trailers = const [], this.imdbId}): _genres = genres,_trailers = trailers;
+  const _MovieDetail({required this.id, required this.title, this.overview, this.poster, this.backdrop, final  List<String> genres = const [], this.releaseDate, this.runtimeMinutes, this.tagline, this.voteAverage, this.voteCount, required this.credits, final  List<Trailer> trailers = const [], this.imdbId, this.belongsToCollection}): _genres = genres,_trailers = trailers;
   factory _MovieDetail.fromJson(Map<String, dynamic> json) => _$MovieDetailFromJson(json);
 
 @override final  String id;
@@ -1210,6 +1495,7 @@ class _MovieDetail implements MovieDetail {
 }
 
 @override final  String? imdbId;
+@override final  MovieCollectionSummary? belongsToCollection;
 
 /// Create a copy of MovieDetail
 /// with the given fields replaced by the non-null parameter values.
@@ -1224,16 +1510,16 @@ Map<String, dynamic> toJson() {
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is _MovieDetail&&(identical(other.id, id) || other.id == id)&&(identical(other.title, title) || other.title == title)&&(identical(other.overview, overview) || other.overview == overview)&&(identical(other.poster, poster) || other.poster == poster)&&(identical(other.backdrop, backdrop) || other.backdrop == backdrop)&&const DeepCollectionEquality().equals(other._genres, _genres)&&(identical(other.releaseDate, releaseDate) || other.releaseDate == releaseDate)&&(identical(other.runtimeMinutes, runtimeMinutes) || other.runtimeMinutes == runtimeMinutes)&&(identical(other.tagline, tagline) || other.tagline == tagline)&&(identical(other.voteAverage, voteAverage) || other.voteAverage == voteAverage)&&(identical(other.voteCount, voteCount) || other.voteCount == voteCount)&&(identical(other.credits, credits) || other.credits == credits)&&const DeepCollectionEquality().equals(other._trailers, _trailers)&&(identical(other.imdbId, imdbId) || other.imdbId == imdbId));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _MovieDetail&&(identical(other.id, id) || other.id == id)&&(identical(other.title, title) || other.title == title)&&(identical(other.overview, overview) || other.overview == overview)&&(identical(other.poster, poster) || other.poster == poster)&&(identical(other.backdrop, backdrop) || other.backdrop == backdrop)&&const DeepCollectionEquality().equals(other._genres, _genres)&&(identical(other.releaseDate, releaseDate) || other.releaseDate == releaseDate)&&(identical(other.runtimeMinutes, runtimeMinutes) || other.runtimeMinutes == runtimeMinutes)&&(identical(other.tagline, tagline) || other.tagline == tagline)&&(identical(other.voteAverage, voteAverage) || other.voteAverage == voteAverage)&&(identical(other.voteCount, voteCount) || other.voteCount == voteCount)&&(identical(other.credits, credits) || other.credits == credits)&&const DeepCollectionEquality().equals(other._trailers, _trailers)&&(identical(other.imdbId, imdbId) || other.imdbId == imdbId)&&(identical(other.belongsToCollection, belongsToCollection) || other.belongsToCollection == belongsToCollection));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
-int get hashCode => Object.hash(runtimeType,id,title,overview,poster,backdrop,const DeepCollectionEquality().hash(_genres),releaseDate,runtimeMinutes,tagline,voteAverage,voteCount,credits,const DeepCollectionEquality().hash(_trailers),imdbId);
+int get hashCode => Object.hash(runtimeType,id,title,overview,poster,backdrop,const DeepCollectionEquality().hash(_genres),releaseDate,runtimeMinutes,tagline,voteAverage,voteCount,credits,const DeepCollectionEquality().hash(_trailers),imdbId,belongsToCollection);
 
 @override
 String toString() {
-  return 'MovieDetail(id: $id, title: $title, overview: $overview, poster: $poster, backdrop: $backdrop, genres: $genres, releaseDate: $releaseDate, runtimeMinutes: $runtimeMinutes, tagline: $tagline, voteAverage: $voteAverage, voteCount: $voteCount, credits: $credits, trailers: $trailers, imdbId: $imdbId)';
+  return 'MovieDetail(id: $id, title: $title, overview: $overview, poster: $poster, backdrop: $backdrop, genres: $genres, releaseDate: $releaseDate, runtimeMinutes: $runtimeMinutes, tagline: $tagline, voteAverage: $voteAverage, voteCount: $voteCount, credits: $credits, trailers: $trailers, imdbId: $imdbId, belongsToCollection: $belongsToCollection)';
 }
 
 
@@ -1244,11 +1530,11 @@ abstract mixin class _$MovieDetailCopyWith<$Res> implements $MovieDetailCopyWith
   factory _$MovieDetailCopyWith(_MovieDetail value, $Res Function(_MovieDetail) _then) = __$MovieDetailCopyWithImpl;
 @override @useResult
 $Res call({
- String id, String title, String? overview, ImageAsset? poster, ImageAsset? backdrop, List<String> genres, String? releaseDate, int? runtimeMinutes, String? tagline, double? voteAverage, int? voteCount, MediaCredits credits, List<Trailer> trailers, String? imdbId
+ String id, String title, String? overview, ImageAsset? poster, ImageAsset? backdrop, List<String> genres, String? releaseDate, int? runtimeMinutes, String? tagline, double? voteAverage, int? voteCount, MediaCredits credits, List<Trailer> trailers, String? imdbId, MovieCollectionSummary? belongsToCollection
 });
 
 
-@override $ImageAssetCopyWith<$Res>? get poster;@override $ImageAssetCopyWith<$Res>? get backdrop;@override $MediaCreditsCopyWith<$Res> get credits;
+@override $ImageAssetCopyWith<$Res>? get poster;@override $ImageAssetCopyWith<$Res>? get backdrop;@override $MediaCreditsCopyWith<$Res> get credits;@override $MovieCollectionSummaryCopyWith<$Res>? get belongsToCollection;
 
 }
 /// @nodoc
@@ -1261,7 +1547,7 @@ class __$MovieDetailCopyWithImpl<$Res>
 
 /// Create a copy of MovieDetail
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? id = null,Object? title = null,Object? overview = freezed,Object? poster = freezed,Object? backdrop = freezed,Object? genres = null,Object? releaseDate = freezed,Object? runtimeMinutes = freezed,Object? tagline = freezed,Object? voteAverage = freezed,Object? voteCount = freezed,Object? credits = null,Object? trailers = null,Object? imdbId = freezed,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? id = null,Object? title = null,Object? overview = freezed,Object? poster = freezed,Object? backdrop = freezed,Object? genres = null,Object? releaseDate = freezed,Object? runtimeMinutes = freezed,Object? tagline = freezed,Object? voteAverage = freezed,Object? voteCount = freezed,Object? credits = null,Object? trailers = null,Object? imdbId = freezed,Object? belongsToCollection = freezed,}) {
   return _then(_MovieDetail(
 id: null == id ? _self.id : id // ignore: cast_nullable_to_non_nullable
 as String,title: null == title ? _self.title : title // ignore: cast_nullable_to_non_nullable
@@ -1277,7 +1563,8 @@ as double?,voteCount: freezed == voteCount ? _self.voteCount : voteCount // igno
 as int?,credits: null == credits ? _self.credits : credits // ignore: cast_nullable_to_non_nullable
 as MediaCredits,trailers: null == trailers ? _self._trailers : trailers // ignore: cast_nullable_to_non_nullable
 as List<Trailer>,imdbId: freezed == imdbId ? _self.imdbId : imdbId // ignore: cast_nullable_to_non_nullable
-as String?,
+as String?,belongsToCollection: freezed == belongsToCollection ? _self.belongsToCollection : belongsToCollection // ignore: cast_nullable_to_non_nullable
+as MovieCollectionSummary?,
   ));
 }
 
@@ -1313,6 +1600,18 @@ $MediaCreditsCopyWith<$Res> get credits {
   
   return $MediaCreditsCopyWith<$Res>(_self.credits, (value) {
     return _then(_self.copyWith(credits: value));
+  });
+}/// Create a copy of MovieDetail
+/// with the given fields replaced by the non-null parameter values.
+@override
+@pragma('vm:prefer-inline')
+$MovieCollectionSummaryCopyWith<$Res>? get belongsToCollection {
+    if (_self.belongsToCollection == null) {
+    return null;
+  }
+
+  return $MovieCollectionSummaryCopyWith<$Res>(_self.belongsToCollection!, (value) {
+    return _then(_self.copyWith(belongsToCollection: value));
   });
 }
 }

@@ -446,6 +446,70 @@ def _tmdb_result_to_catalog_item(result: Dict[str, Any], media_type: str) -> Dic
     }
 
 
+def _release_sort_key(item: Dict[str, Any]) -> Tuple[int, str]:
+    raw = str(item.get("release_date") or "").strip()
+    if not raw:
+        return (1, "")
+    try:
+        datetime.fromisoformat(raw)
+    except ValueError:
+        return (1, raw)
+    return (0, raw)
+
+
+@catalog_router.get("/collection/{collection_id}")
+async def movie_collection(
+    collection_id: str,
+    name: Optional[str] = Query(default=None),
+    language: Optional[str] = Query(default=None),
+) -> Dict[str, Any]:
+    """Get movies in a TMDb collection, sorted by release date."""
+    providers = _get_providers()
+
+    collection_payload: Optional[Dict[str, Any]] = None
+    try:
+        collection_payload = dict(
+            providers.tmdb.collection_details(collection_id, language=language)
+        )
+    except Exception as direct_exc:
+        if not name:
+            raise HTTPException(status_code=500, detail=f"Collection detail error: {direct_exc}")
+        try:
+            matches = providers.tmdb.search_collections(name, language=language)
+            fallback = next(
+                (
+                    match
+                    for match in matches
+                    if str(match.get("id") or "") == str(collection_id)
+                ),
+                matches[0] if matches else None,
+            )
+            if fallback is not None and fallback.get("id") is not None:
+                collection_payload = dict(
+                    providers.tmdb.collection_details(fallback["id"], language=language)
+                )
+        except Exception as fallback_exc:
+            raise HTTPException(status_code=500, detail=f"Collection fallback error: {fallback_exc}")
+
+    if collection_payload is None:
+        raise HTTPException(status_code=404, detail="Collection not found")
+
+    raw_parts = collection_payload.get("parts") or []
+    parts = [p for p in raw_parts if isinstance(p, dict) and p.get("id")]
+    parts.sort(key=_release_sort_key)
+    items = [_tmdb_result_to_catalog_item(part, "movie") for part in parts]
+
+    return {
+        "collection_id": str(collection_payload.get("id") or collection_id),
+        "name": collection_payload.get("name") or name or "",
+        "overview": collection_payload.get("overview"),
+        "poster_path": collection_payload.get("poster_path"),
+        "backdrop_path": collection_payload.get("backdrop_path"),
+        "items": items,
+        "count": len(items),
+    }
+
+
 def _enrich_item_with_tmdb_images(
     item: Dict[str, Any],
     providers: "InformationProviders",

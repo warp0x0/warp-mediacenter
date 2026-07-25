@@ -236,6 +236,85 @@ final class MovieRichDetailFamily extends $Family
   String toString() => r'movieRichDetailProvider';
 }
 
+@ProviderFor(movieCollectionItems)
+final movieCollectionItemsProvider = MovieCollectionItemsFamily._();
+
+final class MovieCollectionItemsProvider
+    extends
+        $FunctionalProvider<
+          AsyncValue<List<MediaItem>>,
+          List<MediaItem>,
+          FutureOr<List<MediaItem>>
+        >
+    with $FutureModifier<List<MediaItem>>, $FutureProvider<List<MediaItem>> {
+  MovieCollectionItemsProvider._({
+    required MovieCollectionItemsFamily super.from,
+    required (int, String) super.argument,
+  }) : super(
+         retry: null,
+         name: r'movieCollectionItemsProvider',
+         isAutoDispose: true,
+         dependencies: null,
+         $allTransitiveDependencies: null,
+       );
+
+  @override
+  String debugGetCreateSourceHash() => _$movieCollectionItemsHash();
+
+  @override
+  String toString() {
+    return r'movieCollectionItemsProvider'
+        ''
+        '$argument';
+  }
+
+  @$internal
+  @override
+  $FutureProviderElement<List<MediaItem>> $createElement(
+    $ProviderPointer pointer,
+  ) => $FutureProviderElement(pointer);
+
+  @override
+  FutureOr<List<MediaItem>> create(Ref ref) {
+    final argument = this.argument as (int, String);
+    return movieCollectionItems(ref, argument.$1, argument.$2);
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return other is MovieCollectionItemsProvider && other.argument == argument;
+  }
+
+  @override
+  int get hashCode {
+    return argument.hashCode;
+  }
+}
+
+String _$movieCollectionItemsHash() =>
+    r'ba2a7a5300241611d11884bb5f8cc848808184b0';
+
+final class MovieCollectionItemsFamily extends $Family
+    with $FunctionalFamilyOverride<FutureOr<List<MediaItem>>, (int, String)> {
+  MovieCollectionItemsFamily._()
+    : super(
+        retry: null,
+        name: r'movieCollectionItemsProvider',
+        dependencies: null,
+        $allTransitiveDependencies: null,
+        isAutoDispose: true,
+      );
+
+  MovieCollectionItemsProvider call(int collectionId, String collectionName) =>
+      MovieCollectionItemsProvider._(
+        argument: (collectionId, collectionName),
+        from: this,
+      );
+
+  @override
+  String toString() => r'movieCollectionItemsProvider';
+}
+
 @ProviderFor(showRichDetail)
 final showRichDetailProvider = ShowRichDetailFamily._();
 
