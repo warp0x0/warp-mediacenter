@@ -613,7 +613,7 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
   // <-> center Play/Pause <-> volume bar <-> RHS icons. Desktop includes a
   // fullscreen icon; Android TV is already immersive, so it omits that dead
   // control. Left/Right within the icon row is plain default beam traversal;
-  // only the cross-row Up/Down jumps and volume adjust-mode need overrides.
+  // cross-row Up/Down jumps and volume adjust-mode are explicit for TV remotes.
 
   bool _seekBarDirection(TraversalDirection d) {
     _resetHideTimer();
@@ -638,6 +638,10 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
       Dpad.of(context).requestFocus(_centerPlayFocus);
       return true;
     }
+    if (d == TraversalDirection.down) {
+      Dpad.of(context).requestFocus(_seekBarFocus);
+      return true;
+    }
     return false;
   }
 
@@ -645,6 +649,10 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
     _resetHideTimer();
     if (d == TraversalDirection.up) {
       Dpad.of(context).requestFocus(_volumeBarFocus);
+      return true;
+    }
+    if (d == TraversalDirection.down) {
+      Dpad.of(context).requestFocus(_seekBarFocus);
       return true;
     }
     return false;

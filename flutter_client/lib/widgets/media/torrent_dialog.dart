@@ -20,7 +20,7 @@ import '../shared/tv_modal_chrome_scale.dart';
 //
 // API flow (matches Tauri exactly):
 //   1. POST /api/v1/torrent/search  → filtered + unfiltered lists
-//   2. POST /api/v1/torrent/resolve (media_type, no magnet) → torrent_id
+//   2. POST /api/v1/torrent/resolve (media_type + magnet) → torrent_id
 //   3. Poll GET /api/v1/torrent/status/{id} until 'downloaded'|'finished'
 //   4. GET /api/v1/debrid/torrent/{id} → file list, pick best video file
 //   5. GET /api/v1/debrid/stream/{id}/{file.id} → stream_url
@@ -436,6 +436,7 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
         '/api/v1/torrent/resolve',
         body: {
           'torrent_hash': result.hash, // backend key is torrent_hash, not hash
+          'magnet': result.magnet,
           'title': widget.title,
           'media_type': widget.mediaKind, // NOTE: media_type, not media_kind
           if (widget.tmdbId != null) 'tmdb_id': widget.tmdbId,
@@ -454,11 +455,7 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
     } catch (e) {
       if (_cancelled) return;
       final msg = _msg(e);
-      final isBlocked =
-          msg.toLowerCase().contains('infringing') ||
-          msg.toLowerCase().contains('dmca') ||
-          (e is ApiError && e.statusCode == 422);
-      if (isBlocked) {
+      if (_isRealDebridBlockedError(e)) {
         _showLocalConfirm(result, _LocalConfirmReason.runtimeBlocked);
       } else {
         setState(
@@ -869,8 +866,29 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
   }
 
   String _msg(Object e) {
-    if (e is ApiError) return e.message;
+    final apiError = _apiError(e);
+    if (apiError != null) return apiError.message;
+    if (e is DioException && e.error != null) {
+      return e.error.toString().replaceFirst('Exception: ', '');
+    }
     return e.toString().replaceFirst('Exception: ', '');
+  }
+
+  ApiError? _apiError(Object e) {
+    if (e is ApiError) return e;
+    if (e is DioException && e.error is ApiError) return e.error as ApiError;
+    return null;
+  }
+
+  bool _isRealDebridBlockedError(Object e) {
+    final apiError = _apiError(e);
+    final msg = _msg(e).toLowerCase();
+    return apiError?.statusCode == 422 ||
+        msg.contains('infringing') ||
+        msg.contains('copyright') ||
+        msg.contains('dmca') ||
+        msg.contains('legal restriction') ||
+        msg.contains('unavailable for legal');
   }
 
   // ── Build ────────────────────────────────────────────────────────────────────
