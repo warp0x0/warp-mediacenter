@@ -75,6 +75,7 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
   int _subtitleSizeIndex = 1;
   double _audioAmplification = 0;
   Timer? _hideTimer;
+  Timer? _seekRampResetTimer;
   Timer? _externalWatchdog;
   late final bool _externalMode;
   String _externalStatus = 'Opening external player…';
@@ -98,6 +99,12 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
 
   bool get _isDesktop =>
       Platform.isMacOS || Platform.isWindows || Platform.isLinux;
+
+  static const _seekRampStepsSeconds = [10, 30, 60, 120, 300, 600, 900, 1500];
+  static const _seekRampWindow = Duration(milliseconds: 850);
+  TraversalDirection? _lastSeekRampDirection;
+  DateTime? _lastSeekRampAt;
+  int _seekRampIndex = 0;
 
   @override
   void initState() {
@@ -158,6 +165,7 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
   @override
   void dispose() {
     _hideTimer?.cancel();
+    _seekRampResetTimer?.cancel();
     if (_isDesktop) windowManager.removeListener(this);
     WidgetsBinding.instance.removeObserver(this);
     for (final node in [
@@ -618,14 +626,15 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
   bool _seekBarDirection(TraversalDirection d) {
     _resetHideTimer();
     if (d == TraversalDirection.left) {
-      _seek(-10);
+      _seekRamp(TraversalDirection.left);
       return true;
     }
     if (d == TraversalDirection.right) {
-      _seek(10);
+      _seekRamp(TraversalDirection.right);
       return true;
     }
     if (d == TraversalDirection.up) {
+      _resetSeekRamp();
       Dpad.of(context).requestFocus(_menuFocus);
       return true;
     }
@@ -727,6 +736,39 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
     _resetHideTimer();
     final pos = _playback.position + Duration(seconds: seconds);
     _playback.seek(pos.isNegative ? Duration.zero : pos);
+  }
+
+  void _seekRamp(TraversalDirection direction) {
+    final now = DateTime.now();
+    final continuing =
+        _lastSeekRampDirection == direction &&
+        _lastSeekRampAt != null &&
+        now.difference(_lastSeekRampAt!) <= _seekRampWindow;
+
+    if (continuing) {
+      _seekRampIndex = (_seekRampIndex + 1).clamp(
+        0,
+        _seekRampStepsSeconds.length - 1,
+      );
+    } else {
+      _seekRampIndex = 0;
+    }
+
+    _lastSeekRampDirection = direction;
+    _lastSeekRampAt = now;
+    _seekRampResetTimer?.cancel();
+    _seekRampResetTimer = Timer(_seekRampWindow, _resetSeekRamp);
+
+    final seconds = _seekRampStepsSeconds[_seekRampIndex];
+    _seek(direction == TraversalDirection.right ? seconds : -seconds);
+  }
+
+  void _resetSeekRamp() {
+    _seekRampResetTimer?.cancel();
+    _seekRampResetTimer = null;
+    _lastSeekRampDirection = null;
+    _lastSeekRampAt = null;
+    _seekRampIndex = 0;
   }
 
   void _adjustVolume(double delta) {
