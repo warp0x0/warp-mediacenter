@@ -6,9 +6,6 @@ import importlib
 from typing import TYPE_CHECKING, Any
 
 __all__ = [
-    "PlayRequest",
-    "PlaybackState",
-    "PlayerController",
     "PluginError",
     "PluginManifest",
     "PluginManager",
@@ -21,11 +18,6 @@ __all__ = [
 ]
 
 _MODULE_EXPORTS = {
-    "player": {
-        "PlayRequest",
-        "PlaybackState",
-        "PlayerController",
-    },
     "player.subtitles": {
         "SubtitleQuery",
         "SubtitleResult",
@@ -44,7 +36,6 @@ _MODULE_EXPORTS = {
 }
 
 if TYPE_CHECKING:  # pragma: no cover - for static analysis only
-    from .player import PlayRequest, PlaybackState, PlayerController
     from .player.subtitles import SubtitleQuery, SubtitleResult
     from .plugins import PluginError, PluginManifest, PluginManager
     from .resource_management import (

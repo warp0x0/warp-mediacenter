@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-import time
 from datetime import datetime, timezone
 from typing import Any, Mapping, MutableMapping, Optional, Sequence
 
@@ -20,7 +19,6 @@ from warp_mediacenter.backend.information_handlers.trakt_manager import (
 from warp_mediacenter.backend.information_handlers.torrent_search import TorrentSearchService
 from warp_mediacenter.backend.player.debrid.client import RealDebridClient
 from warp_mediacenter.backend.player.debrid.oauth import RealDebridOAuthError
-from warp_mediacenter.backend.player.torrent_stream import TorrentStreamOrchestrator, TorrentStreamError
 from warp_mediacenter.backend.persistence import (
     connection as db_connection,
     has_local_source,
@@ -255,80 +253,6 @@ def _handle_torrent_search(args: argparse.Namespace) -> None:
         print(f"     Match: {t.match_score:.2f} | Hash: {t.hash}")
     print()
     print_json(output)
-
-
-def _handle_torrent_play(args: argparse.Namespace) -> None:
-    """Full flow: search → prompt select → resolve → play."""
-    from warp_mediacenter.backend.player.adapter import PlayerAdapter
-    from warp_mediacenter.backend.player.vlc_adapter import VLCAdapter
-    from warp_mediacenter.backend.player.service import PlaybackService
-
-    service = TorrentSearchService()
-    try:
-        results = service.search(
-            query=args.query,
-            media_type=args.media_type or "movie",
-            season=args.season,
-            episode=args.episode,
-            year=args.year,
-        )
-    except Exception as exc:
-        exit_with_error(f"Search failed: {exc}")
-        return
-
-    if not results.all_results:
-        exit_with_error("No torrents found.")
-        return
-
-    all_results = results.all_results
-    print(f"\nFound {len(all_results)} torrents:")
-    for i, t in enumerate(all_results, 1):
-        cached_tag = "[CACHED]" if t.is_cached else "[UNCACHED]"
-        print(f"  {i:2d}. {cached_tag} [{t.quality}] {t.name}")
-        print(f"       Seeders: {t.seeders} | Size: {t.size} | Score: {t.match_score:.2f}")
-
-    try:
-        choice = int(input(f"\nSelect torrent (1-{len(all_results)}): "))
-        if choice < 1 or choice > len(all_results):
-            exit_with_error("Invalid selection.")
-            return
-    except ValueError:
-        exit_with_error("Invalid input.")
-        return
-
-    selected = all_results[choice - 1]
-
-    debrid = RealDebridClient()
-    player: PlayerAdapter = VLCAdapter()
-    playback = PlaybackService(player=player)
-    orchestrator = TorrentStreamOrchestrator(
-        search_service=service,
-        debrid_client=debrid,
-        playback_service=playback,
-    )
-
-    try:
-        url = orchestrator.play_selected(
-            torrent=selected,
-            title=args.query,
-            media_type=args.media_type or "movie",
-            season=args.season,
-            episode=args.episode,
-            year=args.year,
-        )
-        print(f"\nStream URL: {url[:80]}...")
-        print("Playback started. Press Ctrl+C to stop.")
-
-        try:
-            while True:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            playback.stop()
-            print("\nPlayback stopped.")
-    except TorrentStreamError as exc:
-        exit_with_error(f"Stream failed: {exc}")
-    except Exception as exc:
-        exit_with_error(str(exc))
 
 
 def _handle_torrent_status(_: argparse.Namespace) -> None:
@@ -939,14 +863,6 @@ def _build_parser() -> argparse.ArgumentParser:
     torrent_search_cmd.add_argument("--year", type=int, help="Release year.")
     torrent_search_cmd.add_argument("--limit", type=int, default=20, help="Max results per site.")
     torrent_search_cmd.set_defaults(func=_handle_torrent_search)
-
-    torrent_play_cmd = build_subparser(torrent_sub, "play", help="Search, select, and play a torrent.")
-    torrent_play_cmd.add_argument("query", help="Title to search and play.")
-    torrent_play_cmd.add_argument("--media-type", choices=["movie", "tv"], default="movie", help="Media type.")
-    torrent_play_cmd.add_argument("--season", type=int, help="Season number (for TV).")
-    torrent_play_cmd.add_argument("--episode", type=int, help="Episode number (for TV).")
-    torrent_play_cmd.add_argument("--year", type=int, help="Release year.")
-    torrent_play_cmd.set_defaults(func=_handle_torrent_play)
 
     torrent_status_cmd = build_subparser(torrent_sub, "status", help="Show active RealDebrid torrents.")
     torrent_status_cmd.set_defaults(func=_handle_torrent_status)

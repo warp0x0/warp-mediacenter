@@ -13,7 +13,6 @@ from fastapi.responses import FileResponse
 
 from warp_mediacenter.backend.common.logging import get_logger
 from warp_mediacenter.backend.api.middleware import get_container
-from warp_mediacenter.backend.player.controller import PlayerController
 from warp_mediacenter.backend.player.subtitles.models import SubtitleQuery, SubtitleResult
 from warp_mediacenter.backend.player.subtitles.service import SubtitleService
 
@@ -21,16 +20,9 @@ log = get_logger(__name__)
 
 router = APIRouter()
 
-_player_controller: Optional[PlayerController] = None
 _subtitle_service: Optional[SubtitleService] = None
 _temp_subtitles: Dict[str, Path] = {}
 _ENV_PATH = Path(__file__).resolve().parents[3] / ".env"
-
-
-def set_player_controller(controller: PlayerController) -> None:
-    """Set the global player controller instance for route handlers."""
-    global _player_controller
-    _player_controller = controller
 
 
 def set_subtitle_service(service: SubtitleService) -> None:
@@ -39,32 +31,14 @@ def set_subtitle_service(service: SubtitleService) -> None:
     _subtitle_service = service
 
 
-def _get_player() -> PlayerController:
-    """Get player controller from container or module-level global."""
-    container = get_container()
-    if container.player_controller is not None:
-        return container.player_controller
-    if _player_controller is not None:
-        return _player_controller
-    raise HTTPException(status_code=503, detail="Player controller not initialized")
-
-
 def _get_subtitle_service() -> SubtitleService:
     """Get the raw SubtitleService for direct search/download calls."""
     container = get_container()
-    if container.player_controller is not None:
-        return container.player_controller._service._subtitle_service
+    if container.subtitle_service is not None:
+        return container.subtitle_service
     if _subtitle_service is not None:
         return _subtitle_service
     raise HTTPException(status_code=503, detail="Subtitle service not initialized")
-
-
-def _get_player_service():
-    """Get the PlayerService wrapper (has search_subtitles, load helpers)."""
-    container = get_container()
-    if container.player_controller is not None:
-        return container.player_controller._service
-    raise HTTPException(status_code=503, detail="Player service not initialized")
 
 
 def _result_to_dict(result: SubtitleResult) -> Dict[str, Any]:
@@ -194,52 +168,6 @@ async def download_subtitle(payload: Dict[str, Any], request: Request) -> Dict[s
         }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Subtitle download failed: {exc}")
-
-
-@router.post("/load")
-async def load_subtitle(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Load a subtitle file into active playback.
-
-    Accepts either a subtitle ID (from download) or a direct file path.
-    """
-    player = _get_player()
-
-    sub_id = payload.get("id")
-    file_path = payload.get("path") or payload.get("url")
-
-    if sub_id and sub_id in _temp_subtitles:
-        file_path = str(_temp_subtitles[sub_id])
-    elif not file_path:
-        raise HTTPException(status_code=400, detail="id or path required")
-
-    try:
-        svc = _get_player_service()
-        svc._player.load_external_subtitle(file_path)
-        return {"status": "loaded", "path": file_path}
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Subtitle load failed: {exc}")
-
-
-@router.get("/active")
-async def list_active_subtitles() -> Dict[str, Any]:
-    """List currently loaded/temp subtitle files."""
-    items = []
-    for sub_id, path in _temp_subtitles.items():
-        items.append({
-            "id": sub_id,
-            "file_name": path.name,
-            "path": str(path),
-        })
-
-    player = _get_player()
-    state = player.now_playing()
-    current_subtitle = state.subtitle_path if state else None
-
-    return {
-        "temp_subtitles": items,
-        "current_subtitle": current_subtitle,
-        "count": len(items),
-    }
 
 
 @router.get("/{subtitle_id}/file/{file_name}", name="get_subtitle_file")

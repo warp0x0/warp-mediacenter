@@ -29,7 +29,7 @@
 - SQLite schema auto-migrates on `warp_mediacenter/backend/persistence/sqlite.py:connect()`. Add a new incremental migration and bump `_SCHEMA_VERSION`; do not rewrite already-applied migration steps.
 - Use `InformationProviders` (`warp_mediacenter/backend/information_handlers/providers.py`) as the TMDb/Trakt/public-archives facade; Trakt can be unavailable while other providers still work.
 - Normalized media types/models live in `warp_mediacenter/backend/information_handlers/models.py`; avoid returning raw provider payloads from new API surfaces unless an existing route already does.
-- Shared playback behavior belongs in `PlaybackService`; `PlayerController` chooses subprocess VLC/python-vlc in desktop mode and `HTTPAdapter` in thin-client mode.
+- Playback is client-owned. Backend player routes should stay limited to preload sessions, loopback stream proxying, subtitle search/download/file serving, and scrobble endpoints.
 - Torrent search depends on RealDebrid and/or Torrent-API-Py. Use `--torrent-executable` or `TORRENT_API_MAIN_PATH` to locate Torrent-API-Py; the `warp-startup` warning mentions `TORRENT_API_EXECUTABLE`, but code does not read it.
 - Plugins require a `plugin.json`; entrypoints must be `module:function` (`warp_mediacenter/backend/plugins/manifest.py`).
 

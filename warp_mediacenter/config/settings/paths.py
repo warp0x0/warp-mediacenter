@@ -34,7 +34,6 @@ _DEFAULT_CONFIG_PATHS = {
     "user_settings": str(_PACKAGE_ROOT / "var" / "user_settings.json"),
     "library_index": str(_PACKAGE_ROOT / "var" / "library_index.json"),
     "player_temp": str(_PACKAGE_ROOT / "var" / "player" / "temp"),
-    "vlc_runtime_root": str(_PACKAGE_ROOT / "Resources" / "vlc"),
     "plugins_root": str(_PACKAGE_ROOT / "var" / "plugins"),
 }
 
@@ -136,10 +135,6 @@ def get_player_temp_dir() -> str:
     return str(path)
 
 
-def get_vlc_runtime_root() -> str:
-    return PATHS["vlc_runtime_root"]
-
-
 def get_plugins_root() -> str:
     path = Path(PATHS["plugins_root"])
     path.mkdir(parents=True, exist_ok=True)
@@ -175,7 +170,6 @@ __all__ = [
     "get_public_domain_catalog_dir",
     "get_tokens_dir",
     "get_user_settings_path",
-    "get_vlc_runtime_root",
     "get_artwork_dir",
     "get_artwork_cache_dir",
     "get_database_path",

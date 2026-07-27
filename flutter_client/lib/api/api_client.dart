@@ -68,7 +68,7 @@ class ApiClient {
   //
   // Provides a reconnecting SSE stream. On disconnect, retries after 2s.
   // Usage:
-  //   client.sseStream('/api/v1/player/status/events').listen((data) {
+  //   client.sseStream('/api/v1/torrent/status/<id>/events').listen((data) {
   //     final status = PlayerStatus.fromJson(jsonDecode(data));
   //   });
 

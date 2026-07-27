@@ -108,8 +108,10 @@ def _build_health_response() -> Dict[str, Any]:
         services["torrent_orchestrator"] = "ok"
     if container.debrid_client is not None:
         services["debrid_client"] = "ok"
-    if container.player_controller is not None:
-        services["player_controller"] = "ok"
+    if container.preload_session_manager is not None:
+        services["preload_session_manager"] = "ok"
+    if container.subtitle_service is not None:
+        services["subtitle_service"] = "ok"
     if container.trakt_manager is not None:
         services["trakt_manager"] = "ok"
     if container.information_providers is not None:

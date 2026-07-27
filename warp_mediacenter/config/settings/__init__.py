@@ -46,7 +46,6 @@ __all__ = [
     "get_torrent_debrid_settings",
     "get_trakt_keys",
     "get_user_settings_path",
-    "get_vlc_runtime_root",
     "iter_pipeline_public_domain_sources",
     "list_content_lists",
     "list_provider_configs",
@@ -89,7 +88,6 @@ _MODULE_EXPORTS = {
         "get_public_domain_catalog_dir",
         "get_tokens_dir",
         "get_user_settings_path",
-        "get_vlc_runtime_root",
     },
     "plugins": {
         "InstalledPlugin",
@@ -142,7 +140,6 @@ if TYPE_CHECKING:  # pragma: no cover - only for static analysis
         get_public_domain_catalog_dir,
         get_tokens_dir,
         get_user_settings_path,
-        get_vlc_runtime_root,
     )
     from .plugins import InstalledPlugin
     from .providers import (
