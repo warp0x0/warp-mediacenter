@@ -50,6 +50,19 @@ abstract class SeasonDetail with _$SeasonDetail {
 }
 
 @freezed
+abstract class MovieCollectionSummary with _$MovieCollectionSummary {
+  const factory MovieCollectionSummary({
+    required int id,
+    required String name,
+    String? posterPath,
+    String? backdropPath,
+  }) = _MovieCollectionSummary;
+
+  factory MovieCollectionSummary.fromJson(Map<String, dynamic> json) =>
+      _$MovieCollectionSummaryFromJson(json);
+}
+
+@freezed
 abstract class MovieDetail with _$MovieDetail {
   const factory MovieDetail({
     required String id,
@@ -66,6 +79,7 @@ abstract class MovieDetail with _$MovieDetail {
     required MediaCredits credits,
     @Default([]) List<Trailer> trailers,
     String? imdbId,
+    MovieCollectionSummary? belongsToCollection,
   }) = _MovieDetail;
 
   factory MovieDetail.fromJson(Map<String, dynamic> json) =>

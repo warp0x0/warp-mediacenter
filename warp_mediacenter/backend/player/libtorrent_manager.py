@@ -9,6 +9,7 @@ seeking) are completely eliminated.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import threading
 import time
@@ -21,6 +22,7 @@ log = get_logger(__name__)
 
 _TEMP_BASE    = "/tmp/warp-mediacenter/libtorrent"
 _POLL_INTERVAL = 1.0   # seconds between libtorrent status polls
+_INFO_HASH_RE = re.compile(r"^[A-Fa-f0-9]{40}$")
 
 
 def _lazy_session():
@@ -44,6 +46,96 @@ def _lazy_session():
     }
     ses = lt.session(settings)
     return ses, lt
+
+
+def extract_info_hash_from_magnet(magnet: str, timeout: float = 20.0) -> Optional[str]:
+    """Extract a v1 torrent info hash from a magnet using libtorrent.
+
+    Most magnets expose the hash immediately via ``xt=urn:btih``. For magnets
+    where libtorrent needs metadata first, briefly join the swarm and read the
+    hash from the torrent metadata without keeping the download.
+    """
+    ses, lt = _lazy_session()
+    save_path = os.path.join(_TEMP_BASE, f"infohash-{uuid.uuid4()}")
+    handle = None
+    os.makedirs(save_path, exist_ok=True)
+
+    try:
+        params = lt.parse_magnet_uri(magnet)
+        immediate = _extract_info_hash_from_libtorrent_object(params)
+        if immediate:
+            return immediate
+
+        params.save_path = save_path
+        handle = ses.add_torrent(params)
+        deadline = time.time() + max(0.0, timeout)
+        while time.time() < deadline:
+            from_handle = _extract_info_hash_from_libtorrent_object(handle)
+            if from_handle:
+                return from_handle
+
+            try:
+                if handle.has_metadata():
+                    torrent_info = handle.torrent_file()
+                    from_metadata = _extract_info_hash_from_libtorrent_object(torrent_info)
+                    if from_metadata:
+                        return from_metadata
+            except Exception:
+                pass
+
+            time.sleep(0.25)
+    finally:
+        if handle is not None:
+            try:
+                if handle.is_valid():
+                    handle.pause()
+                ses.remove_torrent(handle)
+            except Exception:
+                pass
+        shutil.rmtree(save_path, ignore_errors=True)
+
+    return None
+
+
+def _extract_info_hash_from_libtorrent_object(obj) -> Optional[str]:
+    for candidate in _libtorrent_hash_candidates(obj):
+        info_hash = _normalise_libtorrent_info_hash(candidate)
+        if info_hash:
+            return info_hash
+    return None
+
+
+def _libtorrent_hash_candidates(obj):
+    if obj is None:
+        return
+
+    yield obj
+
+    for attr in ("info_hash", "info_hashes"):
+        value = getattr(obj, attr, None)
+        if value is None:
+            continue
+        try:
+            value = value() if callable(value) else value
+        except Exception:
+            continue
+        yield value
+
+        for sub_attr in ("v1", "get_best"):
+            sub_value = getattr(value, sub_attr, None)
+            if sub_value is None:
+                continue
+            try:
+                yield sub_value() if callable(sub_value) else sub_value
+            except Exception:
+                continue
+
+
+def _normalise_libtorrent_info_hash(value) -> Optional[str]:
+    text = str(value).strip()
+    if _INFO_HASH_RE.fullmatch(text) and text != ("0" * 40):
+        return text.upper()
+    return None
 
 
 class _Download:

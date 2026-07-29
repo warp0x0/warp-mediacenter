@@ -19,16 +19,13 @@ from warp_mediacenter.backend.api.app import create_app
 from warp_mediacenter.backend.api.middleware import init_container, ServiceContainer
 from warp_mediacenter.backend.api.routes.torrent import set_orchestrator
 from warp_mediacenter.backend.api.routes.scrobble import set_trakt_manager as set_scrobble_trakt
-from warp_mediacenter.backend.api.routes.player import set_player_controller
-from warp_mediacenter.backend.api.routes.subtitles import set_player_controller as set_subtitle_player, set_subtitle_service
+from warp_mediacenter.backend.api.routes.subtitles import set_subtitle_service
 from warp_mediacenter.backend.api.routes.trakt import set_trakt_manager as set_trakt_route
 from warp_mediacenter.backend.api.routes.debrid import set_debrid_client
 from warp_mediacenter.backend.information_handlers.providers import InformationProviders
 from warp_mediacenter.backend.information_handlers.trakt_manager import TraktManager
 from warp_mediacenter.backend.information_handlers.torrent_search import TorrentSearchService
-from warp_mediacenter.backend.player.controller import PlayerController
 from warp_mediacenter.backend.player.debrid.client import RealDebridClient
-from warp_mediacenter.backend.player.service import PlaybackService
 from warp_mediacenter.backend.player.preload_session_manager import PreloadSessionManager
 from warp_mediacenter.backend.player.subtitles.service import SubtitleService
 from warp_mediacenter.backend.player.torrent_stream import TorrentStreamOrchestrator
@@ -68,27 +65,6 @@ def _init_services() -> ServiceContainer:
     subtitle_service = SubtitleService()
     log.info("subtitle_service_initialized")
 
-    # Player controller (desktop mode with VLC, fallback to thin_client)
-    try:
-        player_controller = PlayerController(
-            subtitle_service=subtitle_service,
-            trakt_manager=trakt_manager,
-            mode="desktop",
-        )
-        player_mode = "desktop"
-    except Exception as exc:
-        log.warning("vlc_unavailable_falling_back_to_thin_client: %s", exc)
-        player_controller = PlayerController(
-            subtitle_service=subtitle_service,
-            trakt_manager=trakt_manager,
-            mode="thin_client",
-        )
-        player_mode = "thin_client"
-    log.info("player_controller_initialized", mode=player_mode)
-
-    # Playback service (extracted from player controller for orchestrator)
-    playback_service = player_controller._service
-
     # Buffered preload session manager for thin-client/Tauri flow
     preload_session_manager = PreloadSessionManager()
 
@@ -96,7 +72,6 @@ def _init_services() -> ServiceContainer:
     torrent_orchestrator = TorrentStreamOrchestrator(
         search_service=torrent_search,
         debrid_client=debrid_client,
-        playback_service=playback_service,
     )
     log.info("torrent_orchestrator_initialized")
 
@@ -104,9 +79,8 @@ def _init_services() -> ServiceContainer:
     container = init_container(
         torrent_orchestrator=torrent_orchestrator,
         debrid_client=debrid_client,
-        player_controller=player_controller,
-        playback_service=playback_service,
         preload_session_manager=preload_session_manager,
+        subtitle_service=subtitle_service,
         trakt_manager=trakt_manager,
         information_providers=providers,
         torrent_search_service=torrent_search,
@@ -115,8 +89,6 @@ def _init_services() -> ServiceContainer:
     # Wire into route modules (for backward compatibility with module-level globals)
     set_orchestrator(torrent_orchestrator)
     set_scrobble_trakt(trakt_manager) if trakt_manager else None
-    set_player_controller(player_controller)
-    set_subtitle_player(player_controller)
     set_subtitle_service(subtitle_service)
     set_trakt_route(trakt_manager) if trakt_manager else None
     set_debrid_client(debrid_client)

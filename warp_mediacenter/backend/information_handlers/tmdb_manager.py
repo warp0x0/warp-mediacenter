@@ -336,6 +336,35 @@ class TMDbManager:
         videos = payload.get("results", []) or []
         return [v for v in videos if isinstance(v, Mapping)]
 
+    def collection_details(
+        self,
+        collection_id: int | str,
+        *,
+        language: Optional[str] = None,
+    ) -> Mapping[str, Any]:
+        return self._request_json(
+            f"/collection/{collection_id}",
+            params={"language": self._normalize_language(language)},
+        )
+
+    def search_collections(
+        self,
+        query: str,
+        *,
+        language: Optional[str] = None,
+        page: int = 1,
+    ) -> Sequence[Mapping[str, Any]]:
+        payload = self._request_json(
+            "/search/collection",
+            params={
+                "query": query,
+                "language": self._normalize_language(language),
+                "page": page,
+            },
+        )
+        results = payload.get("results", []) or []
+        return [r for r in results if isinstance(r, Mapping)]
+
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------

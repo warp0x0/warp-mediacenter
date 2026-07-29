@@ -388,7 +388,7 @@ class _RibbonProgressBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-    height: 5,
+    height: 10,
     color: Colors.white.withAlpha(38),
     child: Align(
       alignment: Alignment.centerLeft,

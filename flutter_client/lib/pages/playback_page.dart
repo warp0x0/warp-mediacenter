@@ -75,8 +75,12 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
   int _subtitleSizeIndex = 1;
   double _audioAmplification = 0;
   Timer? _hideTimer;
+  Timer? _seekRampResetTimer;
   Timer? _externalWatchdog;
-  late final bool _externalMode;
+  Timer? _nativeLoadingTimeout;
+  bool _externalMode = false;
+  bool _nativeBackendDisposed = false;
+  bool _nativeFallbackHandled = false;
   String _externalStatus = 'Opening external player…';
   bool _externalResultHandled = false;
   bool _externalScrobbleStarted = false;
@@ -99,6 +103,12 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
   bool get _isDesktop =>
       Platform.isMacOS || Platform.isWindows || Platform.isLinux;
 
+  static const _seekRampStepsSeconds = [10, 30, 60, 120, 300, 600, 900, 1500];
+  static const _seekRampWindow = Duration(milliseconds: 850);
+  TraversalDirection? _lastSeekRampDirection;
+  DateTime? _lastSeekRampAt;
+  int _seekRampIndex = 0;
+
   @override
   void initState() {
     super.initState();
@@ -111,22 +121,6 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
     final src = widget.payload['source'] as String? ?? '';
     final resumeFromFrac = (widget.payload['resumeFromFrac'] as num?)
         ?.toDouble();
-
-    if (_externalMode) {
-      unawaited(_launchExternalPlayer(src, resumeFromFrac: resumeFromFrac));
-    } else if (src.isNotEmpty) {
-      unawaited(_playback.open(src));
-    }
-
-    // Seek to resume position once duration is known
-    if (!_externalMode && resumeFromFrac != null && resumeFromFrac > 0) {
-      _playback.durationStream.firstWhere((d) => d.inSeconds > 0).then((dur) {
-        final seekTo = Duration(
-          milliseconds: (resumeFromFrac * dur.inMilliseconds).round(),
-        );
-        _playback.seek(seekTo);
-      }).ignore();
-    }
 
     for (final node in [
       _seekBarFocus,
@@ -150,14 +144,29 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
       _positionSub = _playback.positionStream.listen(_onPosition);
       _completedSub = _playback.completedStream.listen(_onCompleted);
       _firstFrameSub = _playback.firstFrameStream.listen((rendered) {
+        if (rendered) _nativeLoadingTimeout?.cancel();
         if (mounted) setState(() => _firstFrameRendered = rendered);
       });
+      if (src.isNotEmpty) unawaited(_openNativePlayback(src));
+
+      // Seek to resume position once duration is known
+      if (resumeFromFrac != null && resumeFromFrac > 0) {
+        _playback.durationStream.firstWhere((d) => d.inSeconds > 0).then((dur) {
+          final seekTo = Duration(
+            milliseconds: (resumeFromFrac * dur.inMilliseconds).round(),
+          );
+          _playback.seek(seekTo);
+        }).ignore();
+      }
+    } else {
+      unawaited(_launchExternalPlayer(src, resumeFromFrac: resumeFromFrac));
     }
   }
 
   @override
   void dispose() {
     _hideTimer?.cancel();
+    _seekRampResetTimer?.cancel();
     if (_isDesktop) windowManager.removeListener(this);
     WidgetsBinding.instance.removeObserver(this);
     for (final node in [
@@ -189,7 +198,8 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
     _firstFrameSub?.cancel();
     _externalResultSub?.cancel();
     _externalWatchdog?.cancel();
-    unawaited(_playback.dispose());
+    _nativeLoadingTimeout?.cancel();
+    if (!_nativeBackendDisposed) unawaited(_playback.dispose());
     super.dispose();
   }
 
@@ -367,6 +377,68 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
         context.pop(true);
       }
     });
+  }
+
+  bool get _nativeLoadingScrimVisible =>
+      _playback.isNativeAndroid && !_firstFrameRendered;
+
+  Future<void> _openNativePlayback(String source) async {
+    await _playback.open(source);
+    if (!mounted || _externalMode || !_nativeLoadingScrimVisible) return;
+    _nativeLoadingTimeout = Timer(const Duration(seconds: 8), () {
+      if (_nativeLoadingScrimVisible) unawaited(_handleNativePlaybackFailure());
+    });
+  }
+
+  Future<void> _handleNativePlaybackFailure() async {
+    if (_nativeFallbackHandled || _externalMode || _exiting) {
+      return;
+    }
+    _nativeFallbackHandled = true;
+    _hideTimer?.cancel();
+    _nativeLoadingTimeout?.cancel();
+    final nativePosition = _playback.position;
+    final nativeDuration = _playback.duration;
+    final resumeFromFrac =
+        nativePosition > Duration.zero && nativeDuration > Duration.zero
+        ? (nativePosition.inMilliseconds / nativeDuration.inMilliseconds)
+              .clamp(0.0, 1.0)
+              .toDouble()
+        : (widget.payload['resumeFromFrac'] as num?)?.toDouble();
+
+    // Preserve the preload session for MX Player. Only the native renderer is
+    // released here; normal route exit still performs session cleanup.
+    await _playback.stop();
+    await _playback.dispose();
+    _nativeBackendDisposed = true;
+    await _positionSub?.cancel();
+    await _completedSub?.cancel();
+    await _firstFrameSub?.cancel();
+    if (!mounted) return;
+
+    setState(() {
+      _externalMode = true;
+      _externalStatus = 'Native playback is unavailable for this video.';
+    });
+
+    final launchMx = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const _NativePlaybackFallbackDialog(),
+    );
+    if (!mounted) return;
+    if (launchMx == true) {
+      // This is the preload session stream URL that native playback used.
+      await _launchExternalPlayer(
+        widget.payload['source'] as String? ?? '',
+        resumeFromFrac: resumeFromFrac,
+      );
+      return;
+    }
+    setState(
+      () => _externalStatus =
+          'MX Player switch cancelled. Press Back to return to Warp.',
+    );
   }
 
   void _onPosition(Duration pos) {
@@ -573,7 +645,7 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
   Widget _buildPlaybackOverlay(WarpTokens t, String title) => Stack(
     fit: StackFit.expand,
     children: [
-      if (_playback.isNativeAndroid && !_firstFrameRendered)
+      if (_nativeLoadingScrimVisible)
         const IgnorePointer(child: _LoadingScrim()),
       IgnorePointer(
         ignoring: !_showControls,
@@ -613,19 +685,20 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
   // <-> center Play/Pause <-> volume bar <-> RHS icons. Desktop includes a
   // fullscreen icon; Android TV is already immersive, so it omits that dead
   // control. Left/Right within the icon row is plain default beam traversal;
-  // only the cross-row Up/Down jumps and volume adjust-mode need overrides.
+  // cross-row Up/Down jumps and volume adjust-mode are explicit for TV remotes.
 
   bool _seekBarDirection(TraversalDirection d) {
     _resetHideTimer();
     if (d == TraversalDirection.left) {
-      _seek(-10);
+      _seekRamp(TraversalDirection.left);
       return true;
     }
     if (d == TraversalDirection.right) {
-      _seek(10);
+      _seekRamp(TraversalDirection.right);
       return true;
     }
     if (d == TraversalDirection.up) {
+      _resetSeekRamp();
       Dpad.of(context).requestFocus(_menuFocus);
       return true;
     }
@@ -638,6 +711,10 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
       Dpad.of(context).requestFocus(_centerPlayFocus);
       return true;
     }
+    if (d == TraversalDirection.down) {
+      Dpad.of(context).requestFocus(_seekBarFocus);
+      return true;
+    }
     return false;
   }
 
@@ -645,6 +722,10 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
     _resetHideTimer();
     if (d == TraversalDirection.up) {
       Dpad.of(context).requestFocus(_volumeBarFocus);
+      return true;
+    }
+    if (d == TraversalDirection.down) {
+      Dpad.of(context).requestFocus(_seekBarFocus);
       return true;
     }
     return false;
@@ -719,6 +800,39 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
     _resetHideTimer();
     final pos = _playback.position + Duration(seconds: seconds);
     _playback.seek(pos.isNegative ? Duration.zero : pos);
+  }
+
+  void _seekRamp(TraversalDirection direction) {
+    final now = DateTime.now();
+    final continuing =
+        _lastSeekRampDirection == direction &&
+        _lastSeekRampAt != null &&
+        now.difference(_lastSeekRampAt!) <= _seekRampWindow;
+
+    if (continuing) {
+      _seekRampIndex = (_seekRampIndex + 1).clamp(
+        0,
+        _seekRampStepsSeconds.length - 1,
+      );
+    } else {
+      _seekRampIndex = 0;
+    }
+
+    _lastSeekRampDirection = direction;
+    _lastSeekRampAt = now;
+    _seekRampResetTimer?.cancel();
+    _seekRampResetTimer = Timer(_seekRampWindow, _resetSeekRamp);
+
+    final seconds = _seekRampStepsSeconds[_seekRampIndex];
+    _seek(direction == TraversalDirection.right ? seconds : -seconds);
+  }
+
+  void _resetSeekRamp() {
+    _seekRampResetTimer?.cancel();
+    _seekRampResetTimer = null;
+    _lastSeekRampDirection = null;
+    _lastSeekRampAt = null;
+    _seekRampIndex = 0;
   }
 
   void _adjustVolume(double delta) {
@@ -2664,6 +2778,106 @@ class _TrackTile extends StatelessWidget {
       ),
     ),
     child: const SizedBox.shrink(),
+  );
+}
+
+class _NativePlaybackFallbackDialog extends StatefulWidget {
+  const _NativePlaybackFallbackDialog();
+
+  @override
+  State<_NativePlaybackFallbackDialog> createState() =>
+      _NativePlaybackFallbackDialogState();
+}
+
+class _NativePlaybackFallbackDialogState
+    extends State<_NativePlaybackFallbackDialog> {
+  Timer? _countdown;
+  int _secondsRemaining = 5;
+
+  @override
+  void initState() {
+    super.initState();
+    _countdown = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      if (_secondsRemaining <= 1) {
+        _countdown?.cancel();
+        Navigator.of(context).pop(true);
+        return;
+      }
+      setState(() => _secondsRemaining--);
+    });
+  }
+
+  @override
+  void dispose() {
+    _countdown?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => PopScope(
+    canPop: false,
+    child: Dialog(
+      backgroundColor: const Color(0xFF171719),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 520),
+        child: Padding(
+          padding: const EdgeInsets.all(28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Icon(
+                Icons.warning_amber_rounded,
+                color: _uoscAccentLight,
+                size: 30,
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Native Playback Unavailable',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 22,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                'This video cannot be played by the native Android player. '
+                'Switching to MX Player in $_secondsRemaining seconds.',
+                style: TextStyle(
+                  color: Colors.white.withAlpha(190),
+                  height: 1.35,
+                ),
+              ),
+              const SizedBox(height: 24),
+              Align(
+                alignment: Alignment.centerRight,
+                child: DpadFocusable(
+                  autofocus: true,
+                  onSelect: () => Navigator.of(context).pop(false),
+                  builder: (context, state, child) => OutlinedButton(
+                    onPressed: () => Navigator.of(context).pop(false),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.white,
+                      side: BorderSide(
+                        color: state.focused
+                            ? _uoscAccentLight
+                            : Colors.white.withAlpha(90),
+                        width: state.focused ? 2 : 1,
+                      ),
+                    ),
+                    child: const Text('Cancel'),
+                  ),
+                  child: const SizedBox.shrink(),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
   );
 }
 

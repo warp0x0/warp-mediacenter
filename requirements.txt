@@ -8,9 +8,6 @@ requests==2.32.3
 # System/resource insights
 psutil==5.9.8
 
-# Media playback
-python-vlc==3.0.20123
-
 # Filename parsing
 guessit==3.7.1
 subliminal>=2.2.0
