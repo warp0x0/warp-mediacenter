@@ -105,6 +105,9 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
 
   static const _seekRampStepsSeconds = [10, 30, 60, 120, 300, 600, 900, 1500];
   static const _seekRampWindow = Duration(milliseconds: 850);
+  static const _nativeFallbackTimeout = Duration(seconds: 15);
+  static const _nativeScrobbleStartAfter = Duration(seconds: 25);
+  static const _defaultScrobbleStartAfter = Duration(seconds: 5);
   TraversalDirection? _lastSeekRampDirection;
   DateTime? _lastSeekRampAt;
   int _seekRampIndex = 0;
@@ -237,6 +240,7 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
   }
 
   Duration? _scrobbleStartedAt;
+  DateTime? _nativePlaybackOpenedAt;
 
   Duration get _externalDuration {
     final ms = (widget.payload['playbackDurationMs'] as num?)?.toInt() ?? 0;
@@ -384,8 +388,9 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
 
   Future<void> _openNativePlayback(String source) async {
     await _playback.open(source);
+    if (_playback.isNativeAndroid) _nativePlaybackOpenedAt = DateTime.now();
     if (!mounted || _externalMode || !_nativeLoadingScrimVisible) return;
-    _nativeLoadingTimeout = Timer(const Duration(seconds: 8), () {
+    _nativeLoadingTimeout = Timer(_nativeFallbackTimeout, () {
       if (_nativeLoadingScrimVisible) unawaited(_handleNativePlaybackFailure());
     });
   }
@@ -435,18 +440,21 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
       );
       return;
     }
-    setState(
-      () => _externalStatus =
-          'MX Player switch cancelled. Press Back to return to Warp.',
-    );
+    await _finishExternalPlayback();
   }
 
   void _onPosition(Duration pos) {
     final dur = _playback.duration;
     if (dur.inSeconds == 0) return;
 
-    // Fire scrobble start once playback is 5 seconds in
-    if (_scrobbleStartedAt == null && pos.inSeconds >= 5) {
+    final nativeScrobbleReady =
+        _nativePlaybackOpenedAt != null &&
+        DateTime.now().difference(_nativePlaybackOpenedAt!) >=
+            _nativeScrobbleStartAfter;
+    final shouldStart = _playback.isNativeAndroid
+        ? nativeScrobbleReady
+        : pos >= _defaultScrobbleStartAfter;
+    if (_scrobbleStartedAt == null && shouldStart) {
       _scrobbleStartedAt = pos;
       _sendScrobble('start', pos, dur);
     }
@@ -2793,19 +2801,25 @@ class _NativePlaybackFallbackDialogState
     extends State<_NativePlaybackFallbackDialog> {
   Timer? _countdown;
   int _secondsRemaining = 5;
+  bool _resolved = false;
 
   @override
   void initState() {
     super.initState();
     _countdown = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (!mounted) return;
       if (_secondsRemaining <= 1) {
-        _countdown?.cancel();
-        Navigator.of(context).pop(true);
+        _resolve(true);
         return;
       }
-      setState(() => _secondsRemaining--);
+      if (mounted) setState(() => _secondsRemaining--);
     });
+  }
+
+  void _resolve(bool launchMx) {
+    if (_resolved) return;
+    _resolved = true;
+    _countdown?.cancel();
+    if (mounted) Navigator.of(context).pop(launchMx);
   }
 
   @override
@@ -2819,58 +2833,84 @@ class _NativePlaybackFallbackDialogState
     canPop: false,
     child: Dialog(
       backgroundColor: const Color(0xFF171719),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(18),
+        side: BorderSide(color: _uoscAccent.withAlpha(92)),
+      ),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 520),
+        constraints: const BoxConstraints(maxWidth: 680),
         child: Padding(
-          padding: const EdgeInsets.all(28),
+          padding: const EdgeInsets.fromLTRB(40, 36, 40, 32),
           child: Column(
             mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              const Icon(
-                Icons.warning_amber_rounded,
-                color: _uoscAccentLight,
-                size: 30,
+              Container(
+                width: 58,
+                height: 58,
+                decoration: BoxDecoration(
+                  color: _uoscAccent.withAlpha(38),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: _uoscAccentLight.withAlpha(180)),
+                ),
+                child: const Icon(
+                  Icons.warning_amber_rounded,
+                  color: _uoscAccentLight,
+                  size: 32,
+                ),
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 20),
               const Text(
                 'Native Playback Unavailable',
                 style: TextStyle(
                   color: Colors.white,
-                  fontSize: 22,
+                  fontSize: 26,
                   fontWeight: FontWeight.w800,
                 ),
+                textAlign: TextAlign.center,
               ),
-              const SizedBox(height: 10),
+              const SizedBox(height: 14),
               Text(
                 'This video cannot be played by the native Android player. '
                 'Switching to MX Player in $_secondsRemaining seconds.',
                 style: TextStyle(
-                  color: Colors.white.withAlpha(190),
-                  height: 1.35,
+                  color: Colors.white.withAlpha(215),
+                  fontSize: 17,
+                  height: 1.45,
                 ),
+                textAlign: TextAlign.center,
               ),
-              const SizedBox(height: 24),
-              Align(
-                alignment: Alignment.centerRight,
-                child: DpadFocusable(
-                  autofocus: true,
-                  onSelect: () => Navigator.of(context).pop(false),
-                  builder: (context, state, child) => OutlinedButton(
-                    onPressed: () => Navigator.of(context).pop(false),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: Colors.white,
-                      side: BorderSide(
-                        color: state.focused
-                            ? _uoscAccentLight
-                            : Colors.white.withAlpha(90),
-                        width: state.focused ? 2 : 1,
-                      ),
+              const SizedBox(height: 30),
+              DpadFocusable(
+                autofocus: true,
+                onSelect: () => _resolve(false),
+                builder: (context, state, child) => Container(
+                  width: 236,
+                  height: 58,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: state.focused
+                        ? _uoscAccent.withAlpha(54)
+                        : Colors.white.withAlpha(12),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: state.focused
+                          ? _uoscAccentLight
+                          : _uoscAccent.withAlpha(115),
+                      width: state.focused ? 3 : 1,
                     ),
-                    child: const Text('Cancel'),
                   ),
-                  child: const SizedBox.shrink(),
+                  child: child,
+                ),
+                child: const Center(
+                  child: Text(
+                    'Cancel',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
                 ),
               ),
             ],
