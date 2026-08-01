@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import '../../theme/warp_theme.dart';
 import '../../theme/warp_tokens.dart';
 import 'warp_context_menu.dart';
+import '../../navigation/after_frame.dart';
 
 class WarpDpadButton extends StatefulWidget {
   const WarpDpadButton({
@@ -195,7 +196,7 @@ class _WarpDpadTextFieldState extends State<WarpDpadTextField> {
   void _enterEditMode() {
     widget.fieldFocusNode.requestFocus();
     if (!widget.moveCursorToEndOnEnter) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    afterNextFrame((_) {
       if (!mounted) return;
       widget.controller.selection = TextSelection.collapsed(
         offset: widget.controller.text.length,

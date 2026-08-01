@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../navigation/after_frame.dart';
 
 mixin ModalFocusRestore<T extends StatefulWidget>
     on State<T>, WidgetsBindingObserver {
@@ -23,7 +24,7 @@ mixin ModalFocusRestore<T extends StatefulWidget>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _appActive = state == AppLifecycleState.resumed;
     if (!_appActive) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    afterNextFrame((_) {
       final node = _lastModalFocus;
       if (mounted && node?.context != null) node?.requestFocus();
     });

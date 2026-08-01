@@ -15,6 +15,7 @@ import '../theme/warp_theme.dart';
 import '../theme/warp_tokens.dart';
 import '../widgets/layout/backdrop_layer.dart';
 import '../widgets/shared/warp_accent_button.dart';
+import '../navigation/after_frame.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PowerPage — mirrors Tauri PowerTab.tsx
@@ -88,7 +89,7 @@ class _PowerPageState extends ConsumerState<PowerPage>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _appActive = state == AppLifecycleState.resumed;
     if (_appActive) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
+      afterNextFrame((_) {
         final node = _lastPowerFocus;
         if (mounted && node?.context != null) node?.requestFocus();
       });

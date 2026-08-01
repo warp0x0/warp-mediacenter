@@ -13,6 +13,7 @@ import '../providers/detail_provider.dart';
 import '../theme/warp_tokens.dart';
 import '../widgets/media/subtitle_dialog.dart';
 import '../widgets/shared/tv_modal_chrome_scale.dart';
+import '../navigation/after_frame.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PlaybackPage — full-screen video player
@@ -912,7 +913,7 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage>
       } catch (_) {}
     }
     FocusManager.instance.primaryFocus?.unfocus();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    afterNextFrame((_) {
       if (!mounted || _exiting || !_isCurrentRoute) return;
       Dpad.of(context).requestFocus(_seekBarFocus);
       _resetHideTimer();

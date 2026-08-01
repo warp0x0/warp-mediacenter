@@ -12,6 +12,7 @@ import '../../theme/warp_theme.dart';
 import '../../theme/warp_tokens.dart';
 import '../shared/modal_focus_restore.dart';
 import '../shared/tv_modal_chrome_scale.dart';
+import '../../navigation/after_frame.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TrailerDialog — plays YouTube trailers through the active trailer player.
@@ -62,7 +63,7 @@ class _TrailerDialogState extends ConsumerState<TrailerDialog>
     _selectedIndex = 0;
     _syncSelectorFocusNodes();
     _loadTrailer(_selectedIndex);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    afterNextFrame((_) {
       if (mounted) Dpad.of(context).requestFocus(_surfaceFocus);
     });
   }
@@ -128,7 +129,7 @@ class _TrailerDialogState extends ConsumerState<TrailerDialog>
   void _close() {
     if (_selectorOpen) {
       setState(() => _selectorOpen = false);
-      WidgetsBinding.instance.addPostFrameCallback((_) {
+      afterNextFrame((_) {
         if (mounted) Dpad.of(context).requestFocus(_surfaceFocus);
       });
       return;
@@ -152,7 +153,7 @@ class _TrailerDialogState extends ConsumerState<TrailerDialog>
       await _openStreams(streams);
       if (!mounted || generation != _loadGeneration) return;
       setState(() => _loading = false);
-      WidgetsBinding.instance.addPostFrameCallback((_) {
+      afterNextFrame((_) {
         if (mounted) Dpad.of(context).requestFocus(_surfaceFocus);
       });
     } catch (e) {
@@ -250,7 +251,7 @@ class _TrailerDialogState extends ConsumerState<TrailerDialog>
     if (_trailers.length <= 1) return;
     _syncSelectorFocusNodes();
     setState(() => _selectorOpen = true);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    afterNextFrame((_) {
       if (mounted) _scrollSelectedTrailerIntoView();
     });
   }

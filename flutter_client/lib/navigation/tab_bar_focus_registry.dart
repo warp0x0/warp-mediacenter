@@ -17,38 +17,64 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 // runtime (Movies/Shows, once Continue Watching et al. can appear or vanish
 // mid-session) can't rely on the raw dpad package's one-shot spatial guess:
 // that guess is made against whatever happens to be built *right now*, with
-// no way to wait for a freshly-appeared row's widget to actually mount, which
-// is exactly the "lands on nothing, resolves on the second press" bug this
-// was added to fix. A page instead registers an explicit onDown handler here,
-// giving it the chance to run the same scroll-then-focus-with-retry path
-// inter-row navigation already uses. Pages that don't need this (Search,
-// Library, Settings, Power) simply don't register one, and Down falls through
-// to the default spatial navigation exactly as it does today.
+// no way to wait for a freshly-appeared row's widget to actually mount. A
+// page instead registers an explicit onDown handler here, giving it the
+// chance to run the same scroll-then-focus-with-retry path inter-row
+// navigation already uses. Pages that don't need this (Search, Library,
+// Settings, Power) simply don't register one, and Down falls through to the
+// default spatial navigation exactly as it does today.
 //
-// App-global (one instance for the whole app, unlike RowFirstCardRegistry),
-// since there is only ever one tab bar.
+// ── Why removal is identity-checked ──────────────────────────────────────────
+//
+// Flutter mounts a replacement element *before* unmounting the one it
+// replaces, so during a rebuild the order is: new State.initState (registers
+// itself) -> old State.dispose (removes the entry for its route). A plain
+// `remove(route)` in the old instance therefore deletes the *new* instance's
+// registration, leaving the route with no entry at all — Down/Up then find
+// nothing and the key press looks swallowed.
+//
+// Both removals take the exact object that was registered and drop the entry
+// only if it is still that object, so a late-disposing predecessor cannot
+// clobber its successor. That is why removal takes an argument that otherwise
+// looks redundant.
+//
+// Callers must also capture this registry in a field rather than reaching for
+// `ref.read` inside dispose(): Riverpod throws on `ref` once a widget is
+// being unmounted, and that throw aborts dispose() before the removal ever
+// runs, which is how dead nodes and dead handlers accumulated here in the
+// first place.
 // ─────────────────────────────────────────────────────────────────────────────
 
+typedef TabDownHandler = bool Function();
+
 class TabBarFocusRegistry {
-  final _nodes = <String, FocusNode>{}; // keyed by route path, e.g. '/', '/shows', '/search'
-  final _onDown = <String, bool Function()>{};
+  final _nodes = <String, FocusNode>{}; // keyed by route path, e.g. '/', '/shows'
+  final _onDown = <String, TabDownHandler>{};
 
   void register(String route, FocusNode node) => _nodes[route] = node;
 
-  void unregister(String route) => _nodes.remove(route);
+  /// Drops [route]'s node only if it is still [node] — see the identity note
+  /// in this file's header.
+  void unregister(String route, FocusNode node) {
+    if (identical(_nodes[route], node)) _nodes.remove(route);
+  }
 
   FocusNode? forRoute(String route) => _nodes[route];
 
   /// [handler] runs when Down is pressed while [route]'s tab pill has focus.
   /// Return true once the page has taken over placing focus itself (even if
   /// asynchronously); return false to fall through to default spatial nav.
-  void registerOnDown(String route, bool Function() handler) =>
+  void registerOnDown(String route, TabDownHandler handler) =>
       _onDown[route] = handler;
 
-  void unregisterOnDown(String route) => _onDown.remove(route);
+  /// Drops [route]'s handler only if it is still [handler].
+  void unregisterOnDown(String route, TabDownHandler handler) {
+    if (identical(_onDown[route], handler)) _onDown.remove(route);
+  }
 
-  bool Function()? onDownFor(String route) => _onDown[route];
+  TabDownHandler? onDownFor(String route) => _onDown[route];
 }
 
-final tabBarFocusRegistryProvider =
-    Provider<TabBarFocusRegistry>((ref) => TabBarFocusRegistry());
+final tabBarFocusRegistryProvider = Provider<TabBarFocusRegistry>(
+  (ref) => TabBarFocusRegistry(),
+);

@@ -6,6 +6,7 @@ import '../../theme/warp_theme.dart';
 import '../../theme/warp_tokens.dart';
 import 'modal_focus_restore.dart';
 import 'tv_modal_chrome_scale.dart';
+import '../../navigation/after_frame.dart';
 
 class WarpContextMenuItem {
   const WarpContextMenuItem({
@@ -54,7 +55,7 @@ Future<void> showWarpContextMenu(
     ),
   );
 
-  WidgetsBinding.instance.addPostFrameCallback((_) {
+  afterNextFrame((_) {
     if (focusToRestore?.context != null) focusToRestore?.requestFocus();
   });
 }

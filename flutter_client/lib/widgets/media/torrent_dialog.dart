@@ -14,6 +14,7 @@ import '../../theme/warp_tokens.dart';
 import '../shared/dpad_controls.dart';
 import '../shared/modal_focus_restore.dart';
 import '../shared/tv_modal_chrome_scale.dart';
+import '../../navigation/after_frame.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TorrentDialog — search → resolve → poll → stream → preload → navigate
@@ -174,7 +175,7 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
   }
 
   void _focusProgressAnchor() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    afterNextFrame((_) {
       if (!mounted || !_hasProgressCancel) return;
       Dpad.of(context).requestFocus(_searchWrapperFocus);
     });
@@ -240,7 +241,7 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
       _localConfirmReason = reason;
       _banner = null;
     });
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    afterNextFrame((_) {
       if (!mounted || _localConfirmResult == null) return;
       Dpad.of(context).requestFocus(_localConfirmCancelFocus);
     });

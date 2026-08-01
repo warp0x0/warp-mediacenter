@@ -17,6 +17,7 @@ import '../theme/warp_tokens.dart';
 import '../widgets/cards/poster_card.dart';
 import '../widgets/layout/backdrop_layer.dart';
 import '../widgets/shared/dpad_controls.dart';
+import '../navigation/after_frame.dart';
 
 const _kPageSize = 20;
 
@@ -292,7 +293,7 @@ class _CatalogBrowsePageState extends ConsumerState<CatalogBrowsePage>
 
   void _restoreReturnFocus() {
     final node = widget.returnFocusNode;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    afterNextFrame((_) {
       if (node?.context != null) node?.requestFocus();
     });
   }
