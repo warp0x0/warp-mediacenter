@@ -20,6 +20,7 @@ import '../widgets/media/scan_dialog.dart';
 import '../widgets/shared/dpad_controls.dart';
 import '../widgets/shared/modal_focus_restore.dart';
 import '../widgets/shared/tv_modal_chrome_scale.dart';
+import '../navigation/after_frame.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared enums / helpers
@@ -177,7 +178,7 @@ class _LibraryPageState extends ConsumerState<LibraryPage>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _appActive = state == AppLifecycleState.resumed;
     if (_appActive) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
+      afterNextFrame((_) {
         final node = _lastLibraryFocus;
         if (mounted && node?.context != null) node?.requestFocus();
       });
@@ -592,7 +593,7 @@ class _SortButton extends StatelessWidget {
               context: context,
               builder: (_) => _SortDialog(current: sortValue, t: t),
             );
-            WidgetsBinding.instance.addPostFrameCallback((_) {
+            afterNextFrame((_) {
               if (focusNode?.context != null) focusNode?.requestFocus();
             });
             if (result != null) onSort(result);
@@ -1577,7 +1578,7 @@ class _DiscoverRibbonState extends ConsumerState<_DiscoverRibbon> {
 
   @override
   void dispose() {
-    widget.rowRegistry.unregister(widget.rowIndex);
+    widget.rowRegistry.clear(widget.rowIndex);
     _seeMoreFocusNode.dispose();
     for (final node in _focusNodes) {
       node.dispose();
@@ -1621,7 +1622,7 @@ class _DiscoverRibbonState extends ConsumerState<_DiscoverRibbon> {
         if (node.hasFocus) {
           _lastFocusedIndex = index;
           widget.rowRegistry.register(widget.rowIndex, node);
-          WidgetsBinding.instance.addPostFrameCallback((_) {
+          afterNextFrame((_) {
             if (mounted && node.hasFocus) _centerLibraryCard(node);
           });
         }
@@ -1631,7 +1632,7 @@ class _DiscoverRibbonState extends ConsumerState<_DiscoverRibbon> {
     if (_focusNodes.isNotEmpty) {
       widget.rowRegistry.register(widget.rowIndex, _focusNodes.first);
     } else {
-      widget.rowRegistry.unregister(widget.rowIndex);
+      widget.rowRegistry.clear(widget.rowIndex);
     }
   }
 
@@ -1661,7 +1662,7 @@ class _DiscoverRibbonState extends ConsumerState<_DiscoverRibbon> {
       data: (catalog) {
         _syncFocusNodes(catalog.items.length);
         if (catalog.items.isEmpty) {
-          widget.rowRegistry.unregister(widget.rowIndex);
+          widget.rowRegistry.clear(widget.rowIndex);
           return const SizedBox.shrink();
         }
         return Column(
@@ -2149,7 +2150,7 @@ class _LocalRibbonState extends State<_LocalRibbon> {
     if (oldWidget.items.length != widget.items.length ||
         oldWidget.rowIndex != widget.rowIndex) {
       if (oldWidget.rowIndex != widget.rowIndex) {
-        widget.rowRegistry.unregister(oldWidget.rowIndex);
+        widget.rowRegistry.clear(oldWidget.rowIndex);
       }
       _syncFocusNodes(widget.items.length);
     }
@@ -2157,7 +2158,7 @@ class _LocalRibbonState extends State<_LocalRibbon> {
 
   @override
   void dispose() {
-    widget.rowRegistry.unregister(widget.rowIndex);
+    widget.rowRegistry.clear(widget.rowIndex);
     _seeMoreFocusNode.dispose();
     for (final node in _focusNodes) {
       node.dispose();
@@ -2176,7 +2177,7 @@ class _LocalRibbonState extends State<_LocalRibbon> {
         if (node.hasFocus) {
           _lastFocusedIndex = index;
           widget.rowRegistry.register(widget.rowIndex, node);
-          WidgetsBinding.instance.addPostFrameCallback((_) {
+          afterNextFrame((_) {
             if (mounted && node.hasFocus) _centerLibraryCard(node);
           });
         }
@@ -2186,7 +2187,7 @@ class _LocalRibbonState extends State<_LocalRibbon> {
     if (_focusNodes.isNotEmpty) {
       widget.rowRegistry.register(widget.rowIndex, _focusNodes.first);
     } else {
-      widget.rowRegistry.unregister(widget.rowIndex);
+      widget.rowRegistry.clear(widget.rowIndex);
     }
   }
 

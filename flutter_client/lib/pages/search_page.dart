@@ -15,6 +15,7 @@ import '../theme/warp_tokens.dart';
 import '../widgets/cards/poster_card.dart';
 import '../widgets/layout/backdrop_layer.dart';
 import '../widgets/shared/dpad_controls.dart';
+import '../navigation/after_frame.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SearchPage — mirrors Tauri's SearchPage.tsx exactly
@@ -114,7 +115,7 @@ class _SearchPageState extends ConsumerState<SearchPage>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _appActive = state == AppLifecycleState.resumed;
     if (_appActive) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
+      afterNextFrame((_) {
         final node = _lastSearchFocus;
         if (mounted && node?.context != null) node?.requestFocus();
       });
@@ -349,7 +350,7 @@ class _SearchPageState extends ConsumerState<SearchPage>
       // list is now empty.
       if (_historyXFocusNodes.isNotEmpty) {
         final target = index.clamp(0, _historyXFocusNodes.length - 1);
-        WidgetsBinding.instance.addPostFrameCallback((_) {
+        afterNextFrame((_) {
           if (mounted) {
             Dpad.of(context).requestFocus(_historyXFocusNodes[target]);
           }
@@ -1231,7 +1232,7 @@ class _ResultRibbonState extends State<_ResultRibbon> {
   void initState() {
     super.initState();
     _rebuildFocusNodes();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    afterNextFrame((_) {
       if (!mounted || _focusNodes.isEmpty) return;
       widget.rowRegistry.register(widget.rowIndex, _focusNodes[0]);
       // A fresh mount of the 1st ribbon only ever happens right after a
@@ -1328,7 +1329,7 @@ class _ResultRibbonState extends State<_ResultRibbon> {
     if (old.items.length != widget.items.length ||
         old.rowIndex != widget.rowIndex) {
       if (old.rowIndex != widget.rowIndex) {
-        widget.rowRegistry.unregister(old.rowIndex);
+        widget.rowRegistry.clear(old.rowIndex);
       }
       for (final fn in _focusNodes) {
         fn.dispose();
@@ -1337,14 +1338,14 @@ class _ResultRibbonState extends State<_ResultRibbon> {
       if (_focusNodes.isNotEmpty) {
         widget.rowRegistry.register(widget.rowIndex, _focusNodes[0]);
       } else {
-        widget.rowRegistry.unregister(widget.rowIndex);
+        widget.rowRegistry.clear(widget.rowIndex);
       }
     }
   }
 
   @override
   void dispose() {
-    widget.rowRegistry.unregister(widget.rowIndex);
+    widget.rowRegistry.clear(widget.rowIndex);
     for (final fn in _focusNodes) {
       fn.dispose();
     }

@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../api/catalog_constants.dart';
 import '../../models/media.dart';
+import '../../navigation/after_frame.dart';
 import '../../navigation/catalog_browse_route_extra.dart';
 import '../../navigation/row_first_card_registry.dart';
 import '../../navigation/tab_bar_focus_registry.dart';
@@ -118,7 +119,7 @@ class _WidgetSectionState extends ConsumerState<WidgetSection>
     _synopsisScroll = ScrollController();
     _rebuildFocusNodes();
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    afterNextFrame((_) {
       if (!mounted) return;
       _registerFirstCard();
       if (widget.initialFocus && _focusNodes.isNotEmpty) {
@@ -236,7 +237,13 @@ class _WidgetSectionState extends ConsumerState<WidgetSection>
   }
 
   void _rebuildFocusNodes() {
-    _focusNodes = List.generate(widget.items.length, (_) => FocusNode());
+    // Labelled by the row's stable id (not rowIndex, which shifts as rows
+    // appear/vanish) so a focused card stays identifiable in devtools focus
+    // dumps and in focus-traversal tests.
+    _focusNodes = List.generate(
+      widget.items.length,
+      (i) => FocusNode(debugLabel: 'RibbonCard-r${widget.stableId}-c$i'),
+    );
     for (var i = 0; i < _focusNodes.length; i++) {
       final idx = i;
       _focusNodes[idx].addListener(() {
@@ -245,17 +252,34 @@ class _WidgetSectionState extends ConsumerState<WidgetSection>
     }
   }
 
-  void _registerFirstCard() {
-    if (!mounted || _focusNodes.isEmpty) {
-      widget.rowRegistry.unregister(widget.rowIndex);
-      return;
+  // What this row currently has in the registry, so it can withdraw exactly
+  // its own entry. Withdrawing by index alone lets a row that is disposing
+  // (or has just moved) delete the entry a different, live row already owns
+  // for that index — see RowFirstCardRegistry.unregister.
+  FocusNode? _registeredNode;
+  int? _registeredIndex;
+
+  void _unregisterSelf() {
+    final node = _registeredNode;
+    final index = _registeredIndex;
+    if (node != null && index != null) {
+      widget.rowRegistry.unregister(index, node);
     }
+    _registeredNode = null;
+    _registeredIndex = null;
+  }
+
+  void _registerFirstCard() {
+    _unregisterSelf();
+    if (!mounted || _focusNodes.isEmpty) return;
     widget.rowRegistry.register(
       widget.rowIndex,
       _focusNodes[0],
       revealFirstCard: _revealFirstCard,
       republishBackdrop: _republishSelectedBackdrop,
     );
+    _registeredNode = _focusNodes[0];
+    _registeredIndex = widget.rowIndex;
     widget.onFirstCardRegistered?.call(widget.rowIndex);
   }
 
@@ -269,7 +293,10 @@ class _WidgetSectionState extends ConsumerState<WidgetSection>
       _resetSynopsis();
     }
     _setBackdropForIndex(0);
-    await WidgetsBinding.instance.endOfFrame;
+    // Not `WidgetsBinding.instance.endOfFrame` — this runs inside a post-frame
+    // callback, where endOfFrame does not schedule the frame it waits on. See
+    // awaitNextFrame.
+    await awaitNextFrame();
   }
 
   void _republishSelectedBackdrop() {
@@ -323,7 +350,6 @@ class _WidgetSectionState extends ConsumerState<WidgetSection>
       // focus nodes themselves, so scroll offset/selection/focus survive the
       // reflow — and so the page's pending-focus retry (keyed by index) can
       // find this row once it lands at the index it's waiting on.
-      widget.rowRegistry.unregister(old.rowIndex);
       _registerFirstCard();
     }
     if (hadFocus && widget.items.isNotEmpty) {
@@ -333,7 +359,7 @@ class _WidgetSectionState extends ConsumerState<WidgetSection>
 
   @override
   void dispose() {
-    widget.rowRegistry.unregister(widget.rowIndex);
+    _unregisterSelf();
     _synopsisTimer?.cancel();
     _ribbonScroll.dispose();
     _synopsisScroll.dispose();

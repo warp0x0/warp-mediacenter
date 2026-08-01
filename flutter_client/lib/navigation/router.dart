@@ -343,31 +343,39 @@ class _TabPill extends ConsumerStatefulWidget {
 }
 
 class _TabPillState extends ConsumerState<_TabPill> {
-  final _focusNode = FocusNode(debugLabel: 'TabPill');
+  late final FocusNode _focusNode = FocusNode(
+    debugLabel: 'TabPill-${widget.tab.route}',
+  );
   bool _hovered = false;
+
+  // Captured once, because dispose() must not touch `ref`: Riverpod throws
+  // ("Using ref when a widget is about to or has been unmounted is unsafe")
+  // and that throw aborts dispose() before the pill ever deregisters —
+  // leaving the registry pointing at a FocusNode whose element is gone. Up
+  // from a row then "focused" a ghost pill, and the pill the user could see
+  // highlighted was no longer the node receiving keys.
+  late final TabBarFocusRegistry _registry = ref.read(
+    tabBarFocusRegistryProvider,
+  );
 
   @override
   void initState() {
     super.initState();
-    ref
-        .read(tabBarFocusRegistryProvider)
-        .register(widget.tab.route, _focusNode);
+    _registry.register(widget.tab.route, _focusNode);
   }
 
   @override
   void didUpdateWidget(_TabPill old) {
     super.didUpdateWidget(old);
     if (old.tab.route != widget.tab.route) {
-      ref.read(tabBarFocusRegistryProvider).unregister(old.tab.route);
-      ref
-          .read(tabBarFocusRegistryProvider)
-          .register(widget.tab.route, _focusNode);
+      _registry.unregister(old.tab.route, _focusNode);
+      _registry.register(widget.tab.route, _focusNode);
     }
   }
 
   @override
   void dispose() {
-    ref.read(tabBarFocusRegistryProvider).unregister(widget.tab.route);
+    _registry.unregister(widget.tab.route, _focusNode);
     _focusNode.dispose();
     super.dispose();
   }

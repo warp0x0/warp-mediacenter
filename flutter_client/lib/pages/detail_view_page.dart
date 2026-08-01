@@ -25,6 +25,7 @@ import '../widgets/layout/backdrop_layer.dart';
 import '../widgets/media/torrent_dialog.dart';
 import '../widgets/media/trailer_dialog.dart';
 import '../widgets/shared/warp_context_menu.dart';
+import '../navigation/after_frame.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helper types
@@ -225,7 +226,7 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
 
   void _restoreOriginFocus() {
     final node = widget.returnFocusNode;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    afterNextFrame((_) {
       if (node?.context != null) node?.requestFocus();
     });
   }
@@ -560,7 +561,7 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _appActive = state == AppLifecycleState.resumed;
     if (_appActive) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
+      afterNextFrame((_) {
         final node = _lastDetailFocus;
         if (mounted && node?.context != null) node?.requestFocus();
       });
@@ -1208,7 +1209,7 @@ class _DetailViewPageState extends ConsumerState<DetailViewPage>
         _showDeferredSections && !_isShow && collectionItems.isNotEmpty;
     if (!_initialFocusRequested && !isDetailLoading) {
       _initialFocusRequested = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
+      afterNextFrame((_) {
         if (mounted) _heroEntryNode.requestFocus();
       });
     }
@@ -2723,7 +2724,7 @@ class _EpisodesSectionState extends State<_EpisodesSection> {
     final node = _episodeFocusNodes.isNotEmpty ? _episodeFocusNodes.last : null;
     if (identical(node, _reportedLastEpisodeFocusNode)) return;
     _reportedLastEpisodeFocusNode = node;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    afterNextFrame((_) {
       if (mounted) widget.onLastEpisodeFocusChanged(node);
     });
   }
@@ -5046,7 +5047,7 @@ class _ResumeModalState extends State<_ResumeModal> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    afterNextFrame((_) {
       if (!mounted) return;
       if (!Dpad.of(context).requestFocus(_continueFocus)) {
         _continueFocus.requestFocus();

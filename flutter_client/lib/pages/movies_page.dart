@@ -9,6 +9,7 @@ import '../api/catalog_constants.dart';
 import '../models/catalog.dart';
 import '../providers/catalog_provider.dart';
 import '../providers/detail_provider.dart';
+import '../navigation/after_frame.dart';
 import '../navigation/row_first_card_registry.dart';
 import '../navigation/tab_bar_focus_registry.dart';
 import '../widgets/media/widget_section.dart';
@@ -69,6 +70,17 @@ class _MoviesPageState extends ConsumerState<MoviesPage> with RouteAware {
 
   static const _ownRoute = '/';
 
+  // Captured in a field, never read from `ref` inside dispose(): Riverpod
+  // throws once the widget is unmounting, and that throw aborted dispose()
+  // before this page could deregister — so a disposed page's onDown handler
+  // stayed live in the registry. Down from the tab pill then ran against a
+  // dead State, returned true (consuming the key) and placed no focus, which
+  // is precisely "the pill keeps focus and nothing happens".
+  late final TabBarFocusRegistry _registry = ref.read(
+    tabBarFocusRegistryProvider,
+  );
+  late final TabDownHandler _onTabDown;
+
   @override
   void initState() {
     super.initState();
@@ -80,11 +92,15 @@ class _MoviesPageState extends ConsumerState<MoviesPage> with RouteAware {
     // than the raw dpad package's one-shot spatial guess — see
     // TabBarFocusRegistry's doc comment for why that guess isn't enough once
     // rows can appear/vanish mid-session.
-    ref.read(tabBarFocusRegistryProvider).registerOnDown(_ownRoute, () {
-      if (_visibleRows.isEmpty) return false;
+    //
+    // Held in a field so dispose() can deregister *this* handler by identity
+    // without touching `ref` — see the note on _registry below.
+    _onTabDown = () {
+      if (!mounted || _visibleRows.isEmpty) return false;
       unawaited(_focusRowByDpad(0));
       return true;
-    });
+    };
+    _registry.registerOnDown(_ownRoute, _onTabDown);
   }
 
   @override
@@ -96,7 +112,7 @@ class _MoviesPageState extends ConsumerState<MoviesPage> with RouteAware {
 
   @override
   void dispose() {
-    ref.read(tabBarFocusRegistryProvider).unregisterOnDown(_ownRoute);
+    _registry.unregisterOnDown(_ownRoute, _onTabDown);
     routeObserver.unsubscribe(this);
     _pageCtrl.dispose();
     super.dispose();
@@ -112,7 +128,7 @@ class _MoviesPageState extends ConsumerState<MoviesPage> with RouteAware {
         ? (_pageCtrl.page?.round() ?? _pageCtrl.initialPage)
         : _pageCtrl.initialPage;
     _rowRegistry.republishBackdrop(rowIndex);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    afterNextFrame((_) {
       if (mounted) _rowRegistry.republishBackdrop(rowIndex);
     });
   }
@@ -156,7 +172,7 @@ class _MoviesPageState extends ConsumerState<MoviesPage> with RouteAware {
     if (!_pageCtrl.hasClients) return;
     final currentPage = _pageCtrl.page?.round() ?? _pageCtrl.initialPage;
     if (currentPage == newIndex) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    afterNextFrame((_) {
       if (mounted && _pageCtrl.hasClients) _pageCtrl.jumpToPage(newIndex);
     });
   }
@@ -199,14 +215,14 @@ class _MoviesPageState extends ConsumerState<MoviesPage> with RouteAware {
 
   void _onFirstCardRegistered(int rowIndex) {
     if (_pendingDpadFocusRow != rowIndex) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
+    afterNextFrame((_) async {
       if (!mounted || _pendingDpadFocusRow != rowIndex) return;
       if (await _focusRowFirstCard(rowIndex)) _pendingDpadFocusRow = null;
     });
   }
 
   void _focusTabBar() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    afterNextFrame((_) {
       if (!mounted || GoRouterState.of(context).uri.path != '/') return;
       final tab = ref.read(tabBarFocusRegistryProvider).forRoute('/');
       if (tab != null) Dpad.of(context).requestFocus(tab);
@@ -236,7 +252,7 @@ class _MoviesPageState extends ConsumerState<MoviesPage> with RouteAware {
         _trackpadAccum = 0.0;
       }
     }
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
+    afterNextFrame((_) async {
       if (!mounted || _pendingDpadFocusRow != rowIndex) return;
       if (await _focusRowFirstCard(rowIndex)) _pendingDpadFocusRow = null;
     });
@@ -311,7 +327,7 @@ class _MoviesPageState extends ConsumerState<MoviesPage> with RouteAware {
 
     if (!_initialFocusAttempted) {
       _initialFocusAttempted = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
+      afterNextFrame((_) {
         if (mounted) _focusRowByDpad(0);
       });
     }

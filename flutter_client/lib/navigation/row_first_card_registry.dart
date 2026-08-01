@@ -33,7 +33,25 @@ class RowFirstCardRegistry {
     republishBackdrop: republishBackdrop,
   );
 
-  void unregister(int rowIndex) => _entries.remove(rowIndex);
+  /// Drops [rowIndex]'s entry only if it is still [node]'s.
+  ///
+  /// Flutter mounts a replacement element before unmounting the one it
+  /// replaces, and a row that shifts position re-registers under its new
+  /// index — so an unconditional remove here lets a late-disposing row delete
+  /// the entry a *different*, live row already claimed for that index. The
+  /// slot then reads as empty and cross-row navigation lands nowhere.
+  void unregister(int rowIndex, FocusNode node) {
+    if (identical(_entries[rowIndex]?.node, node)) _entries.remove(rowIndex);
+  }
+
+  /// Unconditional removal, regardless of who owns the slot.
+  ///
+  /// Only for callers that do not track which node they registered (the
+  /// Library and Search row widgets). They carry the same clobber hazard
+  /// [unregister] exists to prevent, but neither is part of the tab-bar /
+  /// Movies / Shows traversal this was written to fix, so they keep their
+  /// existing behaviour rather than being changed blind.
+  void clear(int rowIndex) => _entries.remove(rowIndex);
 
   FocusNode? entryFor(int rowIndex) => _entries[rowIndex]?.node;
 
