@@ -14,7 +14,7 @@ from warp_mediacenter.config.settings import get_database_path
 
 log = get_logger(__name__)
 
-_SCHEMA_VERSION = 6
+_SCHEMA_VERSION = 7
 
 
 def _resolve_path(path: Optional[Path]) -> Path:
@@ -79,6 +79,8 @@ def migrate(connection: sqlite3.Connection) -> None:
         _apply_v5(connection)
     if current < 6:
         _apply_v6(connection)
+    if current < 7:
+        _apply_v7(connection)
 
     connection.execute(
         "INSERT OR REPLACE INTO schema_version (version) VALUES (?)",
@@ -300,6 +302,53 @@ def _apply_v6(connection: sqlite3.Connection) -> None:
         WHERE source_type = 'local'
           AND file_path IS NULL
           AND (url IS NULL OR url = '')
+        """
+    )
+
+
+def _apply_v7(connection: sqlite3.Connection) -> None:
+    """Plugin registry and per-plugin secret storage.
+
+    ``plugin_state`` replaces the plugin registry that previously lived in
+    ``user_settings.json`` — that file is rewritten wholesale and non-atomically
+    by several writers, so it was never a safe home for state a user toggles.
+
+    The partial unique index is what enforces "exactly one enabled plugin per
+    exclusive category" (trackers, skins).  Doing it in the schema rather than in
+    Python means two concurrent enables cannot both win and the invariant
+    survives a crash midway through a switch.
+    """
+
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS plugin_state (
+            plugin_id     TEXT PRIMARY KEY,
+            category      TEXT NOT NULL,
+            name          TEXT NOT NULL,
+            version       TEXT NOT NULL,
+            path          TEXT NOT NULL,
+            manifest_json TEXT NOT NULL,
+            exclusive     INTEGER NOT NULL DEFAULT 0,
+            enabled       INTEGER NOT NULL DEFAULT 0,
+            db_version    INTEGER NOT NULL DEFAULT 0,
+            installed_at  TEXT NOT NULL,
+            updated_at    TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_plugin_state_category
+            ON plugin_state(category, enabled);
+
+        -- "Exactly one enabled" for exclusive categories, enforced by SQLite.
+        CREATE UNIQUE INDEX IF NOT EXISTS ix_plugin_active_exclusive
+            ON plugin_state(category) WHERE enabled = 1 AND exclusive = 1;
+
+        CREATE TABLE IF NOT EXISTS plugin_secrets (
+            plugin_id  TEXT NOT NULL,
+            k          TEXT NOT NULL,
+            v          TEXT,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (plugin_id, k)
+        );
         """
     )
 

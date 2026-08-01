@@ -21,17 +21,36 @@ class FileBrowserModal extends ConsumerStatefulWidget {
   /// current directory path. When false, clicking a file returns its path.
   final bool dirsOnly;
 
-  const FileBrowserModal({super.key, this.initialPath, this.dirsOnly = false});
+  /// Comma-separated extensions to show ("zip"). Directories are always listed
+  /// regardless, otherwise there would be no way to navigate to the file.
+  final String? ext;
+
+  /// Optional heading, e.g. "Select a plugin package".
+  final String? title;
+
+  const FileBrowserModal({
+    super.key,
+    this.initialPath,
+    this.dirsOnly = false,
+    this.ext,
+    this.title,
+  });
 
   static Future<String?> show(
     BuildContext context, {
     String? initialPath,
     bool dirsOnly = false,
+    String? ext,
+    String? title,
   }) {
     return showDialog<String?>(
       context: context,
-      builder: (_) =>
-          FileBrowserModal(initialPath: initialPath, dirsOnly: dirsOnly),
+      builder: (_) => FileBrowserModal(
+        initialPath: initialPath,
+        dirsOnly: dirsOnly,
+        ext: ext,
+        title: title,
+      ),
     );
   }
 
@@ -46,6 +65,16 @@ class _FileBrowserModalState extends ConsumerState<FileBrowserModal>
   String? _parent;
   bool _loading = false;
   String? _error;
+  // True while `_entries` holds a browse-remote result rather than a local
+  // directory listing — suppresses breadcrumbs/Up (a URL has no filesystem
+  // parent chain) and labels the section accordingly. Cleared the moment the
+  // user browses locally again (breadcrumb, Up, or a folder tap).
+  bool _remoteMode = false;
+
+  final _remoteUrlController = TextEditingController();
+  final _remoteFieldFocusNode = FocusNode(debugLabel: 'FileBrowser-remote-field');
+  final _remoteWrapperFocusNode = FocusNode(debugLabel: 'FileBrowser-remote-wrapper');
+  final _browseButtonFocusNode = FocusNode(debugLabel: 'FileBrowser-remote-browse');
 
   @override
   void initState() {
@@ -54,16 +83,61 @@ class _FileBrowserModalState extends ConsumerState<FileBrowserModal>
     _browse(_path);
   }
 
+  @override
+  void dispose() {
+    _remoteUrlController.dispose();
+    _remoteFieldFocusNode.dispose();
+    _remoteWrapperFocusNode.dispose();
+    _browseButtonFocusNode.dispose();
+    super.dispose();
+  }
+
   Future<void> _browse(String path) async {
     setState(() {
       _loading = true;
       _error = null;
+      _remoteMode = false;
     });
     try {
       final client = ref.read(apiClientProvider);
       final raw = await client.get<Map<String, dynamic>>(
         '/api/v1/files/browse',
-        params: {'path': path},
+        params: {
+          'path': path,
+          if (widget.ext != null && widget.ext!.isNotEmpty) 'ext': widget.ext,
+        },
+      );
+      final resp = FileBrowseResponse.fromJson(raw);
+      setState(() {
+        _path = resp.path;
+        _parent = resp.parent;
+        _entries = resp.entries;
+        _loading = false;
+      });
+    } catch (e) {
+      setState(() {
+        _error = e.toString();
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _browseRemote() async {
+    final url = _remoteUrlController.text.trim();
+    if (url.isEmpty) return;
+    setState(() {
+      _loading = true;
+      _error = null;
+      _entries = [];
+      _remoteMode = true;
+      _parent = null;
+      _path = url;
+    });
+    try {
+      final client = ref.read(apiClientProvider);
+      final raw = await client.get<Map<String, dynamic>>(
+        '/api/v1/files/browse-remote',
+        params: {'url': url},
       );
       final resp = FileBrowseResponse.fromJson(raw);
       setState(() {
@@ -139,28 +213,61 @@ class _FileBrowserModalState extends ConsumerState<FileBrowserModal>
                     _Header(
                       path: _path,
                       dirsOnly: widget.dirsOnly,
+                      title: widget.title,
                       onClose: () => Navigator.of(context).pop(),
                       t: t,
                     ),
 
-                    // Breadcrumb navigation
-                    _BreadcrumbRow(
-                      labels: _breadcrumbLabels(),
-                      onTap: (i) => _browse(_pathForCrumb(i)),
+                    // Remote URL — a direct link to a file (a plugin .zip
+                    // published on GitHub Pages, a network-share URL for a
+                    // library scan) as an alternative to browsing the
+                    // backend's own filesystem below.
+                    _RemoteUrlRow(
+                      controller: _remoteUrlController,
+                      fieldFocusNode: _remoteFieldFocusNode,
+                      wrapperFocusNode: _remoteWrapperFocusNode,
+                      browseFocusNode: _browseButtonFocusNode,
+                      onBrowse: _browseRemote,
                       t: t,
                     ),
+                    const _OrDivider(),
 
-                    // Up button
-                    if (_parent != null)
-                      _UpRow(onTap: () => _browse(_parent!), t: t),
+                    // Breadcrumb navigation
+                    if (!_remoteMode) ...[
+                      _BreadcrumbRow(
+                        labels: _breadcrumbLabels(),
+                        onTap: (i) => _browse(_pathForCrumb(i)),
+                        t: t,
+                      ),
+
+                      // Up button
+                      if (_parent != null)
+                        _UpRow(onTap: () => _browse(_parent!), t: t),
+                    ] else
+                      _RemoteResultLabel(t: t),
 
                     // Body
                     Expanded(
                       child: _loading
-                          ? const Center(
-                              child: CircularProgressIndicator(
-                                color: Color(0xFF0DB2E2),
-                                strokeWidth: 2,
+                          ? Center(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const CircularProgressIndicator(
+                                    color: Color(0xFF0DB2E2),
+                                    strokeWidth: 2,
+                                  ),
+                                  if (_remoteMode) ...[
+                                    const SizedBox(height: 12),
+                                    Text(
+                                      'Searching…',
+                                      style: TextStyle(
+                                        color: Colors.white.withAlpha(170),
+                                        fontSize: t.fontSubtitle,
+                                      ),
+                                    ),
+                                  ],
+                                ],
                               ),
                             )
                           : _error != null
@@ -257,9 +364,158 @@ class _FileBrowserModalState extends ConsumerState<FileBrowserModal>
   }
 }
 
+class _RemoteUrlRow extends StatelessWidget {
+  final TextEditingController controller;
+  final FocusNode fieldFocusNode;
+  final FocusNode wrapperFocusNode;
+  final FocusNode browseFocusNode;
+  final VoidCallback onBrowse;
+  final WarpTokens t;
+
+  const _RemoteUrlRow({
+    required this.controller,
+    required this.fieldFocusNode,
+    required this.wrapperFocusNode,
+    required this.browseFocusNode,
+    required this.onBrowse,
+    required this.t,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 14, 20, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Enter a remote URL — a network share for library scans, or a '
+            'direct link to a plugin package (e.g. hosted on GitHub Pages).',
+            style: TextStyle(
+              color: Colors.white.withAlpha(150),
+              fontSize: t.fontSubtitle,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: WarpDpadTextField(
+                  controller: controller,
+                  tokens: t,
+                  fieldFocusNode: fieldFocusNode,
+                  wrapperFocusNode: wrapperFocusNode,
+                  onSubmitted: (_) => onBrowse(),
+                  decoration: InputDecoration(
+                    isDense: true,
+                    hintText: 'https://example.com/plugin.zip',
+                    hintStyle: const TextStyle(color: Colors.white24),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide(color: Colors.white.withAlpha(30)),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide(color: Colors.white.withAlpha(30)),
+                    ),
+                  ),
+                  style: TextStyle(color: Colors.white, fontSize: t.fontBody),
+                ),
+              ),
+              const SizedBox(width: 10),
+              WarpDpadButton(
+                tokens: t,
+                focusNode: browseFocusNode,
+                onSelect: onBrowse,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 10,
+                ),
+                backgroundColor: const Color(0xFF0DB2E2).withAlpha(30),
+                borderColor: const Color(0xFF0DB2E2).withAlpha(80),
+                focusBackgroundColor: const Color(0xFF0DB2E2).withAlpha(60),
+                focusBorderColor: const Color(0xFF0DB2E2),
+                child: const Text(
+                  'Browse',
+                  style: TextStyle(
+                    color: Color(0xFF0DB2E2),
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _OrDivider extends StatelessWidget {
+  const _OrDivider();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+      child: Row(
+        children: [
+          Expanded(child: Divider(color: Colors.white.withAlpha(15), height: 1)),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            child: Text(
+              'OR',
+              style: TextStyle(
+                color: Colors.white.withAlpha(90),
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 1,
+              ),
+            ),
+          ),
+          Expanded(child: Divider(color: Colors.white.withAlpha(15), height: 1)),
+        ],
+      ),
+    );
+  }
+}
+
+class _RemoteResultLabel extends StatelessWidget {
+  final WarpTokens t;
+
+  const _RemoteResultLabel({required this.t});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 36,
+      alignment: Alignment.centerLeft,
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: Colors.white.withAlpha(8))),
+      ),
+      child: Text(
+        'Remote result',
+        style: TextStyle(
+          color: Colors.white.withAlpha(140),
+          fontSize: 12,
+          fontWeight: FontWeight.w500,
+        ),
+      ),
+    );
+  }
+}
+
 class _Header extends StatelessWidget {
   final String path;
   final bool dirsOnly;
+  final String? title;
   final VoidCallback onClose;
   final WarpTokens t;
 
@@ -268,6 +524,7 @@ class _Header extends StatelessWidget {
     required this.dirsOnly,
     required this.onClose,
     required this.t,
+    this.title,
   });
 
   @override
@@ -282,7 +539,7 @@ class _Header extends StatelessWidget {
           const Icon(Icons.folder_open, color: Color(0xFF0DB2E2), size: 20),
           const SizedBox(width: 10),
           Text(
-            dirsOnly ? 'Select Folder' : 'Browse Files',
+            title ?? (dirsOnly ? 'Select Folder' : 'Browse Files'),
             style: TextStyle(
               color: Colors.white,
               fontSize: t.fontBody,

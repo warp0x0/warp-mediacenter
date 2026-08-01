@@ -390,6 +390,13 @@ class _TabPillState extends ConsumerState<_TabPill> {
       child: DpadFocusable(
         focusNode: _focusNode,
         onSelect: widget.onSelect,
+        onDirection: (direction) {
+          if (direction != TraversalDirection.down) return false;
+          final handler = ref
+              .read(tabBarFocusRegistryProvider)
+              .onDownFor(widget.tab.route);
+          return handler?.call() ?? false;
+        },
         builder: (context, state, child) {
           final active = widget.isActive || state.focused || _hovered;
           // The active-tab pill and a focused pill share the exact same

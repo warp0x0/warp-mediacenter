@@ -1041,7 +1041,6 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
             ),
           ),
           DpadFocusable(
-            effects: const [],
             autoScroll: false,
             onSelect: widget.onClose,
             builder: (context, state, child) => Container(
@@ -1128,7 +1127,6 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
           ),
           const SizedBox(width: 10),
           DpadFocusable(
-            effects: const [],
             autoScroll: false,
             focusNode: _searchBtnFocus,
             enabled: !_isBusy,
@@ -1280,7 +1278,6 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
               ),
               if (b.kind == _BannerKind.progress)
                 DpadFocusable(
-                  effects: const [],
                   autoScroll: false,
                   focusNode: _bannerCancelFocus,
                   onDirection: _bannerCancelDirection,
@@ -1524,7 +1521,6 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
                     DpadFocusable(
-                      effects: const [],
                       autoScroll: false,
                       focusNode: _localConfirmCancelFocus,
                       autofocus: true,
@@ -1568,7 +1564,6 @@ class _TorrentDialogState extends ConsumerState<TorrentDialog>
                     ),
                     const SizedBox(width: 10),
                     DpadFocusable(
-                      effects: const [],
                       autoScroll: false,
                       focusNode: _localConfirmDownloadFocus,
                       onDirection: _localConfirmDownloadDirection,
@@ -1634,7 +1629,6 @@ class _TorrentScrollRail extends StatelessWidget {
       width: 24,
       child: Center(
         child: DpadFocusable(
-          effects: const [],
           autoScroll: false,
           focusNode: focusNode,
           onDirection: onDirection,
@@ -1695,7 +1689,6 @@ class _ResultRowState extends State<_ResultRow> {
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
       child: DpadFocusable(
-        effects: const [],
         autoScroll: false,
         focusNode: widget.focusNode,
         enabled: !widget.isBusy,

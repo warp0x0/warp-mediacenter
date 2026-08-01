@@ -14,7 +14,6 @@ from warp_mediacenter.config import settings
 from warp_mediacenter.config.settings import library as library_settings
 from warp_mediacenter.config.settings import paths as path_settings
 from warp_mediacenter.config.settings import providers as provider_settings
-from warp_mediacenter.config.settings.plugins import InstalledPlugin
 from warp_mediacenter.backend.persistence import connect as db_connect
 from warp_mediacenter.backend.persistence import connection as db_connection
 
@@ -94,8 +93,13 @@ def _handle_settings_library_paths(args: argparse.Namespace) -> None:
 
 
 def _handle_settings_plugins(args: argparse.Namespace) -> None:
-    plugins = settings.get_installed_plugins()
-    print_json({plugin_id: to_serializable(plugin) for plugin_id, plugin in plugins.items()})
+    """Deprecated alias for ``plugins list``.
+
+    Plugin state moved out of ``user_settings.json`` into the ``plugin_state``
+    table; this stays so existing scripts keep working.
+    """
+
+    _handle_plugins_list(args)
 
 
 def _handle_settings_show_paths(_: argparse.Namespace) -> None:
@@ -189,58 +193,79 @@ def _handle_providers_proxy(_: argparse.Namespace) -> None:
     print_json(to_serializable(provider_settings.PROXY_SETTINGS))
 
 
-def _handle_plugins_list(_: argparse.Namespace) -> None:
-    plugins = settings.get_installed_plugins()
-    print_json({plugin_id: to_serializable(plugin) for plugin_id, plugin in plugins.items()})
+def _plugin_manager() -> "PluginManager":
+    from warp_mediacenter.backend.plugins import PluginManager, PluginRegistry
+
+    return PluginManager(registry=PluginRegistry())
 
 
-def _build_plugin(args: argparse.Namespace) -> InstalledPlugin:
-    metadata: Dict[str, Any] = {}
-    if args.metadata:
-        try:
-            metadata_payload = json.loads(args.metadata)
-            if isinstance(metadata_payload, Mapping):
-                metadata = dict(metadata_payload)
-            else:
-                exit_with_error("Metadata must be a JSON object")
-        except json.JSONDecodeError as exc:
-            exit_with_error(f"Failed to parse metadata JSON: {exc}")
-    if args.metadata_file:
-        path = Path(args.metadata_file)
-        if not path.exists():
-            exit_with_error(f"Metadata file '{path}' does not exist")
-        try:
-            metadata_payload = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            exit_with_error(f"Failed to parse metadata file: {exc}")
-        if not isinstance(metadata_payload, Mapping):
-            exit_with_error("Metadata file must contain a JSON object")
-        metadata.update(metadata_payload)
+def _handle_plugins_list(args: argparse.Namespace) -> None:
+    manager = _plugin_manager()
+    records = manager.registry.all()
+    category = getattr(args, "category", None)
+    if category:
+        records = [r for r in records if r.category == category]
+    print_json({"plugins": [record.as_dict() for record in records]})
 
-    installed_at = args.installed_at or datetime.utcnow().isoformat() + "Z"
-    description = args.description
-    return InstalledPlugin(
-        plugin_id=args.plugin_id,
-        name=args.name or args.plugin_id,
-        version=args.version,
-        entrypoint=args.entrypoint,
-        path=str(Path(args.path).expanduser()),
-        installed_at=installed_at,
-        description=description,
-        estimated_memory_mb=args.estimated_memory,
-        metadata=metadata,
+
+def _handle_plugins_categories(_: argparse.Namespace) -> None:
+    from warp_mediacenter.backend.plugins.contracts import PLUGIN_CATEGORIES
+
+    print_json({"categories": [c.as_dict() for c in PLUGIN_CATEGORIES]})
+
+
+def _handle_plugins_info(args: argparse.Namespace) -> None:
+    manager = _plugin_manager()
+    record = manager.registry.get(args.plugin_id)
+    if record is None:
+        exit_with_error(f"Plugin '{args.plugin_id}' is not installed")
+    print_json(record.as_dict(include_manifest=True))
+
+
+def _handle_plugins_install(args: argparse.Namespace) -> None:
+    from warp_mediacenter.backend.plugins import PluginError
+
+    manager = _plugin_manager()
+    try:
+        record = manager.install(Path(args.source).expanduser())
+    except PluginError as exc:
+        exit_with_error(str(exc))
+    print_json(record.as_dict(include_manifest=True))
+
+
+def _handle_plugins_uninstall(args: argparse.Namespace) -> None:
+    from warp_mediacenter.backend.plugins import PluginError
+
+    manager = _plugin_manager()
+    try:
+        manager.uninstall(args.plugin_id)
+    except PluginError as exc:
+        exit_with_error(str(exc))
+    print_json({"uninstalled": args.plugin_id})
+
+
+def _handle_plugins_enable(args: argparse.Namespace) -> None:
+    _set_plugin_enabled(args.plugin_id, True)
+
+
+def _handle_plugins_disable(args: argparse.Namespace) -> None:
+    _set_plugin_enabled(args.plugin_id, False)
+
+
+def _set_plugin_enabled(plugin_id: str, enabled: bool) -> None:
+    from warp_mediacenter.backend.plugins import PluginError
+
+    manager = _plugin_manager()
+    try:
+        record = manager.set_enabled(plugin_id, enabled)
+    except PluginError as exc:
+        exit_with_error(str(exc))
+    print_json(
+        {
+            "plugin": record.as_dict(),
+            "category": [r.as_dict() for r in manager.registry.by_category(record.category)],
+        }
     )
-
-
-def _handle_plugins_register(args: argparse.Namespace) -> None:
-    plugin = _build_plugin(args)
-    updated = settings.register_installed_plugin(plugin)
-    print_json(to_serializable(updated.plugins))
-
-
-def _handle_plugins_remove(args: argparse.Namespace) -> None:
-    updated = settings.remove_installed_plugin(args.plugin_id)
-    print_json(to_serializable(updated.plugins))
 
 
 def _database_path_payload() -> Dict[str, Any]:
@@ -491,29 +516,36 @@ def _build_parser() -> argparse.ArgumentParser:
     providers_proxy_reload.set_defaults(func=_handle_providers_reload_proxy)
 
     # Plugins ------------------------------------------------------------
-    plugins_parser = build_subparser(subparsers, "plugins", help="Manage plugin registry entries.")
+    plugins_parser = build_subparser(subparsers, "plugins", help="Install and manage plugins.")
     plugins_sub = plugins_parser.add_subparsers(dest="plugins_command")
     require_subcommand(plugins_sub)
 
     plugins_list = build_subparser(plugins_sub, "list", help="List installed plugins.")
+    plugins_list.add_argument("--category", help="Filter by category (tracker, provider, catalog, skin).")
     plugins_list.set_defaults(func=_handle_plugins_list)
 
-    plugins_register = build_subparser(plugins_sub, "register", help="Register a new plugin entry.")
-    plugins_register.add_argument("--plugin-id", required=True, help="Unique identifier for the plugin.")
-    plugins_register.add_argument("--name", help="Human readable plugin name.")
-    plugins_register.add_argument("--version", required=True, help="Plugin version string.")
-    plugins_register.add_argument("--entrypoint", required=True, help="Python entrypoint for the plugin.")
-    plugins_register.add_argument("--path", required=True, help="Filesystem path to the plugin package.")
-    plugins_register.add_argument("--installed-at", help="ISO timestamp for the installation time. Defaults to now.")
-    plugins_register.add_argument("--description", help="Optional description of the plugin.")
-    plugins_register.add_argument("--estimated-memory", type=float, help="Estimated memory usage in megabytes.")
-    plugins_register.add_argument("--metadata", help="Inline JSON object with custom metadata fields.")
-    plugins_register.add_argument("--metadata-file", help="Path to a JSON file with metadata to merge.")
-    plugins_register.set_defaults(func=_handle_plugins_register)
+    plugins_categories = build_subparser(plugins_sub, "categories", help="List known plugin categories.")
+    plugins_categories.set_defaults(func=_handle_plugins_categories)
 
-    plugins_remove = build_subparser(plugins_sub, "remove", help="Remove an installed plugin entry.")
-    plugins_remove.add_argument("plugin_id", help="Identifier of the plugin to remove.")
-    plugins_remove.set_defaults(func=_handle_plugins_remove)
+    plugins_info = build_subparser(plugins_sub, "info", help="Show a plugin record and its manifest.")
+    plugins_info.add_argument("plugin_id", help="Identifier of the plugin.")
+    plugins_info.set_defaults(func=_handle_plugins_info)
+
+    plugins_install = build_subparser(plugins_sub, "install", help="Install a plugin from a directory or zip archive.")
+    plugins_install.add_argument("source", help="Path to the plugin directory or .zip package.")
+    plugins_install.set_defaults(func=_handle_plugins_install)
+
+    plugins_uninstall = build_subparser(plugins_sub, "uninstall", help="Uninstall a plugin and drop its data.")
+    plugins_uninstall.add_argument("plugin_id", help="Identifier of the plugin to remove.")
+    plugins_uninstall.set_defaults(func=_handle_plugins_uninstall)
+
+    plugins_enable = build_subparser(plugins_sub, "enable", help="Enable a plugin (disables siblings in exclusive categories).")
+    plugins_enable.add_argument("plugin_id", help="Identifier of the plugin to enable.")
+    plugins_enable.set_defaults(func=_handle_plugins_enable)
+
+    plugins_disable = build_subparser(plugins_sub, "disable", help="Disable a plugin.")
+    plugins_disable.add_argument("plugin_id", help="Identifier of the plugin to disable.")
+    plugins_disable.set_defaults(func=_handle_plugins_disable)
 
     # Database ----------------------------------------------------------
     db_parser = build_subparser(subparsers, "db", help="Inspect and manage the local SQLite database.")

@@ -871,7 +871,6 @@ class _CatalogBrowseScrollRail extends StatelessWidget {
       width: 24,
       child: Center(
         child: DpadFocusable(
-          effects: const [],
           autoScroll: false,
           focusNode: focusNode,
           onDirection: onDirection,

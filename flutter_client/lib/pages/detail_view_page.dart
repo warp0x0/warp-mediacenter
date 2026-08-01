@@ -1995,7 +1995,6 @@ class _DetailScrollRail extends StatelessWidget {
       width: 24,
       child: Center(
         child: DpadFocusable(
-          effects: const [],
           focusNode: focusNode,
           onDirection: onDirection,
           onSelect: () {},
@@ -2058,7 +2057,6 @@ class _BackButtonState extends State<_BackButton> {
       onExit: (_) => setState(() => _hovered = false),
       cursor: SystemMouseCursors.click,
       child: DpadFocusable(
-        effects: const [],
         focusNode: widget.focusNode,
         onDirection: widget.onDirection,
         onSelect: widget.onBack,
@@ -2150,7 +2148,6 @@ class _PlayTrailerButtonState extends State<_PlayTrailerButton> {
       onExit: (_) => setState(() => _hovered = false),
       cursor: SystemMouseCursors.click,
       child: DpadFocusable(
-        effects: const [],
         focusNode: widget.focusNode,
         onDirection: widget.onDirection,
         onSelect: widget.loading ? () {} : widget.onTap,
@@ -2251,7 +2248,7 @@ class _PlayResumeButtonState extends State<_PlayResumeButton> {
       if (info == null) return 'Play';
       final s = info.season.toString().padLeft(2, '0');
       final e = (info.episode).toString().padLeft(2, '0');
-      return info.isScrobbled ? 'Resume S${s}E$e' : 'Next S${s}E$e';
+      return info.isScrobbled ? 'Resume S${s}E$e' : 'Play Next S${s}E$e';
     }
     return widget.isMovieResumeAvailable ? 'Resume' : 'Play';
   }
@@ -2278,7 +2275,6 @@ class _PlayResumeButtonState extends State<_PlayResumeButton> {
       onExit: (_) => setState(() => _hovered = false),
       cursor: SystemMouseCursors.click,
       child: DpadFocusable(
-        effects: const [],
         focusNode: widget.focusNode,
         onDirection: widget.onDirection,
         onSelect: widget.onTap,
@@ -2390,7 +2386,6 @@ class _CircleActionButtonState extends State<_CircleActionButton> {
       onExit: (_) => setState(() => _hovered = false),
       cursor: SystemMouseCursors.click,
       child: DpadFocusable(
-        effects: const [],
         focusNode: widget.focusNode,
         onDirection: widget.onDirection,
         onSelect: widget.onTap,
@@ -3125,7 +3120,6 @@ class _SeasonPillState extends State<_SeasonPill> {
       onExit: (_) => setState(() => _hovered = false),
       cursor: SystemMouseCursors.click,
       child: DpadFocusable(
-        effects: const [],
         focusNode: widget.focusNode,
         onDirection: widget.onDirection,
         onSelect: widget.onTap,
@@ -3674,7 +3668,6 @@ class _EpisodePlayButtonState extends State<_EpisodePlayButton> {
       onExit: (_) => setState(() => _hovered = false),
       cursor: SystemMouseCursors.click,
       child: DpadFocusable(
-        effects: const [],
         focusNode: widget.focusNode,
         onDirection: widget.onDirection,
         onSelect: widget.isMarking ? () {} : widget.onPlay,
@@ -3970,7 +3963,6 @@ class _CastCardState extends State<_CastCard> {
       onExit: (_) => setState(() => _hovered = false),
       cursor: SystemMouseCursors.click,
       child: DpadFocusable(
-        effects: const [],
         focusNode: widget.focusNode,
         onDirection: widget.onDirection,
         onSelect: () {},
@@ -4366,7 +4358,6 @@ class _ProviderLogoState extends State<_ProviderLogo> {
       // backend model yet) — focusable/halo-on-focus for D-pad reachability,
       // onSelect is a no-op.
       child: DpadFocusable(
-        effects: const [],
         focusNode: widget.focusNode,
         onDirection: widget.onDirection,
         onSelect: () {},
@@ -4967,7 +4958,6 @@ class _SourcePlayButtonState extends State<_SourcePlayButton> {
       onExit: (_) => setState(() => _hovered = false),
       cursor: SystemMouseCursors.click,
       child: DpadFocusable(
-        effects: const [],
         focusNode: widget.focusNode,
         onDirection: widget.onDirection,
         onSelect: widget.onPlay,
@@ -5243,7 +5233,6 @@ class _ResumeModalButtonState extends State<_ResumeModalButton> {
       onExit: (_) => setState(() => _hovered = false),
       cursor: SystemMouseCursors.click,
       child: DpadFocusable(
-        effects: const [],
         focusNode: widget.focusNode,
         autofocus: widget.autofocus,
         entry: widget.entry,
@@ -5320,7 +5309,6 @@ class _ResumeCancelButtonState extends State<_ResumeCancelButton> {
       onExit: (_) => setState(() => _hovered = false),
       cursor: SystemMouseCursors.click,
       child: DpadFocusable(
-        effects: const [],
         focusNode: widget.focusNode,
         onDirection: widget.onDirection,
         onSelect: widget.onTap,

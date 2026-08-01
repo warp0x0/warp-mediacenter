@@ -36,6 +36,13 @@ class WidgetSection extends ConsumerStatefulWidget {
   final String? provider;
   final String? category;
   final int rowIndex;
+  // Stable identity for this row (its configIndex in the page's widget-config
+  // list), independent of rowIndex's shifting visible position. Used only for
+  // DpadRegion memoryKeys, so region focus-memory survives a row's index
+  // shifting when an earlier row appears/vanishes — rowIndex itself is still
+  // used for navigation arithmetic (target = rowIndex ± 1), where the visible
+  // position is exactly what's needed.
+  final int stableId;
   final bool initialFocus;
   // This page's own tab-bar route (e.g. '/' for Movies, '/shows' for Shows) —
   // used so row 0's hero group can focus this page's own tab pill on Up.
@@ -52,6 +59,7 @@ class WidgetSection extends ConsumerStatefulWidget {
     required this.title,
     required this.items,
     required this.rowIndex,
+    required this.stableId,
     required this.ownRoute,
     required this.rowRegistry,
     required this.rowCount,
@@ -101,7 +109,7 @@ class _WidgetSectionState extends ConsumerState<WidgetSection>
       _focusNodes.any((node) => node.hasFocus);
 
   String get _regionPrefix =>
-      '${widget.ownRoute.replaceAll('/', '_')}-${widget.mediaType}-${widget.rowIndex}';
+      '${widget.ownRoute.replaceAll('/', '_')}-${widget.mediaType}-${widget.stableId}';
 
   @override
   void initState() {
@@ -307,6 +315,15 @@ class _WidgetSectionState extends ConsumerState<WidgetSection>
           ? 0
           : _selectedIdx.clamp(0, widget.items.length - 1);
       _rebuildFocusNodes();
+      _registerFirstCard();
+    } else if (old.rowIndex != widget.rowIndex) {
+      // This row's own content didn't change, only its position in the
+      // visible/traversal order (an earlier row was pruned or reappeared).
+      // Re-key the registry entry under the new index without touching the
+      // focus nodes themselves, so scroll offset/selection/focus survive the
+      // reflow — and so the page's pending-focus retry (keyed by index) can
+      // find this row once it lands at the index it's waiting on.
+      widget.rowRegistry.unregister(old.rowIndex);
       _registerFirstCard();
     }
     if (hadFocus && widget.items.isNotEmpty) {

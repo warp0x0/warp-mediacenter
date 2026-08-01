@@ -197,7 +197,6 @@ class _WarpContextMenuOverlayState extends State<_WarpContextMenuOverlay>
                               width: 1,
                               height: 1,
                               child: DpadFocusable(
-                                effects: const [],
                                 focusNode: _sentinelFocus,
                                 autofocus: true,
                                 entry: true,
@@ -256,7 +255,6 @@ class _ContextMenuRowState extends State<_ContextMenuRow> {
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
       child: DpadFocusable(
-        effects: const [],
         autoScroll: false,
         focusNode: widget.focusNode,
         onSelect: widget.onSelect,

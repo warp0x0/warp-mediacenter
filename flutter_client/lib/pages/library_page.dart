@@ -1345,7 +1345,6 @@ class _DiscoverSeeMoreBtnState extends State<_DiscoverSeeMoreBtn> {
       onExit: (_) => setState(() => _hovered = false),
       cursor: SystemMouseCursors.click,
       child: DpadFocusable(
-        effects: const [],
         focusNode: widget.focusNode,
         onSelect: widget.onTap,
         onDirection: widget.onDirection,

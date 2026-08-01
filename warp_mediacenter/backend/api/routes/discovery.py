@@ -13,6 +13,10 @@ from fastapi import APIRouter, HTTPException, Query
 
 from warp_mediacenter.backend.common.logging import get_logger
 from warp_mediacenter.backend.api.middleware import get_container
+from warp_mediacenter.backend.information_handlers.enrichment import (
+    enrich_item_with_tmdb_images,
+    full_enrich_from_tmdb,
+)
 from warp_mediacenter.backend.information_handlers.models import MediaType
 from warp_mediacenter.backend.information_handlers.providers import InformationProviders
 from warp_mediacenter.backend.information_handlers.models import (
@@ -131,6 +135,20 @@ _MAX_SHOW_CANDIDATES = 14
 
 search_router = APIRouter()
 catalog_router = APIRouter()
+
+
+def _tracker_service():
+    """The tracker facade from the service container.
+
+    Imported lazily: the facade's legacy path calls back into this module, and a
+    module-level import would close the loop.
+    """
+
+    container = get_container()
+    service = getattr(container, "tracker_service", None)
+    if service is None:
+        raise HTTPException(status_code=503, detail="Tracker service not initialized")
+    return service
 
 
 def _get_providers() -> InformationProviders:
@@ -510,97 +528,20 @@ async def movie_collection(
     }
 
 
-def _enrich_item_with_tmdb_images(
-    item: Dict[str, Any],
-    providers: "InformationProviders",
-    media_type: str,
-) -> None:
-    """Fetch poster/backdrop from TMDb if the item is missing them (mutates item in place)."""
-    tmdb_id = item.get("tmdb_id")
-    if not tmdb_id:
-        return
-    if item.get("poster_path") and item.get("backdrop_path"):
-        return
-    try:
-        seg = "movie" if media_type == "movie" else "tv"
-        raw = providers.tmdb._request_json(f"/{seg}/{tmdb_id}")
-        if not item.get("poster_path") and raw.get("poster_path"):
-            item["poster_path"] = raw["poster_path"]
-            if isinstance(item.get("media"), dict):
-                item["media"]["poster_path"] = raw["poster_path"]
-        if not item.get("backdrop_path") and raw.get("backdrop_path"):
-            item["backdrop_path"] = raw["backdrop_path"]
-            if isinstance(item.get("media"), dict):
-                item["media"]["backdrop_path"] = raw["backdrop_path"]
-    except Exception:
-        pass
-
-
-def _full_enrich_from_tmdb(
-    item: Dict[str, Any],
-    providers: "InformationProviders",
-    media_type: str,
-) -> None:
-    """Fetch full TMDb metadata and populate ALL missing fields (mutates item in place).
-
-    Trakt playback entries only carry title+year+ids.  This fills overview,
-    poster_path, backdrop_path, genres, rating, and year from the TMDb record
-    so the frontend has everything it needs to render the card.
-    """
-    tmdb_id = item.get("tmdb_id")
-    if not tmdb_id:
-        return
-    try:
-        seg = "movie" if media_type == "movie" else "tv"
-        raw = providers.tmdb._request_json(f"/{seg}/{tmdb_id}")
-
-        # Images (always update — TMDb is authoritative)
-        if raw.get("poster_path"):
-            item["poster_path"] = raw["poster_path"]
-        if raw.get("backdrop_path"):
-            item["backdrop_path"] = raw["backdrop_path"]
-
-        # Textual metadata (fill gaps; Trakt payload has almost nothing)
-        if raw.get("overview"):
-            item["overview"] = raw["overview"]
-        if raw.get("vote_average") is not None:
-            item["rating"] = float(raw["vote_average"])
-        if not item.get("year"):
-            date_str = raw.get("release_date") or raw.get("first_air_date") or ""
-            if date_str:
-                try:
-                    item["year"] = int(str(date_str)[:4])
-                except (ValueError, IndexError):
-                    pass
-        if raw.get("genres"):
-            item["genres"] = [g["name"] for g in raw["genres"] if g.get("name")]
-
-        # Mirror into the nested `media` dict used by the frontend
-        media = item.get("media")
-        if isinstance(media, dict):
-            if raw.get("poster_path"):
-                media["poster_path"] = raw["poster_path"]
-            if raw.get("backdrop_path"):
-                media["backdrop_path"] = raw["backdrop_path"]
-            if raw.get("overview"):
-                media["overview"] = raw["overview"]
-            if raw.get("vote_average") is not None:
-                media["rating"] = float(raw["vote_average"])
-            if raw.get("genres"):
-                media["genres"] = [{"name": g["name"]} for g in raw["genres"] if g.get("name")]
-
-    except Exception:
-        pass
+# TMDb enrichment lives in information_handlers/enrichment.py so the catalog
+# routes here and the tracker facade share one implementation.  Aliased to the
+# original private names to keep existing call sites unchanged.
+_enrich_item_with_tmdb_images = enrich_item_with_tmdb_images
+_full_enrich_from_tmdb = full_enrich_from_tmdb
 
 
 # ------------------------------------------------------------------
 # Continue Watching — must be registered BEFORE /trakt/{category}
 # ------------------------------------------------------------------
 
-@catalog_router.get("/trakt/continue_watching")
-async def trakt_continue_watching_catalog(
-    media_type: str = Query(default="movie", regex="^(movie|show)$"),
-    limit: int = Query(default=20, ge=1, le=50),
+def build_trakt_continue_watching(
+    media_type: str = "movie",
+    limit: int = 20,
 ) -> Dict[str, Any]:
     """Return a flat Continue Watching catalog enriched with full TMDb metadata.
 
@@ -608,6 +549,10 @@ async def trakt_continue_watching_catalog(
     Shows:  reads /sync/watched/shows (cached 2 min), fetches per-show progress in
             parallel (each cached 5 min), then parallel TMDb enrichment.
             Full response is also cached at the endpoint level for 2 min.
+
+    Kept as a plain function so the tracker facade can reuse it verbatim when no
+    tracker plugin is enabled.  The output is passed through untouched in that
+    path — no re-shaping, so the built-in behaviour cannot drift.
     """
     providers = _get_providers()
 
@@ -890,6 +835,49 @@ async def trakt_continue_watching_catalog(
     return result
 
 
+@catalog_router.get("/trakt/continue_watching")
+async def trakt_continue_watching_catalog(
+    media_type: str = Query(default="movie", regex="^(movie|show)$"),
+    limit: int = Query(default=20, ge=1, le=50),
+) -> Dict[str, Any]:
+    """Continue Watching, routed through the tracker facade.
+
+    Kept at the ``/trakt/`` path permanently: saved widget configs in
+    ``user_settings.json`` store ``{"provider": "trakt", "category":
+    "continue_watching"}`` and the client interpolates that straight into the
+    URL.  ``/catalog/tracker/continue_watching`` is the name to prefer going
+    forward; both serve the same response.
+    """
+    return _tracker_service().continue_watching(media_type=media_type, limit=limit)
+
+
+# ------------------------------------------------------------------
+# Tracker-neutral aliases.  Prefer these: they keep working when the active
+# tracker is Simkl (or anything else) rather than Trakt.  The /trakt/ paths
+# above stay forever because saved widget configs reference them.
+# ------------------------------------------------------------------
+
+@catalog_router.get("/tracker/continue_watching")
+async def tracker_continue_watching(
+    media_type: str = Query(default="movie", regex="^(movie|show)$"),
+    limit: int = Query(default=20, ge=1, le=50),
+) -> Dict[str, Any]:
+    """Continue Watching from the active tracker."""
+    return _tracker_service().continue_watching(media_type=media_type, limit=limit)
+
+
+@catalog_router.get("/tracker/movie_progress/{tmdb_id}")
+async def tracker_movie_progress(tmdb_id: str) -> Dict[str, Any]:
+    """Movie resume progress from the active tracker."""
+    return _tracker_service().movie_progress(tmdb_id)
+
+
+@catalog_router.get("/tracker/show_progress/{tmdb_id}")
+async def tracker_show_progress(tmdb_id: str) -> Dict[str, Any]:
+    """Episode-level watched progress from the active tracker."""
+    return _tracker_service().show_progress(tmdb_id)
+
+
 # ------------------------------------------------------------------
 # Based on Recently Watched — must be registered BEFORE /trakt/{category}
 # ------------------------------------------------------------------
@@ -971,8 +959,7 @@ async def trakt_based_on_watched_catalog(
 # Movie playback progress — scrobble/pause state for a single movie
 # ------------------------------------------------------------------
 
-@catalog_router.get("/trakt/movie_progress/{tmdb_id}")
-async def trakt_movie_progress(tmdb_id: str) -> Dict[str, Any]:
+def build_trakt_movie_progress(tmdb_id: str) -> Dict[str, Any]:
     """Return Trakt scrobble/pause progress for a single movie.
 
     Reuses the same playback cache populated by the continue-watching widget
@@ -997,12 +984,17 @@ async def trakt_movie_progress(tmdb_id: str) -> Dict[str, Any]:
     return {"progress": 0.0, "resume_available": False}
 
 
+@catalog_router.get("/trakt/movie_progress/{tmdb_id}")
+async def trakt_movie_progress(tmdb_id: str) -> Dict[str, Any]:
+    """Movie resume progress, routed through the tracker facade."""
+    return _tracker_service().movie_progress(tmdb_id)
+
+
 # ------------------------------------------------------------------
 # Show watched progress — path has 3 segments, no conflict with /trakt/{category}
 # ------------------------------------------------------------------
 
-@catalog_router.get("/trakt/show_progress/{tmdb_id}")
-async def trakt_show_progress(tmdb_id: str) -> Dict[str, Any]:
+def build_trakt_show_progress(tmdb_id: str) -> Dict[str, Any]:
     """Return episode-level watched progress for a show (looked up via Trakt).
 
     Each episode includes:
@@ -1102,6 +1094,12 @@ async def trakt_show_progress(tmdb_id: str) -> Dict[str, Any]:
         "completed": progress.get("completed"),
         "seasons": seasons_out,
     }
+
+
+@catalog_router.get("/trakt/show_progress/{tmdb_id}")
+async def trakt_show_progress(tmdb_id: str) -> Dict[str, Any]:
+    """Episode-level watched progress, routed through the tracker facade."""
+    return _tracker_service().show_progress(tmdb_id)
 
 
 @catalog_router.get("/trakt/{category}")
