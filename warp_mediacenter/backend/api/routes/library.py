@@ -15,6 +15,12 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from warp_mediacenter.backend.common.logging import get_logger
 from warp_mediacenter.backend.api.middleware import get_container
 from warp_mediacenter.backend.information_handlers.models import MediaType
+from warp_mediacenter.backend.plugins.contracts.common import (
+    MediaRef,
+    error_code,
+    is_ok,
+    response_data,
+)
 from warp_mediacenter.backend.persistence import (
     connection as db_connection,
     list_titles,
@@ -425,66 +431,62 @@ async def mark_watched(payload: Dict[str, Any]) -> Dict[str, Any]:
         record_playback(conn, title_id=title_id, position=3600000, duration=3600000)
         local_recorded = True
 
-    # Sync to Trakt if available
+    # Sync to whichever tracker is active.  The local play_history write above is
+    # unconditional — a user with no tracker still gets local watched state.
     container = get_container()
     providers = container.information_providers if container else None
-    trakt_ok = False
-    trakt_playback_removed = False
-    trakt_error = None
+    tracker = getattr(container, "tracker_service", None) if container else None
+
+    tracker_ok = False
+    tracker_skipped = False
+    playback_removed = False
+    tracker_error = None
     errors: List[str] = []
 
-    if providers and providers.trakt_available() and providers.trakt_has_valid_token():
-        try:
-            watched_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    if tracker is not None:
+        media = MediaRef.from_mark_watched_payload(
+            {
+                "media_type": media_type_raw,
+                "tmdb_id": tmdb_id,
+                "title": payload.get("title") or payload.get("name"),
+                "year": payload.get("year"),
+                "season": season,
+                "episode": episode,
+            }
+        )
+        result = tracker.mark_watched(media)
+        if is_ok(result):
+            data = response_data(result)
+            tracker_skipped = bool(data.get("skipped"))
+            tracker_ok = not tracker_skipped
+        else:
+            tracker_error = (result.get("error") or {}).get("message") or error_code(result)
+            errors.append(f"tracker_history: {tracker_error}")
+            log.warning("tracker_mark_watched_failed", error=tracker_error)
 
-            if media_type_raw == "movie":
-                items = [{"watched_at": watched_at, "ids": {"tmdb": int(tmdb_id)}}]
-                trakt_type = MediaType.MOVIE
-                providers.trakt_add_to_history(media_type=trakt_type, items=items)
-            elif media_type_raw == "show":
-                items = [{"watched_at": watched_at, "ids": {"tmdb": int(tmdb_id)}}]
-                trakt_type = MediaType.SHOW
-                providers.trakt_add_to_history(media_type=trakt_type, items=items)
+        # Clearing the resume point is what actually removes the item from
+        # Continue Watching; adding history alone leaves it sitting there.
+        if tracker_ok and playback_id is not None:
+            removal = tracker.remove_from_continue_watching(
+                media, playback_id=playback_id
+            )
+            if is_ok(removal):
+                playback_removed = bool(response_data(removal).get("removed"))
             else:
-                show_item: Dict[str, Any] = {
-                    "watched_at": watched_at,
-                    "ids": {"tmdb": int(tmdb_id)},
-                    "seasons": [
-                        {
-                            "number": season,
-                            "episodes": [
-                                {
-                                    "number": episode,
-                                    "watched_at": watched_at,
-                                }
-                            ],
-                        }
-                    ],
-                }
-                trakt_type = MediaType.SHOW
-                providers.trakt_add_to_history(media_type=trakt_type, items=[show_item])
-
-            trakt_ok = True
-        except Exception as exc:
-            trakt_error = str(exc)
-            errors.append(f"trakt_history: {trakt_error}")
-            log.warning("trakt_mark_watched_failed", error=trakt_error)
-
-        if trakt_ok and playback_id is not None:
-            try:
-                trakt_playback_removed = providers.trakt_delete_playback(playback_id)
-            except Exception as exc:
-                playback_error = str(exc)
-                errors.append(f"trakt_playback: {playback_error}")
-                log.warning("trakt_playback_delete_failed", playback_id=playback_id, error=playback_error)
+                message = (removal.get("error") or {}).get("message") or error_code(removal)
+                errors.append(f"tracker_playback: {message}")
+                log.warning(
+                    "tracker_playback_delete_failed",
+                    playback_id=playback_id,
+                    error=message,
+                )
 
     cache_invalidated = False
     try:
         if providers:
             providers.invalidate_continue_watching_cache()
-        from warp_mediacenter.backend.api.routes.discovery import invalidate_trakt_continue_watching_caches
-
-        invalidate_trakt_continue_watching_caches()
+        if tracker is not None:
+            tracker.invalidate()
         cache_invalidated = True
     except Exception as exc:
         errors.append(f"cache_invalidation: {exc}")
@@ -495,10 +497,17 @@ async def mark_watched(payload: Dict[str, Any]) -> Dict[str, Any]:
         "title_id": title_id,
         "media_type": media_type_raw,
         "local_recorded": local_recorded,
-        "trakt_synced": trakt_ok,
-        "trakt_history_synced": trakt_ok,
-        "trakt_playback_removed": trakt_playback_removed,
+        # `trakt_*` keys are kept because existing clients read them; the
+        # `tracker_*` keys are the ones to use going forward.
+        "trakt_synced": tracker_ok,
+        "trakt_history_synced": tracker_ok,
+        "trakt_playback_removed": playback_removed,
+        "trakt_error": tracker_error,
+        "tracker_synced": tracker_ok,
+        "tracker_skipped": tracker_skipped,
+        "tracker_playback_removed": playback_removed,
+        "tracker_id": tracker.active_plugin_id if tracker is not None else None,
+        "tracker_mode": tracker.mode if tracker is not None else "none",
         "cache_invalidated": cache_invalidated,
-        "trakt_error": trakt_error,
         "errors": errors,
     }

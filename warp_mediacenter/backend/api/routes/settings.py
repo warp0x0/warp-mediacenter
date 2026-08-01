@@ -257,11 +257,28 @@ async def provider_status() -> Dict[str, Any]:
         torrent_status["status"] = "error"
         torrent_status["api_key_configured"] = False
 
+    # Active tracker.  Distinct from the `trakt` block above, which reports the
+    # built-in integration specifically; this reports whoever is actually
+    # handling scrobbles and Continue Watching right now.
+    tracker_status: Dict[str, Any] = {"mode": "none", "active_plugin_id": None}
+    try:
+        tracker = getattr(get_container(), "tracker_service", None)
+        if tracker is not None:
+            tracker_status = tracker.describe()
+            tracker_status["authenticated"] = (
+                trakt_status.get("authenticated", False)
+                if tracker_status.get("mode") == "legacy"
+                else tracker_status.get("mode") == "plugin"
+            )
+    except Exception as exc:  # noqa: BLE001
+        tracker_status = {"mode": "error", "error": str(exc)}
+
     return {
         "tmdb": tmdb_status,
         "trakt": trakt_status,
         "realdebrid": debrid_status,
         "torrent_api": torrent_status,
+        "tracker": tracker_status,
     }
 
 

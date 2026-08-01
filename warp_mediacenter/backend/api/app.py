@@ -8,7 +8,7 @@ from typing import Any, AsyncIterator, Dict, Optional
 from fastapi import FastAPI
 
 from warp_mediacenter.backend.common.logging import get_logger
-from warp_mediacenter.backend.api.routes import torrent, stream, images, scrobble, library, player, subtitles, trakt, debrid, settings, collections, files
+from warp_mediacenter.backend.api.routes import torrent, stream, images, scrobble, library, player, subtitles, trakt, debrid, settings, collections, files, plugins
 from warp_mediacenter.backend.api.routes.discovery import search_router, catalog_router
 from warp_mediacenter.backend.api.middleware import (
     setup_cors,
@@ -73,6 +73,7 @@ def create_app(
     app.include_router(settings.router, prefix="/api/v1/settings", tags=["settings"])
     app.include_router(collections.router, prefix="/api/v1/collections", tags=["collections"])
     app.include_router(files.router, prefix="/api/v1/files", tags=["files"])
+    app.include_router(plugins.router, prefix="/api/v1/plugins", tags=["plugins"])
 
     # Health check
     @app.get("/api/v1/health")
@@ -117,6 +118,22 @@ def _build_health_response() -> Dict[str, Any]:
     if container.information_providers is not None:
         services["information_providers"] = "ok"
     status["subsystems"]["services"] = services
+
+    # Plugins.  `scrobble_failures` is here because the client swallows scrobble
+    # errors by design — without a counter, a broken tracker is invisible.
+    tracker_service = getattr(container, "tracker_service", None)
+    plugin_registry = getattr(container, "plugin_registry", None)
+    if tracker_service is not None or plugin_registry is not None:
+        plugins: Dict[str, Any] = {}
+        if plugin_registry is not None:
+            plugins["installed"] = len(plugin_registry.all())
+            plugins["enabled"] = [r.plugin_id for r in plugin_registry.enabled()]
+        if tracker_service is not None:
+            try:
+                plugins["tracker"] = tracker_service.health()
+            except Exception as exc:  # noqa: BLE001
+                plugins["tracker"] = {"status": "error", "message": str(exc)}
+        status["subsystems"]["plugins"] = plugins
 
     return status
 

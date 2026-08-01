@@ -16,7 +16,13 @@ from starlette.background import BackgroundTask
 from warp_mediacenter.backend.common.logging import get_logger
 from warp_mediacenter.backend.api.middleware import get_container
 from warp_mediacenter.backend.information_handlers.models import MediaType
-from warp_mediacenter.backend.information_handlers.trakt_manager import TraktScrobbleConflict
+from warp_mediacenter.backend.plugins.contracts.common import (
+    ErrorCode,
+    MediaRef,
+    error_code,
+    is_ok,
+    response_data,
+)
 from warp_mediacenter.backend.player.preload_session_manager import (
     PreloadSessionCapacityError,
     PreloadSessionManager,
@@ -46,14 +52,6 @@ def _get_preload_manager() -> PreloadSessionManager:
     return manager
 
 
-def _get_trakt_manager() -> Any:
-    container = get_container()
-    manager = container.trakt_manager
-    if manager is None:
-        raise HTTPException(status_code=503, detail="Trakt manager not initialized")
-    return manager
-
-
 def _normalize_scrobble_media_type(value: Any) -> MediaType:
     raw = str(value or "").strip().lower()
     if raw == "tv":
@@ -78,69 +76,84 @@ def _normalize_scrobble_progress(value: Any) -> float:
     return progress
 
 
+def _get_tracker_service() -> Any:
+    container = get_container()
+    service = getattr(container, "tracker_service", None)
+    if service is None:
+        raise HTTPException(status_code=503, detail="Tracker service not initialized")
+    return service
+
+
 def _run_scrobble(action: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    media_payload = payload.get("media")
-    if not isinstance(media_payload, dict):
+    """Forward a scrobble to whichever tracker is active.
+
+    The request body is unchanged from what the client has always sent: the show
+    arrives under ``media`` with only season/number under ``episode``.
+    ``MediaRef.from_flutter_scrobble_payload`` untangles that once, here, so
+    trackers downstream receive an unambiguous reference.
+
+    Scrobbling is best-effort by design — the client swallows failures so a
+    tracker outage never interrupts playback — so a tracker-level error comes
+    back as ``ok: false`` with a reason rather than an HTTP error.
+    """
+
+    if not isinstance(payload.get("media"), dict):
         raise HTTPException(status_code=400, detail="media payload is required")
 
     media_type = _normalize_scrobble_media_type(payload.get("media_type"))
     progress = _normalize_scrobble_progress(payload.get("progress"))
     session_id = str(payload.get("session_id") or "").strip() or None
 
-    # Episode scrobble: Flutter sends show info as "media" and the episode's
-    # season/number under an "episode" key.  The Trakt manager expects
-    #   media  = episode payload  (season, number, ids)
-    #   show   = show payload     (title, ids with tmdb)
-    # Remap so the manager builds the correct Trakt request body.
-    show_payload = payload.get("show")
-    if media_type == MediaType.EPISODE:
-        episode_key_payload = payload.get("episode")
-        if isinstance(episode_key_payload, dict):
-            show_payload = show_payload or media_payload   # show info was in "media"
-            media_payload = episode_key_payload            # episode season/number
-
-    manager = _get_trakt_manager()
     try:
-        result = manager.scrobble(
-            media_type=media_type,
-            media=media_payload,
-            progress=progress,
-            action=action,
-            show=show_payload,
-        )
-    except TraktScrobbleConflict as exc:
-        return {
-            "ok": False,
-            "conflict": True,
-            "session_id": session_id,
-            "action": action,
-            "media_type": media_type.value,
-            "progress": progress,
-            "watched_at": exc.watched_at.isoformat() if exc.watched_at else None,
-            "expires_at": exc.expires_at.isoformat() if exc.expires_at else None,
-        }
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Scrobble {action} failed: {exc}")
+        media = MediaRef.from_flutter_scrobble_payload(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
-    # After a stop scrobble, the continue-watching + show-progress caches are stale.
-    # Clear them so the next Flutter fetch returns fresh Trakt data immediately.
-    if action == "stop":
-        try:
-            from warp_mediacenter.backend.api.routes.discovery import (  # noqa: PLC0415
-                invalidate_trakt_continue_watching_caches,
-            )
-            invalidate_trakt_continue_watching_caches()
-        except Exception:
-            pass
+    result = _get_tracker_service().scrobble(
+        action, media=media, progress=progress, session_id=session_id
+    )
 
-    return {
-        "ok": True,
-        "conflict": False,
+    base: Dict[str, Any] = {
         "session_id": session_id,
         "action": action,
         "media_type": media_type.value,
         "progress": progress,
-        "response": result.model_dump(mode="json") if hasattr(result, "model_dump") else {},
+    }
+
+    if is_ok(result):
+        data = response_data(result)
+        return {
+            **base,
+            "ok": True,
+            "conflict": False,
+            "skipped": bool(data.get("skipped")),
+            "response": data.get("response") or {},
+        }
+
+    code = error_code(result)
+    error = result.get("error") or {}
+    details = error.get("details") or {}
+
+    # A duplicate scrobble is not a failure the client should react to; the shape
+    # here matches what the Trakt path has always returned for a 409.
+    if code == ErrorCode.CONFLICT:
+        return {
+            **base,
+            "ok": False,
+            "conflict": True,
+            "watched_at": details.get("watched_at"),
+            "expires_at": details.get("expires_at"),
+        }
+
+    if code in {ErrorCode.NOT_AUTHENTICATED, ErrorCode.REAUTH_REQUIRED}:
+        return {**base, "ok": False, "conflict": False, "reauth_required": True}
+
+    log.warning("scrobble_failed", action=action, code=code, message=error.get("message"))
+    return {
+        **base,
+        "ok": False,
+        "conflict": False,
+        "error": error.get("message") or code,
     }
 
 

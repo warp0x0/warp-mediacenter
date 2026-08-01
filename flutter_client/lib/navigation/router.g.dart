@@ -48,4 +48,4 @@ final class WarpRouterProvider
   }
 }
 
-String _$warpRouterHash() => r'd2808d2d6f4f28bec892c9fd8a85b1a93be9fd98';
+String _$warpRouterHash() => r'9e640817cb3df4480081e1f081c11151b07d31e5';

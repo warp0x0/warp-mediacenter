@@ -29,6 +29,9 @@ from warp_mediacenter.backend.player.debrid.client import RealDebridClient
 from warp_mediacenter.backend.player.preload_session_manager import PreloadSessionManager
 from warp_mediacenter.backend.player.subtitles.service import SubtitleService
 from warp_mediacenter.backend.player.torrent_stream import TorrentStreamOrchestrator
+from warp_mediacenter.backend.plugins import PluginManager, PluginRegistry
+from warp_mediacenter.backend.plugins.host import PluginHost
+from warp_mediacenter.backend.plugins.services import TrackerService
 from warp_mediacenter.config.settings import get_settings
 
 log = get_logger(__name__)
@@ -75,6 +78,23 @@ def _init_services() -> ServiceContainer:
     )
     log.info("torrent_orchestrator_initialized")
 
+    # Plugin system.  The tracker facade falls back to the built-in Trakt
+    # integration whenever no tracker plugin is enabled, so wiring it in changes
+    # nothing for a user who has installed no plugins.
+    plugin_registry = PluginRegistry()
+    plugin_host = PluginHost(plugin_registry)
+    plugin_manager = PluginManager(registry=plugin_registry, host=plugin_host)
+    tracker_service = TrackerService(
+        manager=plugin_manager,
+        registry=plugin_registry,
+        providers=providers,
+    )
+    log.info(
+        "plugin_system_initialized",
+        installed=len(plugin_registry.all()),
+        tracker_mode=tracker_service.mode,
+    )
+
     # Wire into service container
     container = init_container(
         torrent_orchestrator=torrent_orchestrator,
@@ -84,6 +104,9 @@ def _init_services() -> ServiceContainer:
         trakt_manager=trakt_manager,
         information_providers=providers,
         torrent_search_service=torrent_search,
+        plugin_registry=plugin_registry,
+        plugin_manager=plugin_manager,
+        tracker_service=tracker_service,
     )
 
     # Wire into route modules (for backward compatibility with module-level globals)

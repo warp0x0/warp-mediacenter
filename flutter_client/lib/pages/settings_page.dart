@@ -9,9 +9,13 @@ import '../api/catalog_constants.dart';
 import '../models/auth.dart';
 import '../models/catalog.dart';
 import '../navigation/tab_bar_focus_registry.dart';
+import '../models/plugin.dart';
 import '../providers/catalog_provider.dart';
+import '../providers/plugin_provider.dart';
 import '../providers/settings_provider.dart';
 import '../theme/warp_tokens.dart';
+import '../widgets/settings/plugin_settings_panel.dart';
+import '../widgets/settings/plugins_panel.dart';
 import '../widgets/shared/dpad_controls.dart';
 import '../widgets/shared/modal_focus_restore.dart';
 import '../widgets/shared/tv_modal_chrome_scale.dart';
@@ -63,54 +67,202 @@ bool _focusSettingsNode(BuildContext context, FocusNode node) {
 //   sidebar (header + nav + footer) + content header + scrollable body
 // ─────────────────────────────────────────────────────────────────────────────
 
-enum _SettingsSection { auth, providers, apiKeys, connection, catalog, general }
+enum _SettingsSection {
+  auth,
+  providers,
+  apiKeys,
+  connection,
+  catalog,
+  general,
+  plugins,
+}
 
+enum _SectionKind {
+  /// One of the panels compiled into the app.
+  builtin,
+
+  /// The Plugins browser — categories, install, enable/disable.
+  pluginList,
+
+  /// A page owned by an installed plugin, rendered from its schema.
+  pluginConfig,
+}
+
+/// A sidebar entry.
+///
+/// This used to be a `const` list keyed by an enum, which works only while every
+/// section is known at compile time.  Plugin pages appear and disappear as
+/// plugins are installed, so the list is now built per frame and identified by
+/// string id ('auth', 'plugins', 'plugin:simkl-tracker').
+@immutable
 class _SectionMeta {
-  final _SettingsSection id;
+  final String id;
   final IconData icon;
   final String label;
   final String description;
-  const _SectionMeta(this.id, this.icon, this.label, this.description);
+  final _SectionKind kind;
+
+  /// Set when [kind] is [_SectionKind.builtin].
+  final _SettingsSection? builtin;
+
+  /// Set when [kind] is [_SectionKind.pluginConfig].
+  final String? pluginId;
+
+  const _SectionMeta(
+    this.id,
+    this.icon,
+    this.label,
+    this.description, {
+    this.kind = _SectionKind.builtin,
+    this.builtin,
+    this.pluginId,
+  });
 }
 
-const _sections = [
+const _builtinSections = [
   _SectionMeta(
-    _SettingsSection.auth,
+    'auth',
     Icons.shield_outlined,
     'Authentication',
     'Trakt & Real Debrid accounts',
+    builtin: _SettingsSection.auth,
   ),
   _SectionMeta(
-    _SettingsSection.providers,
+    'providers',
     Icons.bolt_outlined,
     'Providers',
     'Service connection status',
+    builtin: _SettingsSection.providers,
   ),
   _SectionMeta(
-    _SettingsSection.apiKeys,
+    'apiKeys',
     Icons.key_outlined,
     'API Keys',
     'TMDb and provider keys',
+    builtin: _SettingsSection.apiKeys,
   ),
   _SectionMeta(
-    _SettingsSection.connection,
+    'connection',
     Icons.dns_outlined,
     'Connection',
     'Backend server settings',
+    builtin: _SettingsSection.connection,
   ),
   _SectionMeta(
-    _SettingsSection.catalog,
+    'catalog',
     Icons.grid_view_outlined,
     'Catalog',
     'Content sources & widgets',
+    builtin: _SettingsSection.catalog,
   ),
   _SectionMeta(
-    _SettingsSection.general,
+    'plugins',
+    Icons.extension_outlined,
+    'Plugins',
+    'Trackers, providers & skins',
+    kind: _SectionKind.pluginList,
+    builtin: _SettingsSection.plugins,
+  ),
+  _SectionMeta(
+    'general',
     Icons.tune_outlined,
     'General',
     'App preferences',
+    builtin: _SettingsSection.general,
   ),
 ];
+
+/// Maps a Material icon name from a plugin manifest onto an actual icon.
+///
+/// Deliberately a small allowlist rather than a lookup by name: resolving
+/// arbitrary strings to icons needs the full icon table retained at runtime,
+/// which defeats tree-shaking and bloats the build.
+IconData _pluginIcon(String? name) => switch (name) {
+  'sync_outlined' => Icons.sync_outlined,
+  'favorite_outline' => Icons.favorite_outline,
+  'movie_outlined' => Icons.movie_outlined,
+  'live_tv_outlined' => Icons.live_tv_outlined,
+  'cloud_outlined' => Icons.cloud_outlined,
+  'palette_outlined' => Icons.palette_outlined,
+  'science_outlined' => Icons.science_outlined,
+  'bookmark_outline' => Icons.bookmark_outline,
+  _ => Icons.extension_outlined,
+};
+
+/// Builtins plus one page per installed plugin that declares a settings UI.
+///
+/// Plugin pages sit directly after the Plugins browser, so the browser and the
+/// pages it manages read as one group in the sidebar.
+List<_SectionMeta> _buildSections(List<PluginSummary> plugins) {
+  if (plugins.isEmpty) return _builtinSections;
+
+  final insertAt = _builtinSections.indexWhere((s) => s.id == 'plugins') + 1;
+  return [
+    ..._builtinSections.take(insertAt),
+    for (final plugin in plugins)
+      _SectionMeta(
+        'plugin:${plugin.pluginId}',
+        _pluginIcon(plugin.icon),
+        plugin.name,
+        plugin.description ?? '${plugin.category} plugin',
+        kind: _SectionKind.pluginConfig,
+        pluginId: plugin.pluginId,
+      ),
+    ..._builtinSections.skip(insertAt),
+  ];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// _FocusPool — keyed FocusNode storage for the settings page.
+//
+// Focus nodes used to be pre-allocated in initState against fixed-length lists,
+// which works only while the set of sections is a compile-time constant.  Plugin
+// pages are discovered at runtime, so the nodes have to be created on demand and
+// reaped when their widgets go away.
+//
+// Three invariants keep D-pad traversal from breaking:
+//   1. Nodes are only ever created inside build()/panel builders via `of()` —
+//      never inside a direction callback, where creating one mid-traversal would
+//      hand focus to a node that has no widget yet.
+//   2. `retainOnly` runs post-frame only, and never disposes the node that
+//      currently holds focus — disposing the focused node drops focus to nowhere
+//      and the remote stops responding.
+//   3. Any handler that indexes the section list clamps to the list it captured
+//      for that frame, since the list can shrink between a keypress and its
+//      callback.
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _FocusPool {
+  final Map<String, FocusNode> _nodes = {};
+
+  FocusNode of(String key) => _nodes.putIfAbsent(
+    key,
+    () => FocusNode(debugLabel: 'Settings/$key'),
+  );
+
+  bool has(String key) => _nodes.containsKey(key);
+
+  /// Dispose nodes whose keys are no longer live.  Call from a post-frame
+  /// callback so no in-flight traversal is holding one.
+  void retainOnly(Set<String> keys) {
+    final focused = FocusManager.instance.primaryFocus;
+    for (final key in _nodes.keys.toList()) {
+      if (keys.contains(key)) continue;
+      final node = _nodes[key];
+      // Leave the focused node alone; it gets reaped on a later pass once
+      // focus has moved somewhere that still exists.
+      if (node == null || identical(node, focused)) continue;
+      _nodes.remove(key)!.dispose();
+    }
+  }
+
+  void dispose() {
+    for (final node in _nodes.values) {
+      node.dispose();
+    }
+    _nodes.clear();
+  }
+}
 
 class SettingsPage extends ConsumerStatefulWidget {
   const SettingsPage({super.key});
@@ -121,32 +273,45 @@ class SettingsPage extends ConsumerStatefulWidget {
 
 class _SettingsPageState extends ConsumerState<SettingsPage>
     with WidgetsBindingObserver {
-  _SettingsSection _section = _SettingsSection.auth;
-  late final List<FocusNode> _sidebarFocusNodes;
+  String _sectionId = 'auth';
+  final _pool = _FocusPool();
   late final List<_ApiKeyFocus> _apiKeyFocusNodes;
-  late final List<FocusNode> _catalogConfigureFocusNodes;
   final _contentScrollController = ScrollController();
-  final _scrollRailFocusNode = FocusNode(debugLabel: 'SettingsScrollRail');
-  final _traktFocusNode = FocusNode(debugLabel: 'SettingsAuthTrakt');
-  final _debridFocusNode = FocusNode(debugLabel: 'SettingsAuthRealDebrid');
-  final _connectionFieldFocusNode = FocusNode(debugLabel: 'BackendUrlField');
-  final _connectionWrapperFocusNode = FocusNode(
-    debugLabel: 'BackendUrlWrapper',
-  );
-  final _connectionTestFocusNode = FocusNode(
-    debugLabel: 'SettingsConnectionTest',
-  );
-  final _connectionSaveFocusNode = FocusNode(
-    debugLabel: 'SettingsConnectionSave',
-  );
-  final _catalogMovieFocusNode = FocusNode(debugLabel: 'SettingsCatalogMovies');
-  final _catalogShowFocusNode = FocusNode(debugLabel: 'SettingsCatalogShows');
-  final _catalogSaveFocusNode = FocusNode(debugLabel: 'SettingsCatalogSave');
-  final _catalogRefreshFocusNode = FocusNode(
-    debugLabel: 'SettingsCatalogRefresh',
-  );
   FocusNode? _lastSettingsFocus;
   bool _appActive = true;
+
+  /// The section list as of the last build.
+  ///
+  /// Direction callbacks fire after the frame that produced them, and the list
+  /// can shrink in between (a plugin uninstalled from another device, a failed
+  /// refresh).  Every handler indexes *this* snapshot and clamps, rather than
+  /// recomputing and risking an index that no longer means what it did.
+  List<_SectionMeta> _sections = _builtinSections;
+
+  _SectionMeta get _currentSection => _sections.firstWhere(
+    (s) => s.id == _sectionId,
+    orElse: () => _sections.first,
+  );
+
+  // Every focus node on this page resolves through the pool.  The getters keep
+  // the original names so call sites read the same as before.
+  List<FocusNode> get _sidebarFocusNodes => [
+    for (final section in _sections) _pool.of('sidebar:${section.id}'),
+  ];
+  List<FocusNode> get _catalogConfigureFocusNodes => [
+    for (var i = 0; i < 6; i++) _pool.of('catalog:configure:$i'),
+  ];
+  FocusNode get _scrollRailFocusNode => _pool.of('scrollRail');
+  FocusNode get _traktFocusNode => _pool.of('auth:trakt');
+  FocusNode get _debridFocusNode => _pool.of('auth:debrid');
+  FocusNode get _connectionFieldFocusNode => _pool.of('connection:field');
+  FocusNode get _connectionWrapperFocusNode => _pool.of('connection:wrapper');
+  FocusNode get _connectionTestFocusNode => _pool.of('connection:test');
+  FocusNode get _connectionSaveFocusNode => _pool.of('connection:save');
+  FocusNode get _catalogMovieFocusNode => _pool.of('catalog:movies');
+  FocusNode get _catalogShowFocusNode => _pool.of('catalog:shows');
+  FocusNode get _catalogSaveFocusNode => _pool.of('catalog:save');
+  FocusNode get _catalogRefreshFocusNode => _pool.of('catalog:refresh');
 
   static const _apiKeySpecs = [
     (label: 'API Key', settingKey: _kTmdbApiKey, obscure: true),
@@ -163,45 +328,19 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     FocusManager.instance.addListener(_rememberSettingsFocus);
-    _sidebarFocusNodes = List.generate(
-      _sections.length,
-      (i) => FocusNode(debugLabel: 'SettingsSidebar-${_sections[i].label}'),
-    );
-    _apiKeyFocusNodes = List.generate(
-      _apiKeySpecs.length,
-      (i) => _ApiKeyFocus(_apiKeySpecs[i].settingKey),
-    );
-    _catalogConfigureFocusNodes = List.generate(
-      6,
-      (i) => FocusNode(debugLabel: 'SettingsCatalogConfigure-$i'),
-    );
+    // The API-key list is a compile-time constant, so these views can be built
+    // once.  They no longer own their nodes — the pool does.
+    _apiKeyFocusNodes = [
+      for (final spec in _apiKeySpecs) _ApiKeyFocus(_pool, spec.settingKey),
+    ];
   }
 
   @override
   void dispose() {
     FocusManager.instance.removeListener(_rememberSettingsFocus);
     WidgetsBinding.instance.removeObserver(this);
-    for (final node in _sidebarFocusNodes) {
-      node.dispose();
-    }
-    for (final nodes in _apiKeyFocusNodes) {
-      nodes.dispose();
-    }
-    for (final node in _catalogConfigureFocusNodes) {
-      node.dispose();
-    }
     _contentScrollController.dispose();
-    _scrollRailFocusNode.dispose();
-    _traktFocusNode.dispose();
-    _debridFocusNode.dispose();
-    _connectionFieldFocusNode.dispose();
-    _connectionWrapperFocusNode.dispose();
-    _connectionTestFocusNode.dispose();
-    _connectionSaveFocusNode.dispose();
-    _catalogMovieFocusNode.dispose();
-    _catalogShowFocusNode.dispose();
-    _catalogSaveFocusNode.dispose();
-    _catalogRefreshFocusNode.dispose();
+    _pool.dispose();
     super.dispose();
   }
 
@@ -236,10 +375,89 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
     }
   }
 
-  void _selectSection(_SettingsSection section) {
-    setState(() => _section = section);
+  void _selectSection(String sectionId) {
+    setState(() => _sectionId = sectionId);
     if (_contentScrollController.hasClients) {
       _contentScrollController.jumpTo(0);
+    }
+  }
+
+  /// Reconcile the pool with what is actually on screen.
+  ///
+  /// Runs post-frame so nothing mid-traversal is holding a node about to be
+  /// disposed, and only ever reaps keys outside the live set — the sidebar, the
+  /// scroll rail, and the content of the section currently displayed.
+  void _reapFocusNodes() {
+    if (!mounted) return;
+    final live = <String>{
+      'scrollRail',
+      for (final section in _sections) 'sidebar:${section.id}',
+      ..._contentKeysFor(_currentSection),
+    };
+    _pool.retainOnly(live);
+  }
+
+  /// Focus keys for a section's content, in render order.
+  List<String> _contentKeysFor(_SectionMeta section) {
+    switch (section.kind) {
+      case _SectionKind.pluginList:
+        final categories = ref.read(pluginCategoriesProvider).asData?.value ?? [];
+        return [
+          for (final category in categories) ...[
+            'plugins:${category.id}:install',
+            for (final plugin in category.installed) ...[
+              'plugins:${category.id}:remove:${plugin.pluginId}',
+              'plugins:${category.id}:row:${plugin.pluginId}',
+            ],
+          ],
+        ];
+
+      case _SectionKind.pluginConfig:
+        final pluginId = section.pluginId;
+        if (pluginId == null) return const [];
+        // While the schema is in flight there are no content nodes yet;
+        // _focusContentEntry falls through to the scroll rail, so entering the
+        // panel early parks focus somewhere real instead of nowhere.
+        final schema = ref
+            .read(pluginSettingsSchemaProvider(pluginId))
+            .asData
+            ?.value;
+        if (schema == null) return const [];
+        return [
+          for (final s in schema.sections)
+            for (final field in s.fields)
+              if (field.type != PluginFieldType.info &&
+                  field.type != PluginFieldType.unknown)
+                'plugin:$pluginId:field:${field.id}',
+          if (schema.editableFields.isNotEmpty) 'plugin:$pluginId:save',
+        ];
+
+      case _SectionKind.builtin:
+        return switch (section.builtin) {
+          _SettingsSection.auth => ['auth:trakt', 'auth:debrid'],
+          _SettingsSection.apiKeys => [
+            for (final spec in _apiKeySpecs) ...[
+              'apikey:${spec.settingKey}:wrapper',
+              'apikey:${spec.settingKey}:visibility',
+              'apikey:${spec.settingKey}:field',
+              'apikey:${spec.settingKey}:save',
+            ],
+          ],
+          _SettingsSection.connection => [
+            'connection:wrapper',
+            'connection:field',
+            'connection:test',
+            'connection:save',
+          ],
+          _SettingsSection.catalog => [
+            'catalog:movies',
+            'catalog:shows',
+            for (var i = 0; i < 6; i++) 'catalog:configure:$i',
+            'catalog:save',
+            'catalog:refresh',
+          ],
+          _ => const <String>[],
+        };
     }
   }
 
@@ -256,30 +474,35 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
   }
 
   bool _sidebarDirection(int index, TraversalDirection direction) {
+    // Clamp against the snapshot this frame was built from — the list may have
+    // shrunk between the keypress and this callback.
+    final sections = _sections;
+    if (sections.isEmpty) return false;
+    final i = index.clamp(0, sections.length - 1);
+
     if (direction == TraversalDirection.up) {
-      if (index == 0) return _firstNavItemUp(direction);
-      _focusSettingsNode(context, _sidebarFocusNodes[index - 1]);
+      if (i == 0) return _firstNavItemUp(direction);
+      _focusSettingsNode(context, _pool.of('sidebar:${sections[i - 1].id}'));
       return true;
     }
     if (direction == TraversalDirection.down) {
-      if (index < _sidebarFocusNodes.length - 1) {
-        _focusSettingsNode(context, _sidebarFocusNodes[index + 1]);
+      if (i < sections.length - 1) {
+        _focusSettingsNode(context, _pool.of('sidebar:${sections[i + 1].id}'));
       }
       return true;
     }
     if (direction == TraversalDirection.right) {
-      _focusContentEntry(_sections[index].id);
+      _focusContentEntry(sections[i]);
       return true;
     }
     if (direction == TraversalDirection.left) return true;
     return false;
   }
 
-  bool _focusSidebar([_SettingsSection? section]) {
-    final target = section ?? _section;
-    final index = _sections.indexWhere((s) => s.id == target);
-    if (index < 0) return false;
-    _focusSettingsNode(context, _sidebarFocusNodes[index]);
+  bool _focusSidebar([_SectionMeta? section]) {
+    final target = section ?? _currentSection;
+    if (!_sections.any((s) => s.id == target.id)) return false;
+    _focusSettingsNode(context, _pool.of('sidebar:${target.id}'));
     return true;
   }
 
@@ -294,34 +517,39 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
     return true;
   }
 
-  List<FocusNode> _contentNodesFor(_SettingsSection section) {
-    return switch (section) {
-      _SettingsSection.auth => [_traktFocusNode, _debridFocusNode],
-      _SettingsSection.apiKeys => [
+  List<FocusNode> _contentNodesFor(_SectionMeta section) {
+    // The hand-built panels keep their original traversal order, including the
+    // per-row visibility toggle that only some API-key fields have.
+    if (section.builtin == _SettingsSection.apiKeys) {
+      return [
         for (final nodes in _apiKeyFocusNodes) ...[
           nodes.wrapper,
           if (nodes.hasVisibility) nodes.visibility,
           nodes.save,
         ],
-      ],
-      _SettingsSection.connection => [
+      ];
+    }
+    if (section.builtin == _SettingsSection.connection) {
+      return [
         _connectionWrapperFocusNode,
         _connectionTestFocusNode,
         _connectionSaveFocusNode,
-      ],
-      _SettingsSection.catalog => [
+      ];
+    }
+    if (section.builtin == _SettingsSection.catalog) {
+      return [
         _catalogMovieFocusNode,
         _catalogShowFocusNode,
         ..._catalogConfigureFocusNodes,
         _catalogSaveFocusNode,
         _catalogRefreshFocusNode,
-      ],
-      _SettingsSection.providers || _SettingsSection.general => const [],
-    };
+      ];
+    }
+    return [for (final key in _contentKeysFor(section)) _pool.of(key)];
   }
 
-  bool _focusContentEntry([_SettingsSection? section]) {
-    final target = section ?? _section;
+  bool _focusContentEntry([_SectionMeta? section]) {
+    final target = section ?? _currentSection;
     for (final node in _contentNodesFor(target)) {
       if (_focusMounted(node)) return true;
     }
@@ -330,7 +558,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
 
   bool _focusNearestContentToRail() {
     final nodes = _contentNodesFor(
-      _section,
+      _currentSection,
     ).where((node) => node.context != null).toList();
     if (nodes.isEmpty) return _focusSidebar();
 
@@ -375,6 +603,106 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
     );
   }
 
+  /// Direction handler for a plugin-rendered control.
+  ///
+  /// Plugin panels do not know the page layout, so the host supplies the two
+  /// moves that leave the panel — Left back to the sidebar, Right to the scroll
+  /// rail — and lets default beam navigation handle Up/Down within the content.
+  ///
+  /// One pair of keys is the exception: a plugin row in [PluginsPanel] has two
+  /// side-by-side buttons (delete, then the enable toggle) sharing a single
+  /// content "slot" in [_contentKeysFor]. Blanket-routing Right straight to the
+  /// scroll rail from *any* key skips over the toggle entirely — Right from the
+  /// delete button must reach its sibling toggle first, and Left from the
+  /// toggle must reach back to delete, before either falls through to the
+  /// sidebar/scroll-rail edges.
+  DpadDirectionCallback? _pluginDirection(String key) {
+    const removeMarker = ':remove:';
+    const toggleMarker = ':row:';
+
+    String? siblingKey;
+    if (key.contains(removeMarker)) {
+      siblingKey = key.replaceFirst(removeMarker, toggleMarker);
+    } else if (key.contains(toggleMarker)) {
+      siblingKey = key.replaceFirst(toggleMarker, removeMarker);
+    }
+
+    return (TraversalDirection direction) {
+      if (siblingKey != null) {
+        final isToggle = key.contains(toggleMarker);
+        if (direction == TraversalDirection.right && !isToggle) {
+          return _focusMounted(_pool.of(siblingKey));
+        }
+        if (direction == TraversalDirection.left && isToggle) {
+          return _focusMounted(_pool.of(siblingKey));
+        }
+      }
+      if (direction == TraversalDirection.left) return _focusSidebar();
+      if (direction == TraversalDirection.right) return _focusScrollRail();
+      return false;
+    };
+  }
+
+  Widget _buildSectionContent(_SectionMeta meta, WarpTokens t) {
+    switch (meta.kind) {
+      case _SectionKind.pluginList:
+        return PluginsPanel(
+          t: t,
+          focusFor: _pool.of,
+          directionFor: _pluginDirection,
+        );
+
+      case _SectionKind.pluginConfig:
+        return PluginSettingsPanel(
+          // Keyed so switching between two plugin pages rebuilds state rather
+          // than carrying one plugin's pending edits onto another's form.
+          key: ValueKey(meta.pluginId),
+          pluginId: meta.pluginId!,
+          t: t,
+          focusFor: _pool.of,
+          directionFor: _pluginDirection,
+        );
+
+      case _SectionKind.builtin:
+        return switch (meta.builtin) {
+          _SettingsSection.auth => _AuthSectionPanel(
+            t: t,
+            traktFocusNode: _traktFocusNode,
+            debridFocusNode: _debridFocusNode,
+            onFocusSidebar: _focusSidebar,
+            onFocusRail: _focusScrollRail,
+          ),
+          _SettingsSection.providers => _ProvidersPanel(t: t),
+          _SettingsSection.apiKeys => _ApiKeysPanel(
+            t: t,
+            focusNodes: _apiKeyFocusNodes,
+            onFocusSidebar: _focusSidebar,
+            onFocusRail: _focusScrollRail,
+          ),
+          _SettingsSection.connection => _ConnectionPanel(
+            t: t,
+            fieldFocusNode: _connectionFieldFocusNode,
+            wrapperFocusNode: _connectionWrapperFocusNode,
+            testFocusNode: _connectionTestFocusNode,
+            saveFocusNode: _connectionSaveFocusNode,
+            onFocusSidebar: _focusSidebar,
+            onFocusRail: _focusScrollRail,
+          ),
+          _SettingsSection.catalog => _CatalogPanel(
+            t: t,
+            movieFocusNode: _catalogMovieFocusNode,
+            showFocusNode: _catalogShowFocusNode,
+            configureFocusNodes: _catalogConfigureFocusNodes,
+            saveFocusNode: _catalogSaveFocusNode,
+            refreshFocusNode: _catalogRefreshFocusNode,
+            onFocusSidebar: _focusSidebar,
+            onFocusRail: _focusScrollRail,
+          ),
+          _ => _GeneralPanel(t: t),
+        };
+    }
+  }
+
   bool _scrollRailDirection(TraversalDirection direction) {
     if (direction == TraversalDirection.up) {
       _scrollSettingsBody(-1);
@@ -395,8 +723,26 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
   Widget build(BuildContext context) {
     final t = WarpTokens.watch(context, ref);
     final size = MediaQuery.sizeOf(context);
-    final meta = _sections.firstWhere((s) => s.id == _section);
     final scaler = MediaQuery.textScalerOf(context);
+
+    // Plugin pages are discovered at runtime.  While the request is in flight
+    // (or if it fails) the builtins render on their own, so Settings never
+    // blocks on the network — the page has to work when the backend is the very
+    // thing you came here to fix.
+    final plugins =
+        ref.watch(configurablePluginsProvider).asData?.value ?? const [];
+    _sections = _buildSections(plugins);
+    if (!_sections.any((s) => s.id == _sectionId)) {
+      // The section we were on no longer exists (plugin uninstalled).  Fall
+      // back rather than render an empty panel.
+      _sectionId = _sections.first.id;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _focusSidebar();
+      });
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) => _reapFocusNodes());
+
+    final meta = _currentSection;
 
     final sidebarW = scaler.scale((size.width * 0.175).clamp(240.0, 310.0));
     final hPadSide = scaler.scale((size.width * 0.012).clamp(16.0, 22.0));
@@ -500,7 +846,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
                             for (var i = 0; i < _sections.length; i++)
                               _NavItem(
                                 meta: _sections[i],
-                                selected: _section == _sections[i].id,
+                                selected: _sectionId == _sections[i].id,
                                 onTap: () => _selectSection(_sections[i].id),
                                 screenSize: size,
                                 focusNode: _sidebarFocusNodes[i],
@@ -607,49 +953,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
                               child: SingleChildScrollView(
                                 controller: _contentScrollController,
                                 padding: EdgeInsets.all(bodyPad),
-                                child: switch (_section) {
-                                  _SettingsSection.auth => _AuthSectionPanel(
-                                    t: t,
-                                    traktFocusNode: _traktFocusNode,
-                                    debridFocusNode: _debridFocusNode,
-                                    onFocusSidebar: _focusSidebar,
-                                    onFocusRail: _focusScrollRail,
-                                  ),
-                                  _SettingsSection.providers => _ProvidersPanel(
-                                    t: t,
-                                  ),
-                                  _SettingsSection.apiKeys => _ApiKeysPanel(
-                                    t: t,
-                                    focusNodes: _apiKeyFocusNodes,
-                                    onFocusSidebar: _focusSidebar,
-                                    onFocusRail: _focusScrollRail,
-                                  ),
-                                  _SettingsSection.connection =>
-                                    _ConnectionPanel(
-                                      t: t,
-                                      fieldFocusNode: _connectionFieldFocusNode,
-                                      wrapperFocusNode:
-                                          _connectionWrapperFocusNode,
-                                      testFocusNode: _connectionTestFocusNode,
-                                      saveFocusNode: _connectionSaveFocusNode,
-                                      onFocusSidebar: _focusSidebar,
-                                      onFocusRail: _focusScrollRail,
-                                    ),
-                                  _SettingsSection.catalog => _CatalogPanel(
-                                    t: t,
-                                    movieFocusNode: _catalogMovieFocusNode,
-                                    showFocusNode: _catalogShowFocusNode,
-                                    configureFocusNodes:
-                                        _catalogConfigureFocusNodes,
-                                    saveFocusNode: _catalogSaveFocusNode,
-                                    refreshFocusNode: _catalogRefreshFocusNode,
-                                    onFocusSidebar: _focusSidebar,
-                                    onFocusRail: _focusScrollRail,
-                                  ),
-                                  _SettingsSection.general => _GeneralPanel(
-                                    t: t,
-                                  ),
-                                },
+                                child: _buildSectionContent(meta, t),
                               ),
                             ),
                             _SettingsScrollRail(
@@ -721,7 +1025,6 @@ class _NavItemState extends State<_NavItem> {
       onExit: (_) => setState(() => _hovered = false),
       cursor: SystemMouseCursors.click,
       child: DpadFocusable(
-        effects: const [],
         focusNode: widget.focusNode,
         autofocus: widget.autofocus,
         onDirection: widget.onDirection,
@@ -873,7 +1176,6 @@ class _SettingsScrollRail extends StatelessWidget {
       width: 24,
       child: Center(
         child: DpadFocusable(
-          effects: const [],
           focusNode: focusNode,
           onDirection: onDirection,
           onSelect: () {},
@@ -910,25 +1212,21 @@ class _SettingsScrollRail extends StatelessWidget {
   }
 }
 
+/// A view over the four focus nodes belonging to one API-key row.
+///
+/// Holds no nodes of its own — the pool owns them, so this survives being
+/// rebuilt and there is nothing here to dispose.
 class _ApiKeyFocus {
-  final FocusNode field;
-  final FocusNode wrapper;
-  final FocusNode visibility;
-  final FocusNode save;
+  final _FocusPool _pool;
+  final String _key;
   bool hasVisibility = true;
 
-  _ApiKeyFocus(String key)
-    : field = FocusNode(debugLabel: 'SettingsApiKeyField-$key'),
-      wrapper = FocusNode(debugLabel: 'SettingsApiKeyWrapper-$key'),
-      visibility = FocusNode(debugLabel: 'SettingsApiKeyVisibility-$key'),
-      save = FocusNode(debugLabel: 'SettingsApiKeySave-$key');
+  _ApiKeyFocus(this._pool, this._key);
 
-  void dispose() {
-    field.dispose();
-    wrapper.dispose();
-    visibility.dispose();
-    save.dispose();
-  }
+  FocusNode get field => _pool.of('apikey:$_key:field');
+  FocusNode get wrapper => _pool.of('apikey:$_key:wrapper');
+  FocusNode get visibility => _pool.of('apikey:$_key:visibility');
+  FocusNode get save => _pool.of('apikey:$_key:save');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -941,7 +1239,7 @@ class _ConnectionPanel extends ConsumerStatefulWidget {
   final FocusNode wrapperFocusNode;
   final FocusNode testFocusNode;
   final FocusNode saveFocusNode;
-  final bool Function([_SettingsSection? section]) onFocusSidebar;
+  final bool Function([_SectionMeta? section]) onFocusSidebar;
   final bool Function() onFocusRail;
   const _ConnectionPanel({
     required this.t,
@@ -1161,7 +1459,7 @@ class _ConnectionPanelState extends ConsumerState<_ConnectionPanel> {
 class _ApiKeysPanel extends ConsumerWidget {
   final WarpTokens t;
   final List<_ApiKeyFocus> focusNodes;
-  final bool Function([_SettingsSection? section]) onFocusSidebar;
+  final bool Function([_SectionMeta? section]) onFocusSidebar;
   final bool Function() onFocusRail;
   const _ApiKeysPanel({
     required this.t,
@@ -1980,7 +2278,7 @@ class _AuthSectionPanel extends StatelessWidget {
   final WarpTokens t;
   final FocusNode traktFocusNode;
   final FocusNode debridFocusNode;
-  final bool Function([_SettingsSection? section]) onFocusSidebar;
+  final bool Function([_SectionMeta? section]) onFocusSidebar;
   final bool Function() onFocusRail;
   const _AuthSectionPanel({
     required this.t,
@@ -2046,7 +2344,7 @@ class _CatalogPanel extends ConsumerStatefulWidget {
   final List<FocusNode> configureFocusNodes;
   final FocusNode saveFocusNode;
   final FocusNode refreshFocusNode;
-  final bool Function([_SettingsSection? section]) onFocusSidebar;
+  final bool Function([_SectionMeta? section]) onFocusSidebar;
   final bool Function() onFocusRail;
   const _CatalogPanel({
     required this.t,

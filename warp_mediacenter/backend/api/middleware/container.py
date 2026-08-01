@@ -33,6 +33,11 @@ class ServiceContainer:
     # Library
     torrent_search_service: Any = None
 
+    # Plugins
+    plugin_registry: Any = None
+    plugin_manager: Any = None
+    tracker_service: Any = None
+
     # Custom services by name
     _extras: Dict[str, Any] = field(default_factory=dict)
 
@@ -84,6 +89,9 @@ def init_container(
     trakt_manager: Any = None,
     information_providers: Any = None,
     torrent_search_service: Any = None,
+    plugin_registry: Any = None,
+    plugin_manager: Any = None,
+    tracker_service: Any = None,
     **extras: Any,
 ) -> ServiceContainer:
     """Create and register the global service container with all services."""
@@ -96,6 +104,9 @@ def init_container(
         trakt_manager=trakt_manager,
         information_providers=information_providers,
         torrent_search_service=torrent_search_service,
+        plugin_registry=plugin_registry,
+        plugin_manager=plugin_manager,
+        tracker_service=tracker_service,
         _extras=extras,
     )
     log.info("service_container_initialized")
