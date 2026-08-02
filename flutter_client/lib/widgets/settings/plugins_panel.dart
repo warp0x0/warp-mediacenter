@@ -129,10 +129,9 @@ class _PluginsPanelState extends ConsumerState<PluginsPanel> {
       _error = null;
     });
     try {
-      await ref.read(pluginActionsProvider).uninstall(
-        plugin.pluginId,
-        force: plugin.enabled,
-      );
+      await ref
+          .read(pluginActionsProvider)
+          .uninstall(plugin.pluginId, force: plugin.enabled);
     } catch (e) {
       if (mounted) setState(() => _error = _describe(e));
     } finally {
@@ -172,47 +171,75 @@ class _PluginsPanelState extends ConsumerState<PluginsPanel> {
           ),
         ],
       ),
+      // No title block here on purpose: the settings page header directly
+      // above already reads "Plugins / Trackers, providers & skins", so
+      // repeating it verbatim was pure duplication and pushed the real
+      // content down the screen.
       data: (categories) => Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          PluginSectionTitle('Plugins', t),
-          const SizedBox(height: 6),
-          Text(
-            'Extend Warp with trackers, providers, catalogs and skins.',
-            style: TextStyle(color: Colors.white38, fontSize: t.fontSubtitle),
-          ),
           if (_error != null) ...[
-            const SizedBox(height: 12),
             PluginCard(
-              padding: const EdgeInsets.all(14),
-              child: Text(
-                _error!,
-                style: TextStyle(
-                  color: Colors.redAccent,
-                  fontSize: t.fontSubtitle,
-                ),
+              padding: EdgeInsets.all(t.fontBody * 0.8),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.error_outline,
+                    size: t.fontBody,
+                    color: Colors.redAccent,
+                  ),
+                  SizedBox(width: t.fontBody * 0.5),
+                  Expanded(
+                    child: Text(
+                      _error!,
+                      style: TextStyle(
+                        color: Colors.redAccent,
+                        fontSize: t.fontSubtitle,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
+            SizedBox(height: t.fontBody),
           ],
-          const SizedBox(height: 20),
-          for (final category in categories) ...[
+          for (var i = 0; i < categories.length; i++) ...[
             _CategoryGroup(
-              category: category,
+              category: categories[i],
               t: t,
               busyPluginId: _busyPluginId,
               focusFor: widget.focusFor,
               directionFor: widget.directionFor,
-              onInstall: () => _install(category.id),
-              onToggle: (plugin) => _toggle(category, plugin),
+              onInstall: () => _install(categories[i].id),
+              onToggle: (plugin) => _toggle(categories[i], plugin),
               onUninstall: _uninstall,
             ),
-            const SizedBox(height: 26),
+            if (i != categories.length - 1) ...[
+              // TV only: at viewing distance the categories ran together into
+              // one undifferentiated column, so they get a real rule and much
+              // more air between them. Desktop keeps its existing rhythm.
+              if (t.isTV) ...[
+                SizedBox(height: t.fontBody * 1.9),
+                const PluginDivider(),
+                SizedBox(height: t.fontBody * 1.9),
+              ] else
+                SizedBox(height: t.fontBody * 1.7),
+            ],
           ],
         ],
       ),
     );
   }
 }
+
+/// Category glyphs, chosen to echo the settings sidebar's own iconography.
+IconData _categoryIcon(String id) => switch (id) {
+  'tracker' => Icons.sync_outlined,
+  'provider' => Icons.bolt_outlined,
+  'catalog' => Icons.grid_view_outlined,
+  'skin' => Icons.palette_outlined,
+  _ => Icons.extension_outlined,
+};
 
 class _CategoryGroup extends StatelessWidget {
   final PluginCategory category;
@@ -238,37 +265,45 @@ class _CategoryGroup extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final installKey = 'plugins:${category.id}:install';
+    final gap = t.fontBody;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
+            PluginIconTile(icon: _categoryIcon(category.id), t: t),
+            SizedBox(width: gap * 0.7),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
                     children: [
-                      Text(
-                        category.label,
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: t.fontBody,
-                          fontWeight: FontWeight.w700,
+                      Flexible(
+                        child: Text(
+                          category.label,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: t.fontBody,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.2,
+                          ),
                         ),
                       ),
                       if (category.exclusive) ...[
-                        const SizedBox(width: 8),
+                        SizedBox(width: gap * 0.5),
                         PluginStatusChip(
                           label: 'one at a time',
                           color: Colors.white38,
                           t: t,
+                          quiet: true,
                         ),
                       ],
                     ],
                   ),
-                  const SizedBox(height: 2),
+                  SizedBox(height: gap * 0.15),
                   Text(
                     category.description,
                     style: TextStyle(
@@ -279,24 +314,35 @@ class _CategoryGroup extends StatelessWidget {
                 ],
               ),
             ),
-            const SizedBox(width: 12),
+            SizedBox(width: gap * 0.7),
+            // Accent-tinted: installing is this screen's primary action, and
+            // a transparent button repeated four times read as chrome rather
+            // than something to press.
             WarpDpadButton(
               tokens: t,
               focusNode: focusFor(installKey),
               onDirection: directionFor(installKey),
               onSelect: onInstall,
               enabled: busyPluginId == null,
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              padding: EdgeInsets.symmetric(
+                horizontal: gap * 0.85,
+                vertical: gap * 0.5,
+              ),
+              backgroundColor: kAccent.withAlpha(26),
+              borderColor: kAccent.withAlpha(90),
+              focusBackgroundColor: kAccent.withAlpha(64),
+              focusBorderColor: kAccent,
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Icon(Icons.add, size: 16, color: Colors.white70),
-                  const SizedBox(width: 6),
+                  Icon(Icons.add_rounded, size: t.fontBody, color: kAccent),
+                  SizedBox(width: gap * 0.35),
                   Text(
-                    'Install new Plugin',
+                    'Install',
                     style: TextStyle(
-                      color: Colors.white,
+                      color: kAccent,
                       fontSize: t.fontSubtitle,
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
                 ],
@@ -304,22 +350,37 @@ class _CategoryGroup extends StatelessWidget {
             ),
           ],
         ),
-        const SizedBox(height: 12),
-        if (category.installed.isEmpty)
-          PluginEmptyHint('No ${category.label.toLowerCase()} installed yet.', t)
-        else
-          for (final plugin in category.installed)
-            _PluginRow(
-              plugin: plugin,
-              category: category,
-              t: t,
-              busy: busyPluginId == plugin.pluginId,
-              disabled: busyPluginId != null,
-              focusFor: focusFor,
-              directionFor: directionFor,
-              onToggle: () => onToggle(plugin),
-              onUninstall: () => onUninstall(plugin),
-            ),
+        SizedBox(height: gap * (t.isTV ? 0.85 : 0.7)),
+        // TV only: entries sit inset to the width of the category's icon tile,
+        // so they line up under its label and read as belonging to it rather
+        // than as a flat list that happens to follow a heading.
+        Padding(
+          padding: EdgeInsets.only(left: t.isTV ? gap * 2.7 : 0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (category.installed.isEmpty)
+                PluginEmptyHint(
+                  'No ${category.label.toLowerCase()} installed yet.',
+                  t,
+                  icon: _categoryIcon(category.id),
+                )
+              else
+                for (final plugin in category.installed)
+                  _PluginRow(
+                    plugin: plugin,
+                    category: category,
+                    t: t,
+                    busy: busyPluginId == plugin.pluginId,
+                    disabled: busyPluginId != null,
+                    focusFor: focusFor,
+                    directionFor: directionFor,
+                    onToggle: () => onToggle(plugin),
+                    onUninstall: () => onUninstall(plugin),
+                  ),
+            ],
+          ),
+        ),
       ],
     );
   }
@@ -354,12 +415,37 @@ class _PluginRow extends StatelessWidget {
     final removeKey = 'plugins:${category.id}:remove:${plugin.pluginId}';
     final auth = plugin.auth;
 
+    final gap = t.fontBody;
+    final on = plugin.enabled;
+
     return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: PluginCard(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      padding: EdgeInsets.only(bottom: gap * 0.55),
+      child: Container(
+        width: double.infinity,
+        padding: EdgeInsets.symmetric(
+          horizontal: gap * 0.9,
+          vertical: gap * 0.75,
+        ),
+        decoration: BoxDecoration(
+          // An enabled plugin gets a faint accent wash and a brighter edge, so
+          // "which one is on" survives a glance from across the room — the
+          // chip and the switch alone were too small to carry that at TV
+          // viewing distance.
+          color: on ? kAccent.withAlpha(16) : Colors.white.withAlpha(8),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: on ? kAccent.withAlpha(70) : Colors.white.withAlpha(20),
+          ),
+        ),
         child: Row(
           children: [
+            PluginIconTile(
+              icon: _categoryIcon(category.id),
+              t: t,
+              active: on,
+              scale: 0.92,
+            ),
+            SizedBox(width: gap * 0.7),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -377,36 +463,39 @@ class _PluginRow extends StatelessWidget {
                           ),
                         ),
                       ),
-                      const SizedBox(width: 8),
+                      SizedBox(width: gap * 0.45),
                       Text(
                         'v${plugin.version}',
                         style: TextStyle(
-                          color: Colors.white24,
-                          fontSize: t.fontSubtitle,
+                          color: Colors.white30,
+                          fontSize: t.fontSubtitle * 0.88,
                         ),
                       ),
-                      if (plugin.enabled) ...[
-                        const SizedBox(width: 10),
+                      if (on) ...[
+                        SizedBox(width: gap * 0.5),
                         PluginStatusChip(
                           label: category.exclusive ? 'Active' : 'Enabled',
                           color: kAccent,
                           t: t,
+                          dot: true,
                         ),
                       ],
                       if (auth?.reauthRequired == true) ...[
-                        const SizedBox(width: 8),
+                        SizedBox(width: gap * 0.4),
                         PluginStatusChip(
                           label: 'Sign in again',
                           color: Colors.orangeAccent,
                           t: t,
+                          dot: true,
                         ),
                       ],
                     ],
                   ),
                   if (plugin.description != null) ...[
-                    const SizedBox(height: 3),
+                    SizedBox(height: gap * 0.2),
                     Text(
                       plugin.description!,
+                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         color: Colors.white38,
                         fontSize: t.fontSubtitle,
@@ -416,12 +505,12 @@ class _PluginRow extends StatelessWidget {
                 ],
               ),
             ),
-            const SizedBox(width: 12),
+            SizedBox(width: gap * 0.7),
             if (busy)
-              const SizedBox(
-                width: 18,
-                height: 18,
-                child: CircularProgressIndicator(
+              SizedBox(
+                width: t.fontBody * 1.1,
+                height: t.fontBody * 1.1,
+                child: const CircularProgressIndicator(
                   color: kAccent,
                   strokeWidth: 2,
                 ),
@@ -433,28 +522,29 @@ class _PluginRow extends StatelessWidget {
                 onDirection: directionFor(removeKey),
                 onSelect: onUninstall,
                 enabled: !disabled,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 8,
-                ),
-                child: const Icon(
+                padding: EdgeInsets.all(gap * 0.45),
+                focusBackgroundColor: Colors.redAccent.withAlpha(38),
+                focusBorderColor: Colors.redAccent,
+                child: Icon(
                   Icons.delete_outline,
-                  size: 16,
+                  size: t.fontBody,
                   color: Colors.white54,
                 ),
               ),
-              const SizedBox(width: 10),
+              SizedBox(width: gap * 0.5),
               WarpDpadButton(
                 tokens: t,
                 focusNode: focusFor(toggleKey),
                 onDirection: directionFor(toggleKey),
                 onSelect: onToggle,
                 enabled: !disabled,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 6,
-                  vertical: 6,
+                padding: EdgeInsets.symmetric(
+                  horizontal: gap * 0.4,
+                  vertical: gap * 0.4,
                 ),
-                child: _ToggleTrack(on: plugin.enabled),
+                backgroundColor: Colors.transparent,
+                borderColor: Colors.transparent,
+                child: _ToggleTrack(on: on, t: t),
               ),
             ],
           ],
@@ -468,31 +558,39 @@ class _PluginRow extends StatelessWidget {
 /// instead of competing with it for a tap target.
 class _ToggleTrack extends StatelessWidget {
   final bool on;
-  const _ToggleTrack({required this.on});
+  final WarpTokens t;
+  const _ToggleTrack({required this.on, required this.t});
 
   @override
   Widget build(BuildContext context) {
+    // Sized from the type scale rather than fixed pixels — at TV density the
+    // old 40x22 switch was a speck next to text twice its former size.
+    final h = t.fontBody * 1.25;
+    final w = h * 1.85;
+    final knob = h - 6;
     return AnimatedContainer(
       duration: const Duration(milliseconds: 140),
-      width: 40,
-      height: 22,
+      width: w,
+      height: h,
       decoration: BoxDecoration(
-        color: on ? kAccent.withAlpha(90) : Colors.white.withAlpha(20),
+        color: on ? kAccent.withAlpha(80) : Colors.white.withAlpha(20),
         borderRadius: BorderRadius.circular(999),
         border: Border.all(
-          color: on ? kAccent : Colors.white.withAlpha(40),
+          color: on ? kAccent : Colors.white.withAlpha(45),
+          width: 1.5,
         ),
       ),
       child: AnimatedAlign(
         duration: const Duration(milliseconds: 140),
+        curve: Curves.easeOutCubic,
         alignment: on ? Alignment.centerRight : Alignment.centerLeft,
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 3),
+          padding: const EdgeInsets.symmetric(horizontal: 2.5),
           child: Container(
-            width: 15,
-            height: 15,
+            width: knob,
+            height: knob,
             decoration: BoxDecoration(
-              color: on ? kAccent : Colors.white54,
+              color: on ? Colors.white : Colors.white54,
               shape: BoxShape.circle,
             ),
           ),

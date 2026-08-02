@@ -2,6 +2,9 @@ import 'package:dpad/dpad.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../theme/warp_theme.dart';
+import '../shared/warp_accent_button.dart';
+
 import '../../models/plugin.dart';
 import '../../providers/catalog_provider.dart';
 import '../../providers/plugin_provider.dart';
@@ -40,7 +43,8 @@ class PluginSettingsPanel extends ConsumerStatefulWidget {
   });
 
   @override
-  ConsumerState<PluginSettingsPanel> createState() => _PluginSettingsPanelState();
+  ConsumerState<PluginSettingsPanel> createState() =>
+      _PluginSettingsPanelState();
 }
 
 class _PluginSettingsPanelState extends ConsumerState<PluginSettingsPanel> {
@@ -64,7 +68,8 @@ class _PluginSettingsPanelState extends ConsumerState<PluginSettingsPanel> {
 
   TextEditingController _controllerFor(PluginField field) {
     return _controllers.putIfAbsent(field.id, () {
-      final value = field.type == PluginFieldType.password &&
+      final value =
+          field.type == PluginFieldType.password &&
               field.stringValue == _secretPlaceholder
           ? ''
           : field.stringValue;
@@ -75,7 +80,8 @@ class _PluginSettingsPanelState extends ConsumerState<PluginSettingsPanel> {
   /// Drop cached edits when the schema is replaced (plugin reinstalled, or a
   /// save round-tripped), so stale text does not linger over fresh values.
   void _syncTo(PluginSettingsSchema schema) {
-    final key = '${schema.pluginId}:${schema.version}:${schema.sections.length}';
+    final key =
+        '${schema.pluginId}:${schema.version}:${schema.sections.length}';
     if (_schemaKey == key) return;
     _schemaKey = key;
     _edits.clear();
@@ -132,7 +138,10 @@ class _PluginSettingsPanelState extends ConsumerState<PluginSettingsPanel> {
   }
 
   Future<void> _save() async {
-    final schema = ref.read(pluginSettingsSchemaProvider(widget.pluginId)).asData?.value;
+    final schema = ref
+        .read(pluginSettingsSchemaProvider(widget.pluginId))
+        .asData
+        ?.value;
     if (schema == null) return;
 
     final values = _collectValues(schema);
@@ -146,7 +155,9 @@ class _PluginSettingsPanelState extends ConsumerState<PluginSettingsPanel> {
       _notice = null;
     });
     try {
-      await ref.read(pluginActionsProvider).saveSettings(widget.pluginId, values);
+      await ref
+          .read(pluginActionsProvider)
+          .saveSettings(widget.pluginId, values);
       if (!mounted) return;
       setState(() {
         _saving = false;
@@ -169,10 +180,7 @@ class _PluginSettingsPanelState extends ConsumerState<PluginSettingsPanel> {
         context: context,
         builder: (ctx) => AlertDialog(
           backgroundColor: const Color(0xFF15181C),
-          title: Text(
-            field.label,
-            style: const TextStyle(color: Colors.white),
-          ),
+          title: Text(field.label, style: const TextStyle(color: Colors.white)),
           content: const Text(
             'This cannot be undone. Continue?',
             style: TextStyle(color: Colors.white70),
@@ -198,7 +206,9 @@ class _PluginSettingsPanelState extends ConsumerState<PluginSettingsPanel> {
       _notice = null;
     });
     try {
-      await ref.read(pluginActionsProvider).runAction(widget.pluginId, field.id);
+      await ref
+          .read(pluginActionsProvider)
+          .runAction(widget.pluginId, field.id);
       // A plugin action named exactly this reloads both the Movies and Shows
       // tabs (every catalog row, not just this plugin's own rows) — the same
       // provider invalidation the Catalog panel's own "Refresh Widgets"
@@ -245,97 +255,156 @@ class _PluginSettingsPanelState extends ConsumerState<PluginSettingsPanel> {
       ),
       data: (schema) {
         _syncTo(schema);
+
+        // The host decides the page's shape, not the plugin. Whatever sections
+        // a plugin declares, its *actions* are lifted out and collected into a
+        // single Actions card at the bottom — so "Refresh Widgets" can never
+        // end up filed under a "Behaviour" heading it has nothing to do with,
+        // and every tracker lands in the same layout whether the schema comes
+        // from the host or from the plugin itself.
+        final actions = [
+          for (final section in schema.sections)
+            for (final field in section.fields)
+              if (field.type == PluginFieldType.actionButton) field,
+        ];
+        final contentSections = [
+          for (final section in schema.sections)
+            (
+              section: section,
+              fields: [
+                for (final field in section.fields)
+                  if (field.type != PluginFieldType.actionButton) field,
+              ],
+            ),
+        ].where((s) => s.fields.isNotEmpty).toList();
+
+        final gap = t.cardGap * 2;
+
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                PluginSectionTitle(schema.title, t),
-                const SizedBox(width: 10),
-                PluginStatusChip(
-                  label: schema.active ? 'Active' : 'Inactive',
-                  color: schema.active ? kAccent : Colors.white38,
-                  t: t,
-                ),
-              ],
-            ),
-            if (schema.description != null) ...[
-              const SizedBox(height: 6),
-              Text(
-                schema.description!,
-                style: TextStyle(
-                  color: Colors.white38,
-                  fontSize: t.fontSubtitle,
+            // No name/description block: the settings header directly above
+            // already carries both. Only the active-state chip is worth
+            // repeating, and it rides along with the first card instead.
+            if (contentSections.isEmpty && actions.isEmpty)
+              PluginCard(
+                child: PluginEmptyHint('This plugin has no settings.', t),
+              ),
+            for (var i = 0; i < contentSections.length; i++) ...[
+              if (i > 0) SizedBox(height: gap),
+              PluginCard(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: PluginCardHeader(
+                            icon: _sectionIcon(contentSections[i].section.id),
+                            label: contentSections[i].section.title,
+                            t: t,
+                          ),
+                        ),
+                        if (i == 0)
+                          PluginStatusChip(
+                            label: schema.active ? 'Active' : 'Inactive',
+                            color: schema.active ? kAccent : Colors.white38,
+                            t: t,
+                            dot: schema.active,
+                          ),
+                      ],
+                    ),
+                    if (contentSections[i].section.description != null)
+                      PluginHelpText(
+                        contentSections[i].section.description!,
+                        t,
+                      ),
+                    SizedBox(height: t.fontBody),
+                    for (final field in contentSections[i].fields)
+                      _buildField(schema, contentSections[i].section, field),
+                  ],
                 ),
               ),
             ],
-            if (schema.sections.isEmpty) ...[
-              const SizedBox(height: 20),
-              PluginEmptyHint('This plugin has no settings.', t),
-            ],
-            for (final section in schema.sections) ...[
-              const SizedBox(height: 24),
-              Text(
-                section.title,
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: t.fontBody,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              if (section.description != null)
-                PluginHelpText(section.description!, t),
-              const SizedBox(height: 12),
-              for (final field in section.fields)
-                _buildField(schema, section, field),
-            ],
-            if (schema.editableFields.isNotEmpty) ...[
-              const SizedBox(height: 24),
-              Row(
-                children: [
-                  WarpDpadButton(
-                    tokens: t,
-                    focusNode: widget.focusFor(_saveKey),
-                    onDirection: widget.directionFor(_saveKey),
-                    onSelect: _save,
-                    enabled: !_saving,
-                    child: Text(
-                      _saving ? 'Saving…' : 'Save',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: t.fontBody,
+            if (actions.isNotEmpty || schema.editableFields.isNotEmpty) ...[
+              if (contentSections.isNotEmpty) SizedBox(height: gap),
+              PluginCard(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    PluginCardHeader(
+                      icon: Icons.terminal_outlined,
+                      label: 'Actions',
+                      t: t,
+                    ),
+                    SizedBox(height: t.fontBody),
+                    DpadRegion(
+                      memoryKey: 'plugin-actions-${widget.pluginId}',
+                      child: Wrap(
+                        spacing: 12,
+                        runSpacing: 12,
+                        children: [
+                          if (schema.editableFields.isNotEmpty)
+                            WarpAccentButton(
+                              label: _saving ? 'Saving…' : 'Save',
+                              icon: Icons.check,
+                              accentColor: WarpColors.accent,
+                              fontSize: t.fontSubtitle,
+                              paddingHorizontal: 20,
+                              paddingVertical: 12,
+                              focusNode: widget.focusFor(_saveKey),
+                              onDirection: widget.directionFor(_saveKey),
+                              onSelect: _save,
+                            ),
+                          for (final field in actions)
+                            WarpAccentButton(
+                              label: field.label,
+                              icon: _actionIcon(field.id),
+                              accentColor: field.style == 'danger'
+                                  ? WarpColors.danger
+                                  : WarpColors.accent,
+                              fontSize: t.fontSubtitle,
+                              paddingHorizontal: 20,
+                              paddingVertical: 12,
+                              focusNode: widget.focusFor(_fieldKey(field)),
+                              onDirection: widget.directionFor(
+                                _fieldKey(field),
+                              ),
+                              onSelect: () => _runAction(field),
+                            ),
+                        ],
                       ),
                     ),
+                    for (final field in actions)
+                      if (field.help != null) PluginHelpText(field.help!, t),
+                  ],
+                ),
+              ),
+            ],
+            if (_notice != null || _error != null) ...[
+              SizedBox(height: t.fontBody),
+              Row(
+                children: [
+                  Icon(
+                    _error != null ? Icons.error_outline : Icons.check_circle,
+                    size: t.fontBody,
+                    color: _error != null
+                        ? Colors.redAccent
+                        : const Color(0xFF3DDC84),
                   ),
-                  const SizedBox(width: 14),
-                  if (_notice != null)
-                    Text(
-                      _notice!,
+                  SizedBox(width: t.fontBody * 0.5),
+                  Expanded(
+                    child: Text(
+                      _error ?? _notice!,
                       style: TextStyle(
-                        color: const Color(0xFF3DDC84),
+                        color: _error != null
+                            ? Colors.redAccent
+                            : const Color(0xFF3DDC84),
                         fontSize: t.fontSubtitle,
                       ),
                     ),
-                  if (_error != null)
-                    Expanded(
-                      child: Text(
-                        _error!,
-                        style: TextStyle(
-                          color: Colors.redAccent,
-                          fontSize: t.fontSubtitle,
-                        ),
-                      ),
-                    ),
+                  ),
                 ],
-              ),
-            ] else if (_error != null) ...[
-              const SizedBox(height: 16),
-              Text(
-                _error!,
-                style: TextStyle(
-                  color: Colors.redAccent,
-                  fontSize: t.fontSubtitle,
-                ),
               ),
             ],
           ],
@@ -343,6 +412,23 @@ class _PluginSettingsPanelState extends ConsumerState<PluginSettingsPanel> {
       },
     );
   }
+
+  /// Glyphs for the sections a plugin is likely to declare. Unknown ids fall
+  /// back to a generic tune icon rather than rendering nothing, so a plugin
+  /// this build has never seen still gets a complete-looking header.
+  IconData _sectionIcon(String id) => switch (id) {
+    'account' => Icons.person_outline,
+    'credentials' => Icons.key_outlined,
+    'behaviour' || 'behavior' => Icons.tune_outlined,
+    'sync' => Icons.sync_outlined,
+    _ => Icons.tune_outlined,
+  };
+
+  IconData? _actionIcon(String id) => switch (id) {
+    'refresh_widgets' || 'clear_cache' => Icons.refresh,
+    'sign_out' || 'disconnect' => Icons.logout,
+    _ => Icons.play_arrow_outlined,
+  };
 
   String get _saveKey => 'plugin:${widget.pluginId}:save';
 
@@ -382,31 +468,10 @@ class _PluginSettingsPanelState extends ConsumerState<PluginSettingsPanel> {
         );
 
       case PluginFieldType.actionButton:
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 14),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              WarpDpadButton(
-                tokens: t,
-                focusNode: widget.focusFor(_fieldKey(field)),
-                onDirection: widget.directionFor(_fieldKey(field)),
-                onSelect: () => _runAction(field),
-                enabled: !_saving,
-                child: Text(
-                  field.label,
-                  style: TextStyle(
-                    color: field.style == 'danger'
-                        ? Colors.redAccent
-                        : Colors.white,
-                    fontSize: t.fontBody,
-                  ),
-                ),
-              ),
-              if (field.help != null) PluginHelpText(field.help!, t),
-            ],
-          ),
-        );
+        // Unreachable: actions are lifted out of their declared section and
+        // rendered together in the Actions card (see build). Kept so the
+        // switch stays exhaustive over PluginFieldType.
+        return const SizedBox.shrink();
 
       case PluginFieldType.toggle:
         final value = _valueOf(field) == true;
@@ -527,10 +592,7 @@ class _PluginSettingsPanelState extends ConsumerState<PluginSettingsPanel> {
                 children: [
                   Text(
                     field.label,
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: t.fontBody,
-                    ),
+                    style: TextStyle(color: Colors.white, fontSize: t.fontBody),
                   ),
                   if (field.required) ...[
                     const SizedBox(width: 6),
@@ -544,7 +606,11 @@ class _PluginSettingsPanelState extends ConsumerState<PluginSettingsPanel> {
                   ],
                   if (stored) ...[
                     const SizedBox(width: 10),
-                    PluginStatusChip(label: 'saved', color: Colors.white38, t: t),
+                    PluginStatusChip(
+                      label: 'saved',
+                      color: Colors.white38,
+                      t: t,
+                    ),
                   ],
                 ],
               ),

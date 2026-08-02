@@ -72,9 +72,15 @@ class _FileBrowserModalState extends ConsumerState<FileBrowserModal>
   bool _remoteMode = false;
 
   final _remoteUrlController = TextEditingController();
-  final _remoteFieldFocusNode = FocusNode(debugLabel: 'FileBrowser-remote-field');
-  final _remoteWrapperFocusNode = FocusNode(debugLabel: 'FileBrowser-remote-wrapper');
-  final _browseButtonFocusNode = FocusNode(debugLabel: 'FileBrowser-remote-browse');
+  final _remoteFieldFocusNode = FocusNode(
+    debugLabel: 'FileBrowser-remote-field',
+  );
+  final _remoteWrapperFocusNode = FocusNode(
+    debugLabel: 'FileBrowser-remote-wrapper',
+  );
+  final _browseButtonFocusNode = FocusNode(
+    debugLabel: 'FileBrowser-remote-browse',
+  );
 
   @override
   void initState() {
@@ -179,8 +185,15 @@ class _FileBrowserModalState extends ConsumerState<FileBrowserModal>
     final t = WarpTokens.watch(context, ref);
     final size = MediaQuery.sizeOf(context);
     final modalScale = MediaQuery.textScalerOf(context).scale(1);
-    final w = (size.width * 0.85).clamp(380.0, 780.0);
-    final h = (size.height * 0.75).clamp(400.0, 700.0) / modalScale;
+    // The ceilings are what actually bind here, not the percentages: under the
+    // TV viewport scale the reported size is the (large) virtual one, so the
+    // clamp always wins. Desktop's 780x700 left barely one directory entry
+    // visible once the remote-URL row, the OR rule, breadcrumbs and the footer
+    // had taken their share, so TV gets its own, much larger pair.
+    final maxW = t.isTV ? 1000.0 : 780.0;
+    final maxH = t.isTV ? 1100.0 : 700.0;
+    final w = (size.width * 0.85).clamp(380.0, maxW);
+    final h = (size.height * 0.8).clamp(400.0, maxH) / modalScale;
 
     return Dialog(
       backgroundColor: Colors.transparent,
@@ -397,59 +410,68 @@ class _RemoteUrlRow extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 10),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: WarpDpadTextField(
-                  controller: controller,
+          // IntrinsicHeight + stretch so Browse matches the field's height
+          // exactly. They were laid out independently before, so the button
+          // sat shorter than the field and the row read as misaligned.
+          IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(
+                  child: WarpDpadTextField(
+                    controller: controller,
+                    tokens: t,
+                    fieldFocusNode: fieldFocusNode,
+                    wrapperFocusNode: wrapperFocusNode,
+                    onSubmitted: (_) => onBrowse(),
+                    decoration: InputDecoration(
+                      isDense: true,
+                      hintText: 'https://example.com/plugin.zip',
+                      hintStyle: const TextStyle(color: Colors.white24),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: BorderSide(
+                          color: Colors.white.withAlpha(30),
+                        ),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: BorderSide(
+                          color: Colors.white.withAlpha(30),
+                        ),
+                      ),
+                    ),
+                    style: TextStyle(color: Colors.white, fontSize: t.fontBody),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                WarpDpadButton(
                   tokens: t,
-                  fieldFocusNode: fieldFocusNode,
-                  wrapperFocusNode: wrapperFocusNode,
-                  onSubmitted: (_) => onBrowse(),
-                  decoration: InputDecoration(
-                    isDense: true,
-                    hintText: 'https://example.com/plugin.zip',
-                    hintStyle: const TextStyle(color: Colors.white24),
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 10,
-                    ),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: BorderSide(color: Colors.white.withAlpha(30)),
-                    ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: BorderSide(color: Colors.white.withAlpha(30)),
+                  focusNode: browseFocusNode,
+                  onSelect: onBrowse,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 10,
+                  ),
+                  backgroundColor: const Color(0xFF0DB2E2).withAlpha(30),
+                  borderColor: const Color(0xFF0DB2E2).withAlpha(80),
+                  focusBackgroundColor: const Color(0xFF0DB2E2).withAlpha(60),
+                  focusBorderColor: const Color(0xFF0DB2E2),
+                  child: Text(
+                    'Browse',
+                    style: TextStyle(
+                      color: const Color(0xFF0DB2E2),
+                      fontWeight: FontWeight.w600,
+                      fontSize: t.isTV ? t.fontSubtitle : 13,
                     ),
                   ),
-                  style: TextStyle(color: Colors.white, fontSize: t.fontBody),
                 ),
-              ),
-              const SizedBox(width: 10),
-              WarpDpadButton(
-                tokens: t,
-                focusNode: browseFocusNode,
-                onSelect: onBrowse,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 10,
-                ),
-                backgroundColor: const Color(0xFF0DB2E2).withAlpha(30),
-                borderColor: const Color(0xFF0DB2E2).withAlpha(80),
-                focusBackgroundColor: const Color(0xFF0DB2E2).withAlpha(60),
-                focusBorderColor: const Color(0xFF0DB2E2),
-                child: const Text(
-                  'Browse',
-                  style: TextStyle(
-                    color: Color(0xFF0DB2E2),
-                    fontWeight: FontWeight.w600,
-                    fontSize: 13,
-                  ),
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
         ],
       ),
@@ -466,7 +488,9 @@ class _OrDivider extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
       child: Row(
         children: [
-          Expanded(child: Divider(color: Colors.white.withAlpha(15), height: 1)),
+          Expanded(
+            child: Divider(color: Colors.white.withAlpha(15), height: 1),
+          ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 10),
             child: Text(
@@ -479,7 +503,9 @@ class _OrDivider extends StatelessWidget {
               ),
             ),
           ),
-          Expanded(child: Divider(color: Colors.white.withAlpha(15), height: 1)),
+          Expanded(
+            child: Divider(color: Colors.white.withAlpha(15), height: 1),
+          ),
         ],
       ),
     );

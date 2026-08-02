@@ -235,10 +235,8 @@ List<_SectionMeta> _buildSections(List<PluginSummary> plugins) {
 class _FocusPool {
   final Map<String, FocusNode> _nodes = {};
 
-  FocusNode of(String key) => _nodes.putIfAbsent(
-    key,
-    () => FocusNode(debugLabel: 'Settings/$key'),
-  );
+  FocusNode of(String key) =>
+      _nodes.putIfAbsent(key, () => FocusNode(debugLabel: 'Settings/$key'));
 
   bool has(String key) => _nodes.containsKey(key);
 
@@ -401,7 +399,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
   List<String> _contentKeysFor(_SectionMeta section) {
     switch (section.kind) {
       case _SectionKind.pluginList:
-        final categories = ref.read(pluginCategoriesProvider).asData?.value ?? [];
+        final categories =
+            ref.read(pluginCategoriesProvider).asData?.value ?? [];
         return [
           for (final category in categories) ...[
             'plugins:${category.id}:install',
@@ -423,14 +422,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
             .asData
             ?.value;
         if (schema == null) return const [];
-        return [
-          for (final s in schema.sections)
-            for (final field in s.fields)
-              if (field.type != PluginFieldType.info &&
-                  field.type != PluginFieldType.unknown)
-                'plugin:$pluginId:field:${field.id}',
-          if (schema.editableFields.isNotEmpty) 'plugin:$pluginId:save',
-        ];
+        return [for (final row in _pluginConfigRows(section)) ...row];
 
       case _SectionKind.builtin:
         return switch (section.builtin) {
@@ -643,6 +635,105 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
     };
   }
 
+  /// A plugin settings page laid out as focus rows, in on-screen order.
+  ///
+  /// Mirrors PluginSettingsPanel exactly: every declared field is its own row,
+  /// and the Actions card — Save plus every `action_button` lifted out of
+  /// whichever section declared it — is one final row whose buttons sit side
+  /// by side in a Wrap. Traversal is derived from this rather than left to the
+  /// dpad package's spatial guess, which was picking the scroll rail over the
+  /// Actions buttons because the rail happened to be geometrically nearer.
+  ///
+  /// Both the traversal handler and [_contentKeysFor] read this one function,
+  /// so the focus order cannot drift away from the rendered order.
+  List<List<String>> _pluginConfigRows(_SectionMeta section) {
+    final pluginId = section.pluginId;
+    if (pluginId == null) return const [];
+    final schema = ref
+        .read(pluginSettingsSchemaProvider(pluginId))
+        .asData
+        ?.value;
+    if (schema == null) return const [];
+
+    final rows = <List<String>>[
+      for (final s in schema.sections)
+        for (final field in s.fields)
+          if (field.type != PluginFieldType.info &&
+              field.type != PluginFieldType.unknown &&
+              field.type != PluginFieldType.actionButton)
+            ['plugin:$pluginId:field:${field.id}'],
+    ];
+
+    final actionRow = <String>[
+      if (schema.editableFields.isNotEmpty) 'plugin:$pluginId:save',
+      for (final s in schema.sections)
+        for (final field in s.fields)
+          if (field.type == PluginFieldType.actionButton)
+            'plugin:$pluginId:field:${field.id}',
+    ];
+    if (actionRow.isNotEmpty) rows.add(actionRow);
+    return rows;
+  }
+
+  /// Deterministic traversal for any plugin's settings page.
+  ///
+  /// Vertical moves between rows (so Down from Connect/Disconnect lands on the
+  /// Actions buttons below it, never on the scroll rail). Horizontal moves
+  /// along the current row first — which only matters inside the Actions card,
+  /// where several buttons share a line — and leaves the panel to the sidebar
+  /// or the scroll rail once there is nothing further that way.
+  ///
+  /// Being derived from the schema rather than hard-coded, every tracker gets
+  /// this same behaviour whatever sections it declares.
+  DpadDirectionCallback? _pluginConfigDirection(String key) {
+    return (TraversalDirection direction) {
+      final rows = _pluginConfigRows(_currentSection);
+
+      var row = -1;
+      var col = -1;
+      for (var i = 0; i < rows.length && row < 0; i++) {
+        final j = rows[i].indexOf(key);
+        if (j >= 0) {
+          row = i;
+          col = j;
+        }
+      }
+      if (row < 0) {
+        // Not a key this page owns (a text field's inner node, say) — keep the
+        // panel's edge behaviour and let everything else fall through.
+        if (direction == TraversalDirection.left) return _focusSidebar();
+        if (direction == TraversalDirection.right) return _focusScrollRail();
+        return false;
+      }
+
+      bool focusRowFrom(int start, int step) {
+        for (var i = start; i >= 0 && i < rows.length; i += step) {
+          for (final candidate in rows[i]) {
+            if (_focusMounted(_pool.of(candidate))) return true;
+          }
+        }
+        return false;
+      }
+
+      switch (direction) {
+        case TraversalDirection.up:
+          return focusRowFrom(row - 1, -1);
+        case TraversalDirection.down:
+          return focusRowFrom(row + 1, 1);
+        case TraversalDirection.left:
+          for (var j = col - 1; j >= 0; j--) {
+            if (_focusMounted(_pool.of(rows[row][j]))) return true;
+          }
+          return _focusSidebar();
+        case TraversalDirection.right:
+          for (var j = col + 1; j < rows[row].length; j++) {
+            if (_focusMounted(_pool.of(rows[row][j]))) return true;
+          }
+          return _focusScrollRail();
+      }
+    };
+  }
+
   Widget _buildSectionContent(_SectionMeta meta, WarpTokens t) {
     switch (meta.kind) {
       case _SectionKind.pluginList:
@@ -660,7 +751,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
           pluginId: meta.pluginId!,
           t: t,
           focusFor: _pool.of,
-          directionFor: _pluginDirection,
+          directionFor: _pluginConfigDirection,
         );
 
       case _SectionKind.builtin:
