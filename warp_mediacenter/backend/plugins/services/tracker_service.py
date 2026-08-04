@@ -68,6 +68,11 @@ class TrackerService:
         self._providers = providers
         self._cache = cache or TrackerCache()
         self._legacy = legacy or LegacyTraktTracker(providers)
+        #: Set by the container once both services exist (they are mutually
+        #: dependent: the catalog reads through this service, and this service
+        #: has to drop the catalog's pools). Optional so TrackerService stays
+        #: usable standalone in tests.
+        self._catalog: Any = None
         #: Counts scrobbles that failed after reaching a tracker.  The client
         #: swallows scrobble errors by design, so without this a broken tracker
         #: is completely invisible; /health surfaces it.
@@ -455,8 +460,20 @@ class TrackerService:
     # Cache
     # ------------------------------------------------------------------
 
+    def attach_catalog(self, catalog: Any) -> None:
+        self._catalog = catalog
+
     def invalidate(self, *, scope: str = "all") -> None:
         """Drop cached watch state after something changed it."""
+
+        # Continue Watching reaches the client through the catalog pool cache,
+        # not this service's cache, so dropping only the latter left the row
+        # stale until the pool aged out the next day.
+        if self._catalog is not None:
+            try:
+                self._catalog.on_watch_state_changed()
+            except Exception:  # noqa: BLE001 - never break a scrobble over this
+                log.warning("catalog_watch_invalidate_failed", exc_info=True)
 
         record = self.active_plugin
         if record is not None:

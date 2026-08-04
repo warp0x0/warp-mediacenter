@@ -97,6 +97,10 @@ def _init_services() -> ServiceContainer:
         registry=plugin_registry,
         providers=providers,
     )
+    # Continue Watching is served through the catalog's pool cache, so a
+    # scrobble has to reach in and drop those pools too — otherwise the row
+    # keeps serving its pre-watch window until the pool ages out (daily).
+    tracker_service.attach_catalog(catalog_service)
     log.info(
         "plugin_system_initialized",
         installed=len(plugin_registry.all()),

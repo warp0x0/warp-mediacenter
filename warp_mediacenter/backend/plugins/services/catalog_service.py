@@ -686,6 +686,25 @@ class CatalogService:
         # A shadow going up or down changes which source answers for `trakt`.
         self._pools.drop_source(self._trakt.id)
 
+    def on_watch_state_changed(self) -> None:
+        """Drop pools whose contents are derived from what the user has watched.
+
+        Continue Watching and Based-on-Watched are served through the ordinary
+        catalog pool machinery, and a pool is only rebuilt when it goes stale —
+        which is *daily*. So while the tracker itself invalidated correctly
+        after a scrobble, the pool in front of it kept serving the pre-watch
+        window for the rest of the day, and a show finished ten minutes ago
+        never appeared in the row.
+
+        Called from TrackerService.invalidate(), i.e. after every scrobble
+        stop, mark-watched and remove-from-continue-watching.
+        """
+
+        self._pools.drop_source(self._personal.id)
+        # The legacy Trakt source answers the same lists when no tracker plugin
+        # is active, and `trakt` may also be shadowed by a plugin source.
+        self._pools.drop_source(self._trakt.id)
+
     def clear_pools(self) -> None:
         self._pools.clear()
 
