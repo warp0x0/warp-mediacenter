@@ -103,6 +103,24 @@ def _tracker():
     return getattr(get_container(), "tracker_service", None)
 
 
+def _catalog():
+    return getattr(get_container(), "catalog_service", None)
+
+
+def _notify_catalog_changed(plugin_id: Optional[str] = None) -> None:
+    """Tell the catalog facade the plugin set moved.
+
+    Called on every mutation, not only for catalog-category plugins: the facade
+    caches its list definitions against the registry version, and shadowing means
+    one plugin changing state can hide or reveal a *different* source.  Deciding
+    here which changes are relevant would put that knowledge in two places.
+    """
+
+    catalog = _catalog()
+    if catalog is not None:
+        catalog.on_enabled_changed(plugin_id)
+
+
 def _require(plugin_id: str) -> PluginRecord:
     record = _registry().get(plugin_id)
     if record is None:
@@ -222,6 +240,7 @@ async def set_active_plugin(
 
     if tracker is not None:
         tracker.on_active_changed(previous.plugin_id if previous else None)
+    _notify_catalog_changed(plugin_id)
 
     active = _registry().active_for_category(category)
     return {
@@ -322,6 +341,7 @@ async def uninstall_plugin(
 
     if tracker is not None:
         tracker.on_active_changed(plugin_id)
+    _notify_catalog_changed(plugin_id)
     return {"uninstalled": plugin_id}
 
 
@@ -337,6 +357,7 @@ async def enable_plugin(plugin_id: str) -> Dict[str, Any]:
     tracker = _tracker()
     if tracker is not None:
         tracker.on_active_changed(previous.plugin_id if previous else None)
+    _notify_catalog_changed(plugin_id)
     return {
         "plugin": _summary(updated),
         "installed": [_summary(r) for r in _registry().by_category(updated.category)],
@@ -354,6 +375,7 @@ async def disable_plugin(plugin_id: str) -> Dict[str, Any]:
     tracker = _tracker()
     if tracker is not None:
         tracker.on_active_changed(plugin_id)
+    _notify_catalog_changed(plugin_id)
     return {
         "plugin": _summary(updated),
         "installed": [_summary(r) for r in _registry().by_category(record.category)],

@@ -117,6 +117,158 @@ def full_enrich_from_tmdb(
         pass
 
 
+#: External id namespaces TMDb's /find endpoint accepts, in the order we try
+#: them.  IMDb first: it is the most widely populated and the least ambiguous.
+_EXTERNAL_SOURCES: tuple[tuple[str, str], ...] = (
+    ("imdb", "imdb_id"),
+    ("tvdb", "tvdb_id"),
+)
+
+
+def _apply_tmdb_id(item: Dict[str, Any], ids: Dict[str, Any], tmdb_id: str) -> None:
+    item["tmdb_id"] = tmdb_id
+    item["id"] = tmdb_id
+    ids["tmdb"] = tmdb_id
+    if isinstance(item.get("media"), dict):
+        item["media"]["id"] = tmdb_id
+
+
+def _resolve_by_external_id(
+    item: Dict[str, Any], ids: Dict[str, Any], providers: "InformationProviders", seg: str
+) -> bool:
+    for key, external_source in _EXTERNAL_SOURCES:
+        external_id = ids.get(key)
+        if not external_id:
+            continue
+        try:
+            raw = providers.tmdb._request_json(
+                f"/find/{external_id}", params={"external_source": external_source}
+            )
+        except Exception:  # noqa: BLE001 - an unresolvable row is dropped, not fatal
+            continue
+
+        results = raw.get(f"{seg}_results") if isinstance(raw, dict) else None
+        if not results:
+            continue
+        tmdb_id = str((results[0] or {}).get("id") or "")
+        if tmdb_id:
+            _apply_tmdb_id(item, ids, tmdb_id)
+            return True
+    return False
+
+
+def _resolve_by_title_year(
+    item: Dict[str, Any], ids: Dict[str, Any], providers: "InformationProviders", seg: str
+) -> bool:
+    """Last resort: match on title, constrained by year.
+
+    Fuzzier than an id lookup and used only when a source has no id TMDb knows —
+    Simkl's ``/tv/best`` and ``/tv/airing`` return a Simkl id, a slug, a title and
+    a year, and nothing else.  The year constraint is what makes this tolerable:
+    without it, common titles resolve to the wrong remake often enough to matter.
+    A row with no year is left unresolved rather than guessed at.
+    """
+
+    title = str(item.get("title") or "").strip()
+    year = item.get("year")
+    if not title or not year:
+        return False
+
+    year_param = "year" if seg == "movie" else "first_air_date_year"
+    try:
+        raw = providers.tmdb._request_json(
+            f"/search/{seg}", params={"query": title, year_param: year}
+        )
+    except Exception:  # noqa: BLE001
+        return False
+
+    results = raw.get("results") if isinstance(raw, dict) else None
+    if not results:
+        return False
+
+    tmdb_id = str((results[0] or {}).get("id") or "")
+    if not tmdb_id:
+        return False
+    _apply_tmdb_id(item, ids, tmdb_id)
+    return True
+
+
+def resolve_tmdb_id(
+    item: Dict[str, Any],
+    providers: "InformationProviders",
+    media_type: str,
+) -> bool:
+    """Fill in ``tmdb_id`` from whatever the source did give us.
+
+    Some catalog sources never emit TMDb ids: TheTVDB's base records carry a TVDB
+    id, Simkl's best-of and airing lists carry only a Simkl id, a slug and a
+    title.  TMDb id is the key the whole app navigates, caches and fetches
+    artwork on, so such a row is unusable until it is resolved — and resolving
+    belongs here rather than in each plugin, because the host already owns the
+    TMDb key and its response cache, and "a plugin that can only produce what it
+    natively has" is exactly the kind of plugin this system exists to make cheap.
+
+    Two strategies, in order of confidence: an external-id lookup, then a
+    title+year search.  Mutates ``item`` in place.
+    """
+
+    if item.get("tmdb_id"):
+        return True
+
+    extra = item.get("extra")
+    ids = extra.get("ids") if isinstance(extra, dict) else None
+    if not isinstance(ids, dict):
+        return False
+
+    seg = "movie" if media_type == "movie" else "tv"
+    if _resolve_by_external_id(item, ids, providers, seg):
+        return True
+    return _resolve_by_title_year(item, ids, providers, seg)
+
+
+def resolve_many(
+    items: Sequence[Dict[str, Any]],
+    providers: "InformationProviders",
+    media_type: str,
+    *,
+    timeout: float = ENRICH_TIMEOUT_SECONDS,
+    max_workers: int = MAX_ENRICH_WORKERS,
+) -> List[Dict[str, Any]]:
+    """Resolve TMDb ids for a batch in parallel.
+
+    Returns only the items that now have a usable ``tmdb_id``.  Dropping the rest
+    is deliberate: a card with no TMDb id cannot be opened, so showing it would
+    put a dead tile in the row.
+    """
+
+    pending = [item for item in items if not item.get("tmdb_id")]
+    if not pending:
+        return list(items)
+
+    workers = max(1, min(len(pending), max_workers))
+    pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="tmdb-resolve")
+    try:
+        futures = [
+            pool.submit(resolve_tmdb_id, item, providers, media_type)
+            for item in pending
+        ]
+        _, not_done = wait(futures, timeout=timeout)
+        if not_done:
+            log.warning(
+                "tmdb_resolve_timeout", pending=len(not_done), total=len(futures)
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("tmdb_resolve_failed", error=str(exc), count=len(pending))
+    finally:
+        pool.shutdown(wait=False)
+
+    resolved = [item for item in items if item.get("tmdb_id")]
+    dropped = len(items) - len(resolved)
+    if dropped:
+        log.info("tmdb_resolve_dropped", dropped=dropped, total=len(items))
+    return resolved
+
+
 def enrich_many(
     items: Sequence[Dict[str, Any]],
     providers: "InformationProviders",
@@ -177,4 +329,6 @@ __all__ = [
     "enrich_item_with_tmdb_images",
     "enrich_many",
     "full_enrich_from_tmdb",
+    "resolve_many",
+    "resolve_tmdb_id",
 ]

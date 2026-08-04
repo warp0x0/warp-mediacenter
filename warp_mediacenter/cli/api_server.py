@@ -31,7 +31,7 @@ from warp_mediacenter.backend.player.subtitles.service import SubtitleService
 from warp_mediacenter.backend.player.torrent_stream import TorrentStreamOrchestrator
 from warp_mediacenter.backend.plugins import PluginManager, PluginRegistry
 from warp_mediacenter.backend.plugins.host import PluginHost
-from warp_mediacenter.backend.plugins.services import TrackerService
+from warp_mediacenter.backend.plugins.services import CatalogService, TrackerService
 from warp_mediacenter.config.settings import get_settings
 
 log = get_logger(__name__)
@@ -89,10 +89,19 @@ def _init_services() -> ServiceContainer:
         registry=plugin_registry,
         providers=providers,
     )
+    # The catalog facade always has TMDb, so unlike the tracker it has no "none"
+    # mode — with zero plugins installed it serves exactly what the built-in
+    # routes served before.
+    catalog_service = CatalogService(
+        manager=plugin_manager,
+        registry=plugin_registry,
+        providers=providers,
+    )
     log.info(
         "plugin_system_initialized",
         installed=len(plugin_registry.all()),
         tracker_mode=tracker_service.mode,
+        catalog_sources=[source.id for source in catalog_service.sources()],
     )
 
     # Wire into service container
@@ -107,6 +116,7 @@ def _init_services() -> ServiceContainer:
         plugin_registry=plugin_registry,
         plugin_manager=plugin_manager,
         tracker_service=tracker_service,
+        catalog_service=catalog_service,
     )
 
     # Wire into route modules (for backward compatibility with module-level globals)

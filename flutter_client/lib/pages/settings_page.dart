@@ -8,6 +8,8 @@ import '../api/api_client.dart';
 import '../api/catalog_constants.dart';
 import '../models/auth.dart';
 import '../models/catalog.dart';
+import '../navigation/after_frame.dart';
+import '../navigation/focus_grid.dart';
 import '../navigation/tab_bar_focus_registry.dart';
 import '../models/plugin.dart';
 import '../providers/catalog_provider.dart';
@@ -47,7 +49,10 @@ Duration _settingsScrollDuration(BuildContext context) => _isTvScaled(context)
 
 bool _focusSettingsNode(BuildContext context, FocusNode node) {
   final focused = Dpad.of(context).requestFocus(node);
-  WidgetsBinding.instance.addPostFrameCallback((_) {
+  // afterNextFrame, not addPostFrameCallback: a remote keypress dirties
+  // nothing, so with no frame pending a bare post-frame callback simply never
+  // runs and the newly focused control is never scrolled into view.
+  afterNextFrame((_) {
     if (!node.hasFocus) return;
     final nodeContext = node.context;
     if (nodeContext == null) return;
@@ -186,6 +191,11 @@ IconData _pluginIcon(String? name) => switch (name) {
   'palette_outlined' => Icons.palette_outlined,
   'science_outlined' => Icons.science_outlined,
   'bookmark_outline' => Icons.bookmark_outline,
+  // Catalog plugins
+  'grid_view_outlined' => Icons.grid_view_outlined,
+  'explore_outlined' => Icons.explore_outlined,
+  'local_movies_outlined' => Icons.local_movies_outlined,
+  'list_alt_outlined' => Icons.list_alt_outlined,
   _ => Icons.extension_outlined,
 };
 
@@ -296,9 +306,6 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
   List<FocusNode> get _sidebarFocusNodes => [
     for (final section in _sections) _pool.of('sidebar:${section.id}'),
   ];
-  List<FocusNode> get _catalogConfigureFocusNodes => [
-    for (var i = 0; i < 6; i++) _pool.of('catalog:configure:$i'),
-  ];
   FocusNode get _scrollRailFocusNode => _pool.of('scrollRail');
   FocusNode get _traktFocusNode => _pool.of('auth:trakt');
   FocusNode get _debridFocusNode => _pool.of('auth:debrid');
@@ -306,10 +313,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
   FocusNode get _connectionWrapperFocusNode => _pool.of('connection:wrapper');
   FocusNode get _connectionTestFocusNode => _pool.of('connection:test');
   FocusNode get _connectionSaveFocusNode => _pool.of('connection:save');
-  FocusNode get _catalogMovieFocusNode => _pool.of('catalog:movies');
-  FocusNode get _catalogShowFocusNode => _pool.of('catalog:shows');
-  FocusNode get _catalogSaveFocusNode => _pool.of('catalog:save');
-  FocusNode get _catalogRefreshFocusNode => _pool.of('catalog:refresh');
+  // Catalog panel draft, owned here so the focus keys and the widget tree are
+  // built from one list.  See `_catalogRows`.
+  String _catalogMediaTab = 'movies';
+  bool _catalogInitialized = false;
+  List<WidgetConfig> _catalogMovies = List.of(kDefaultMovieWidgets);
+  List<WidgetConfig> _catalogShows = List.of(kDefaultShowWidgets);
 
   static const _apiKeySpecs = [
     (label: 'API Key', settingKey: _kTmdbApiKey, obscure: true),
@@ -346,7 +355,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _appActive = state == AppLifecycleState.resumed;
     if (_appActive) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
+      afterNextFrame((_) {
         final node = _lastSettingsFocus;
         if (mounted && node?.context != null) {
           _focusSettingsNode(context, node!);
@@ -441,12 +450,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
             'connection:test',
             'connection:save',
           ],
+          // Derived from the same rows model the panel renders from, so adding
+          // or removing a row keeps the key set exact.
           _SettingsSection.catalog => [
-            'catalog:movies',
-            'catalog:shows',
-            for (var i = 0; i < 6; i++) 'catalog:configure:$i',
-            'catalog:save',
-            'catalog:refresh',
+            for (final row in _catalogRows()) ...row,
           ],
           _ => const <String>[],
         };
@@ -526,15 +533,6 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
         _connectionWrapperFocusNode,
         _connectionTestFocusNode,
         _connectionSaveFocusNode,
-      ];
-    }
-    if (section.builtin == _SettingsSection.catalog) {
-      return [
-        _catalogMovieFocusNode,
-        _catalogShowFocusNode,
-        ..._catalogConfigureFocusNodes,
-        _catalogSaveFocusNode,
-        _catalogRefreshFocusNode,
       ];
     }
     return [for (final key in _contentKeysFor(section)) _pool.of(key)];
@@ -677,61 +675,160 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
 
   /// Deterministic traversal for any plugin's settings page.
   ///
-  /// Vertical moves between rows (so Down from Connect/Disconnect lands on the
-  /// Actions buttons below it, never on the scroll rail). Horizontal moves
-  /// along the current row first — which only matters inside the Actions card,
-  /// where several buttons share a line — and leaves the panel to the sidebar
-  /// or the scroll rail once there is nothing further that way.
-  ///
-  /// Being derived from the schema rather than hard-coded, every tracker gets
-  /// this same behaviour whatever sections it declares.
+  /// Being derived from the schema rather than hard-coded, every plugin gets the
+  /// same behaviour whatever sections it declares. The resolver itself lives in
+  /// `navigation/focus_grid.dart` and is shared with the Catalog panel.
   DpadDirectionCallback? _pluginConfigDirection(String key) {
-    return (TraversalDirection direction) {
-      final rows = _pluginConfigRows(_currentSection);
+    return (TraversalDirection direction) => resolveGridDirection(
+      rows: _pluginConfigRows(_currentSection),
+      key: key,
+      direction: direction,
+      focusFor: _pool.of,
+      focusMounted: _focusMounted,
+      onFocusLeft: _focusSidebar,
+      onFocusRight: _focusScrollRail,
+    );
+  }
 
-      var row = -1;
-      var col = -1;
-      for (var i = 0; i < rows.length && row < 0; i++) {
-        final j = rows[i].indexOf(key);
-        if (j >= 0) {
-          row = i;
-          col = j;
-        }
-      }
-      if (row < 0) {
-        // Not a key this page owns (a text field's inner node, say) — keep the
-        // panel's edge behaviour and let everything else fall through.
-        if (direction == TraversalDirection.left) return _focusSidebar();
-        if (direction == TraversalDirection.right) return _focusScrollRail();
-        return false;
-      }
+  // ── Catalog panel focus model ─────────────────────────────────────────────
+  //
+  // The drafts live here, on the page, rather than inside `_CatalogPanel`.
+  // The page owns the focus keys, and rows are now variable-length: if the panel
+  // privately owned the row count, `_contentKeysFor` and the widget tree could
+  // disagree for a frame and `_reapFocusNodes` would dispose a node that is
+  // still on screen — which reads to the user as the D-pad dying on that
+  // control. One owner, no drift.
 
-      bool focusRowFrom(int start, int step) {
-        for (var i = start; i >= 0 && i < rows.length; i += step) {
-          for (final candidate in rows[i]) {
-            if (_focusMounted(_pool.of(candidate))) return true;
-          }
-        }
-        return false;
-      }
+  List<WidgetConfig> get _catalogDraft =>
+      _catalogMediaTab == 'movies' ? _catalogMovies : _catalogShows;
 
-      switch (direction) {
-        case TraversalDirection.up:
-          return focusRowFrom(row - 1, -1);
-        case TraversalDirection.down:
-          return focusRowFrom(row + 1, 1);
-        case TraversalDirection.left:
-          for (var j = col - 1; j >= 0; j--) {
-            if (_focusMounted(_pool.of(rows[row][j]))) return true;
-          }
-          return _focusSidebar();
-        case TraversalDirection.right:
-          for (var j = col + 1; j < rows[row].length; j++) {
-            if (_focusMounted(_pool.of(rows[row][j]))) return true;
-          }
-          return _focusScrollRail();
+  /// Render order *and* traversal grid for the Catalog panel, from one function.
+  ///
+  /// Same contract as `_pluginConfigRows`: whatever this returns is what the
+  /// panel draws and what the D-pad walks. Adding a row extends the grid with no
+  /// further wiring, which is what makes variable-length rows navigable at all.
+  List<List<String>> _catalogRows() {
+    final count = _catalogDraft.length;
+    return [
+      ['catalog:movies', 'catalog:shows'],
+      // Row 0 is the pinned Continue Watching row: it has no Configure or
+      // Remove control, so it contributes nothing to the grid and the D-pad
+      // steps straight over it.
+      for (var i = kPinnedRowCount; i < count; i++)
+        [
+          'catalog:configure:$i',
+          if (count > kPinnedRowCount) 'catalog:remove:$i',
+        ],
+      if (count < kMaxWidgets) ['catalog:addRow'],
+      ['catalog:save', 'catalog:refresh'],
+    ];
+  }
+
+  DpadDirectionCallback? _catalogDirection(String key) {
+    return (TraversalDirection direction) => resolveGridDirection(
+      rows: _catalogRows(),
+      key: key,
+      direction: direction,
+      focusFor: _pool.of,
+      focusMounted: _focusMounted,
+      onFocusLeft: _focusSidebar,
+      onFocusRight: _focusScrollRail,
+    );
+  }
+
+  void _setCatalogMediaTab(String tab) {
+    setState(() => _catalogMediaTab = tab);
+  }
+
+  void _replaceCatalogRow(int index, WidgetConfig config) {
+    if (index < kPinnedRowCount) return;
+    setState(() {
+      final draft = List.of(_catalogDraft);
+      if (index >= draft.length) return;
+      draft[index] = config;
+      _assignCatalogDraft(draft);
+    });
+  }
+
+  void _addCatalogRow() {
+    if (_catalogDraft.length >= kMaxWidgets) return;
+    setState(() {
+      final defaults = _catalogMediaTab == 'movies'
+          ? kDefaultMovieWidgets
+          : kDefaultShowWidgets;
+      // Seed from the configurable defaults rather than duplicating the last
+      // row, so a new row shows something different from the one above it.
+      // The pinned row is skipped — adding a second Continue Watching would be
+      // nonsense.
+      final seeds = defaults.skip(kPinnedRowCount).toList();
+      final draft = List.of(_catalogDraft)
+        ..add(seeds[(_catalogDraft.length - kPinnedRowCount) % seeds.length]);
+      _assignCatalogDraft(draft);
+    });
+  }
+
+  /// Remove a row, then park focus somewhere that still exists.
+  ///
+  /// The removed row's nodes are disposed on the next reap, so leaving focus on
+  /// them would strand the remote. Focus moves to the row that slid into this
+  /// slot, or the last one when the tail was removed.
+  void _removeCatalogRow(int index) {
+    // The pinned row can never be removed, and removing the last configurable
+    // row is allowed — a home page of just Continue Watching is a valid choice.
+    if (index < kPinnedRowCount) return;
+    if (_catalogDraft.length <= kPinnedRowCount) return;
+    setState(() {
+      final draft = List.of(_catalogDraft);
+      if (index >= draft.length) return;
+      draft.removeAt(index);
+      _assignCatalogDraft(draft);
+    });
+
+    final remaining = _catalogDraft.length;
+    final target = index >= remaining ? remaining - 1 : index;
+    afterNextFrame((_) {
+      if (!mounted) return;
+      if (!_focusMounted(_pool.of('catalog:configure:$target'))) {
+        _focusMounted(_pool.of('catalog:save'));
       }
-    };
+    });
+  }
+
+  void _assignCatalogDraft(List<WidgetConfig> draft) {
+    if (_catalogMediaTab == 'movies') {
+      _catalogMovies = draft;
+    } else {
+      _catalogShows = draft;
+    }
+  }
+
+  /// Adopt the server's saved rows, once.
+  ///
+  /// Called from `build` *before* the panel is constructed, so the real row
+  /// names render in the same frame the config arrives. Doing this from inside
+  /// the panel's own build — as it did originally — mutated the page one frame
+  /// too late, so the panel showed the built-in defaults until some unrelated
+  /// rebuild (pressing Save) happened to refresh it.
+  void _syncCatalogFromServer(WidgetsConfigResponse response) {
+    if (_catalogInitialized) return;
+    _catalogInitialized = true;
+    _catalogMovies = _usableDraft(response.movies, kDefaultMovieWidgets);
+    _catalogShows = _usableDraft(response.shows, kDefaultShowWidgets);
+  }
+
+  /// Drop the local draft so the next build re-adopts the server's rows.
+  void _reloadCatalogFromServer() {
+    setState(() => _catalogInitialized = false);
+  }
+
+  List<WidgetConfig> _usableDraft(
+    List<WidgetConfig> stored,
+    List<WidgetConfig> fallback,
+  ) {
+    if (stored.length < kMinWidgets || stored.length > kMaxWidgets) {
+      return withPinnedFirst(fallback);
+    }
+    return withPinnedFirst(stored);
   }
 
   Widget _buildSectionContent(_SectionMeta meta, WarpTokens t) {
@@ -781,13 +878,17 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
           ),
           _SettingsSection.catalog => _CatalogPanel(
             t: t,
-            movieFocusNode: _catalogMovieFocusNode,
-            showFocusNode: _catalogShowFocusNode,
-            configureFocusNodes: _catalogConfigureFocusNodes,
-            saveFocusNode: _catalogSaveFocusNode,
-            refreshFocusNode: _catalogRefreshFocusNode,
-            onFocusSidebar: _focusSidebar,
-            onFocusRail: _focusScrollRail,
+            mediaTab: _catalogMediaTab,
+            draft: _catalogDraft,
+            onMediaTabChanged: _setCatalogMediaTab,
+            onRowChanged: _replaceCatalogRow,
+            onAddRow: _addCatalogRow,
+            onRemoveRow: _removeCatalogRow,
+            onReload: _reloadCatalogFromServer,
+            moviesDraft: () => _catalogMovies,
+            showsDraft: () => _catalogShows,
+            focusFor: _pool.of,
+            directionFor: _catalogDirection,
           ),
           _ => _GeneralPanel(t: t),
         };
@@ -823,15 +924,27 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
     final plugins =
         ref.watch(configurablePluginsProvider).asData?.value ?? const [];
     _sections = _buildSections(plugins);
+
+    // Adopt the saved rows here, before the Catalog panel is built, so it
+    // renders the user's actual configuration in the very first frame that has
+    // it.  Watched from the page rather than the panel because the page owns
+    // the draft — a panel that reaches up to mutate its parent mid-build is
+    // always a frame behind, which is what made the panel show built-in
+    // defaults until an unrelated rebuild corrected it.
+    ref.watch(widgetsConfigProvider).whenData(_syncCatalogFromServer);
     if (!_sections.any((s) => s.id == _sectionId)) {
       // The section we were on no longer exists (plugin uninstalled).  Fall
       // back rather than render an empty panel.
       _sectionId = _sections.first.id;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
+      afterNextFrame((_) {
         if (mounted) _focusSidebar();
       });
     }
-    WidgetsBinding.instance.addPostFrameCallback((_) => _reapFocusNodes());
+    // Scheduled from build(), where a frame is already in flight, so the bare
+    // callback is safe here — but pairing it with the scheduled frame keeps the
+    // reap from being deferred indefinitely when the rebuild was the last thing
+    // to happen.
+    afterNextFrame((_) => _reapFocusNodes());
 
     final meta = _currentSection;
 
@@ -2428,24 +2541,40 @@ class _AuthSectionPanel extends StatelessWidget {
 // Catalog Panel — 6-slot widget configuration, mirrors CatalogConfigPanel.tsx
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Configures which lists the Movies and Shows home tabs show.
+///
+/// Rows are variable-length (see `kMinWidgets`/`kMaxWidgets`), and the draft
+/// they render lives on `_SettingsPageState` rather than here — the page owns
+/// the focus keys, and a second copy of the row count would be a source of
+/// drift. This widget is presentational plus the save/refresh calls.
 class _CatalogPanel extends ConsumerStatefulWidget {
   final WarpTokens t;
-  final FocusNode movieFocusNode;
-  final FocusNode showFocusNode;
-  final List<FocusNode> configureFocusNodes;
-  final FocusNode saveFocusNode;
-  final FocusNode refreshFocusNode;
-  final bool Function([_SectionMeta? section]) onFocusSidebar;
-  final bool Function() onFocusRail;
+  final String mediaTab;
+  final List<WidgetConfig> draft;
+  final ValueChanged<String> onMediaTabChanged;
+  final void Function(int index, WidgetConfig config) onRowChanged;
+  final VoidCallback onAddRow;
+  final ValueChanged<int> onRemoveRow;
+  /// Ask the page to re-adopt the server's rows (Refresh Widgets).
+  final VoidCallback onReload;
+  final List<WidgetConfig> Function() moviesDraft;
+  final List<WidgetConfig> Function() showsDraft;
+  final FocusNode Function(String key) focusFor;
+  final DpadDirectionCallback? Function(String key) directionFor;
+
   const _CatalogPanel({
     required this.t,
-    required this.movieFocusNode,
-    required this.showFocusNode,
-    required this.configureFocusNodes,
-    required this.saveFocusNode,
-    required this.refreshFocusNode,
-    required this.onFocusSidebar,
-    required this.onFocusRail,
+    required this.mediaTab,
+    required this.draft,
+    required this.onMediaTabChanged,
+    required this.onRowChanged,
+    required this.onAddRow,
+    required this.onRemoveRow,
+    required this.onReload,
+    required this.moviesDraft,
+    required this.showsDraft,
+    required this.focusFor,
+    required this.directionFor,
   });
 
   @override
@@ -2453,30 +2582,9 @@ class _CatalogPanel extends ConsumerStatefulWidget {
 }
 
 class _CatalogPanelState extends ConsumerState<_CatalogPanel> {
-  String _mediaTab = 'movies'; // 'movies' | 'shows'
-  bool _initialized = false;
   bool _saving = false;
   bool _savedOk = false;
   String? _saveError;
-
-  // Local draft — edited locally, sent to backend only on Save
-  List<WidgetConfig> _movies = List.of(kDefaultMovieWidgets);
-  List<WidgetConfig> _shows = List.of(kDefaultShowWidgets);
-
-  @override
-  void initState() {
-    super.initState();
-    // Sync draft from server on first load (listen for data in build)
-  }
-
-  void _syncFromServer(WidgetsConfigResponse resp) {
-    if (_initialized) return;
-    _initialized = true;
-    _movies = List.of(
-      resp.movies.length == 6 ? resp.movies : kDefaultMovieWidgets,
-    );
-    _shows = List.of(resp.shows.length == 6 ? resp.shows : kDefaultShowWidgets);
-  }
 
   Future<void> _save() async {
     setState(() {
@@ -2485,145 +2593,88 @@ class _CatalogPanelState extends ConsumerState<_CatalogPanel> {
       _saveError = null;
     });
     try {
-      await saveWidgets(ref.read(apiClientProvider), _movies, _shows);
-      if (mounted) {
-        setState(() {
-          _saving = false;
-          _savedOk = true;
-        });
-        await Future.delayed(const Duration(milliseconds: 2500));
-        if (mounted) setState(() => _savedOk = false);
-      }
+      await saveWidgets(
+        ref.read(apiClientProvider),
+        widget.moviesDraft(),
+        widget.showsDraft(),
+      );
+      if (!mounted) return;
+      // Without this the Movies and Shows tabs keep serving the previously
+      // fetched config until something else happens to invalidate it, so a save
+      // looked like it had silently done nothing.
+      ref.invalidate(widgetsConfigProvider);
+      setState(() {
+        _saving = false;
+        _savedOk = true;
+      });
+      await Future.delayed(const Duration(milliseconds: 2500));
+      if (mounted) setState(() => _savedOk = false);
     } catch (e) {
       if (mounted) {
         setState(() {
           _saving = false;
-          _saveError = e.toString();
+          _saveError = _readableError(e);
         });
       }
     }
   }
 
+  /// Surface the backend's validation message rather than a raw Dio dump.
+  ///
+  /// Saving is where bad input is now rejected — too many rows, a missing
+  /// source — and the reason is in the response body.
+  String _readableError(Object error) {
+    final text = error.toString();
+    final match = RegExp(r'"detail"\s*:\s*"([^"]+)"').firstMatch(text);
+    return match?.group(1) ?? text;
+  }
+
   void _refresh() {
-    // Invalidate widget config so Movies/Shows pages pick up new catalogs
     ref.invalidate(widgetsConfigProvider);
-    // Invalidate all catalog data so the ribbon content refreshes too
     ref.invalidate(catalogDataProvider);
-    setState(() {
-      _initialized = false;
-    });
+    // Sources may have changed since the picker was last opened — a plugin
+    // enabled from the Plugins page publishes new lists.
+    ref.invalidate(catalogDefinitionsProvider);
+    // Drop the local draft too, so the refetched rows are adopted rather than
+    // sitting behind an already-initialised draft.
+    widget.onReload();
   }
 
   void _openConfigure(int idx) {
-    final current = _mediaTab == 'movies' ? _movies[idx] : _shows[idx];
+    final draft = widget.draft;
+    if (idx < kPinnedRowCount || idx >= draft.length) return;
     showDialog<WidgetConfig>(
       context: context,
       barrierColor: Colors.black.withAlpha(160),
       builder: (_) => _ConfigureWidgetDialog(
         widgetIndex: idx,
-        mediaType: _mediaTab,
-        current: current,
+        mediaType: widget.mediaTab,
+        current: draft[idx],
         t: widget.t,
       ),
     ).then((selected) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && idx < widget.configureFocusNodes.length) {
-          _focusSettingsNode(context, widget.configureFocusNodes[idx]);
-        }
+      // afterNextFrame, not addPostFrameCallback: dismissing a dialog with the
+      // remote dirties nothing, so a bare post-frame callback can simply never
+      // run and focus would be left nowhere.
+      afterNextFrame((_) {
+        if (!mounted) return;
+        _focusSettingsNode(context, widget.focusFor('catalog:configure:$idx'));
       });
       if (selected == null) return;
-      setState(() {
-        if (_mediaTab == 'movies') {
-          _movies = List.of(_movies)..[idx] = selected;
-        } else {
-          _shows = List.of(_shows)..[idx] = selected;
-        }
-      });
+      widget.onRowChanged(idx, selected);
     });
-  }
-
-  bool _toggleDirection(String tab, TraversalDirection direction) {
-    if (direction == TraversalDirection.left && tab == 'movies') {
-      return widget.onFocusSidebar();
-    }
-    if (direction == TraversalDirection.right && tab == 'movies') {
-      _focusSettingsNode(context, widget.showFocusNode);
-      return true;
-    }
-    if (direction == TraversalDirection.left && tab == 'shows') {
-      _focusSettingsNode(context, widget.movieFocusNode);
-      return true;
-    }
-    if (direction == TraversalDirection.right && tab == 'shows') {
-      return widget.onFocusRail();
-    }
-    if (direction == TraversalDirection.down) {
-      _focusSettingsNode(context, widget.configureFocusNodes.first);
-      return true;
-    }
-    if (direction == TraversalDirection.up) return true;
-    return false;
-  }
-
-  bool _configureDirection(int index, TraversalDirection direction) {
-    if (direction == TraversalDirection.left) return widget.onFocusSidebar();
-    if (direction == TraversalDirection.right) return widget.onFocusRail();
-    if (direction == TraversalDirection.up) {
-      final target = index == 0
-          ? (_mediaTab == 'movies'
-                ? widget.movieFocusNode
-                : widget.showFocusNode)
-          : widget.configureFocusNodes[index - 1];
-      _focusSettingsNode(context, target);
-      return true;
-    }
-    if (direction == TraversalDirection.down) {
-      final target = index >= widget.configureFocusNodes.length - 1
-          ? widget.saveFocusNode
-          : widget.configureFocusNodes[index + 1];
-      _focusSettingsNode(context, target);
-      return true;
-    }
-    return false;
-  }
-
-  bool _saveDirection(TraversalDirection direction) {
-    if (direction == TraversalDirection.left) return widget.onFocusSidebar();
-    if (direction == TraversalDirection.right) {
-      _focusSettingsNode(context, widget.refreshFocusNode);
-      return true;
-    }
-    if (direction == TraversalDirection.up) {
-      _focusSettingsNode(context, widget.configureFocusNodes.last);
-      return true;
-    }
-    if (direction == TraversalDirection.down) return true;
-    return false;
-  }
-
-  bool _refreshDirection(TraversalDirection direction) {
-    if (direction == TraversalDirection.left) {
-      _focusSettingsNode(context, widget.saveFocusNode);
-      return true;
-    }
-    if (direction == TraversalDirection.right) return widget.onFocusRail();
-    if (direction == TraversalDirection.up) {
-      _focusSettingsNode(context, widget.configureFocusNodes.last);
-      return true;
-    }
-    if (direction == TraversalDirection.down) return true;
-    return false;
   }
 
   @override
   Widget build(BuildContext context) {
     final t = widget.t;
+    // Watched only for its loading state — the page adopts the data itself,
+    // before this panel is built.
     final configAsync = ref.watch(widgetsConfigProvider);
 
-    // Sync draft once the server data arrives
-    configAsync.whenData(_syncFromServer);
-
-    final widgets = _mediaTab == 'movies' ? _movies : _shows;
+    final rows = widget.draft;
+    final canAdd = rows.length < kMaxWidgets;
+    final canRemove = rows.length > kPinnedRowCount;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -2643,9 +2694,9 @@ class _CatalogPanelState extends ConsumerState<_CatalogPanel> {
                 padding: const EdgeInsets.fromLTRB(20, 18, 20, 14),
                 child: Row(
                   children: [
-                    Icon(
+                    const Icon(
                       Icons.grid_view_outlined,
-                      color: const Color(0xFF0DB2E2),
+                      color: Color(0xFF0DB2E2),
                       size: 16,
                     ),
                     const SizedBox(width: 10),
@@ -2656,6 +2707,14 @@ class _CatalogPanelState extends ConsumerState<_CatalogPanel> {
                         fontSize: t.fontSubtitle,
                         fontWeight: FontWeight.w600,
                         letterSpacing: 1.2,
+                      ),
+                    ),
+                    const Spacer(),
+                    Text(
+                      '${rows.length} / $kMaxWidgets rows',
+                      style: TextStyle(
+                        color: Colors.white.withAlpha(90),
+                        fontSize: 11,
                       ),
                     ),
                   ],
@@ -2669,18 +2728,19 @@ class _CatalogPanelState extends ConsumerState<_CatalogPanel> {
                 padding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
                 child: Center(
                   child: _MediaToggle(
-                    selected: _mediaTab,
-                    onChanged: (v) => setState(() => _mediaTab = v),
+                    selected: widget.mediaTab,
+                    onChanged: widget.onMediaTabChanged,
                     t: t,
-                    movieFocusNode: widget.movieFocusNode,
-                    showFocusNode: widget.showFocusNode,
-                    onDirection: _toggleDirection,
+                    movieFocusNode: widget.focusFor('catalog:movies'),
+                    showFocusNode: widget.focusFor('catalog:shows'),
+                    movieDirection: widget.directionFor('catalog:movies'),
+                    showDirection: widget.directionFor('catalog:shows'),
                   ),
                 ),
               ),
 
               // Loading / error state
-              if (configAsync.isLoading && !_initialized)
+              if (configAsync.isLoading && rows.isEmpty)
                 const Padding(
                   padding: EdgeInsets.all(32),
                   child: Center(
@@ -2691,22 +2751,55 @@ class _CatalogPanelState extends ConsumerState<_CatalogPanel> {
                   ),
                 )
               else
-                // 6 widget rows
                 ListView.separated(
                   shrinkWrap: true,
                   physics: const NeverScrollableScrollPhysics(),
-                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
-                  itemCount: 6,
+                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+                  itemCount: rows.length,
                   separatorBuilder: (context, i) => const SizedBox(height: 6),
-                  itemBuilder: (_, idx) => _WidgetRow(
-                    index: idx,
-                    config: widgets[idx],
-                    onConfigure: () => _openConfigure(idx),
+                  itemBuilder: (_, idx) {
+                    // Row 0 is fixed: rendered dimmed, with no controls at all.
+                    if (idx < kPinnedRowCount) {
+                      return _WidgetRow(
+                        index: idx,
+                        config: rows[idx],
+                        onConfigure: null,
+                        t: t,
+                        pinned: true,
+                      );
+                    }
+                    return _WidgetRow(
+                      index: idx,
+                      config: rows[idx],
+                      onConfigure: () => _openConfigure(idx),
+                      onRemove: canRemove
+                          ? () => widget.onRemoveRow(idx)
+                          : null,
+                      t: t,
+                      focusNode: widget.focusFor('catalog:configure:$idx'),
+                      onDirection: widget.directionFor('catalog:configure:$idx'),
+                      removeFocusNode: canRemove
+                          ? widget.focusFor('catalog:remove:$idx')
+                          : null,
+                      onRemoveDirection: canRemove
+                          ? widget.directionFor('catalog:remove:$idx')
+                          : null,
+                    );
+                  },
+                ),
+
+              // Add row
+              if (canAdd)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                  child: _ActionButton(
+                    label: 'Add Row',
+                    icon: Icons.add,
+                    onTap: widget.onAddRow,
                     t: t,
-                    focusNode: idx < widget.configureFocusNodes.length
-                        ? widget.configureFocusNodes[idx]
-                        : null,
-                    onDirection: (d) => _configureDirection(idx, d),
+                    accent: false,
+                    focusNode: widget.focusFor('catalog:addRow'),
+                    onDirection: widget.directionFor('catalog:addRow'),
                   ),
                 ),
 
@@ -2725,8 +2818,8 @@ class _CatalogPanelState extends ConsumerState<_CatalogPanel> {
                       onTap: _saving ? null : _save,
                       t: t,
                       accent: true,
-                      focusNode: widget.saveFocusNode,
-                      onDirection: _saveDirection,
+                      focusNode: widget.focusFor('catalog:save'),
+                      onDirection: widget.directionFor('catalog:save'),
                     ),
                     const SizedBox(width: 10),
                     _ActionButton(
@@ -2735,8 +2828,8 @@ class _CatalogPanelState extends ConsumerState<_CatalogPanel> {
                       onTap: _refresh,
                       t: t,
                       accent: false,
-                      focusNode: widget.refreshFocusNode,
-                      onDirection: _refreshDirection,
+                      focusNode: widget.focusFor('catalog:refresh'),
+                      onDirection: widget.directionFor('catalog:refresh'),
                     ),
                   ],
                 ),
@@ -2770,14 +2863,16 @@ class _MediaToggle extends StatelessWidget {
   final WarpTokens t;
   final FocusNode movieFocusNode;
   final FocusNode showFocusNode;
-  final bool Function(String tab, TraversalDirection direction) onDirection;
+  final DpadDirectionCallback? movieDirection;
+  final DpadDirectionCallback? showDirection;
   const _MediaToggle({
     required this.selected,
     required this.onChanged,
     required this.t,
     required this.movieFocusNode,
     required this.showFocusNode,
-    required this.onDirection,
+    required this.movieDirection,
+    required this.showDirection,
   });
 
   @override
@@ -2795,7 +2890,7 @@ class _MediaToggle extends StatelessWidget {
           return WarpDpadButton(
             tokens: t,
             focusNode: tab == 'movies' ? movieFocusNode : showFocusNode,
-            onDirection: (d) => onDirection(tab, d),
+            onDirection: tab == 'movies' ? movieDirection : showDirection,
             onSelect: () => onChanged(tab),
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
             backgroundColor: isActive
@@ -2826,24 +2921,45 @@ class _MediaToggle extends StatelessWidget {
 class _WidgetRow extends StatelessWidget {
   final int index;
   final WidgetConfig config;
-  final VoidCallback onConfigure;
+  /// Null on the pinned row, which has no Configure control.
+  final VoidCallback? onConfigure;
   final WarpTokens t;
+  final bool pinned;
   final FocusNode? focusNode;
   final DpadDirectionCallback? onDirection;
+  /// Null when nothing below the pinned row would be left to remove.
+  final VoidCallback? onRemove;
+  final FocusNode? removeFocusNode;
+  final DpadDirectionCallback? onRemoveDirection;
 
   const _WidgetRow({
     required this.index,
     required this.config,
     required this.onConfigure,
     required this.t,
+    this.pinned = false,
     this.focusNode,
     this.onDirection,
+    this.onRemove,
+    this.removeFocusNode,
+    this.onRemoveDirection,
   });
 
   @override
   Widget build(BuildContext context) {
-    final providerLabel = config.provider == 'tmdb' ? 'TMDb' : 'Trakt';
+    // The source id, not a hardcoded TMDb/Trakt pair — with plugins installed a
+    // row can come from anywhere, and the id is the only label we can be sure of
+    // without another round trip.
+    final sourceLabel = _prettySource(config.sourceId);
     final categoryLabel = config.category.replaceAll('_', ' ');
+    // Local so Dart can promote it — a nullable field never promotes.
+    final remove = onRemove;
+    final configure = onConfigure;
+
+    // The pinned row is shown at reduced contrast so it reads as present but
+    // not actionable, rather than as a control that has stopped working.
+    final titleColor = pinned ? Colors.white.withAlpha(110) : Colors.white;
+    final subColor = Colors.white.withAlpha(pinned ? 70 : 100);
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -2859,14 +2975,14 @@ class _WidgetRow extends StatelessWidget {
             width: 28,
             height: 28,
             decoration: BoxDecoration(
-              color: const Color(0xFF0DB2E2).withAlpha(30),
+              color: const Color(0xFF0DB2E2).withAlpha(pinned ? 14 : 30),
               borderRadius: BorderRadius.circular(8),
             ),
             child: Center(
               child: Text(
                 '${index + 1}',
-                style: const TextStyle(
-                  color: Color(0xFF0DB2E2),
+                style: TextStyle(
+                  color: const Color(0xFF0DB2E2).withAlpha(pinned ? 130 : 255),
                   fontSize: 13,
                   fontWeight: FontWeight.w700,
                 ),
@@ -2883,16 +2999,16 @@ class _WidgetRow extends StatelessWidget {
                 Text(
                   config.title,
                   style: TextStyle(
-                    color: Colors.white,
+                    color: titleColor,
                     fontSize: t.fontBody,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  '$providerLabel · $categoryLabel',
+                  pinned ? 'Always first · not configurable' : '$sourceLabel · $categoryLabel',
                   style: TextStyle(
-                    color: Colors.white.withAlpha(100),
+                    color: subColor,
                     fontSize: t.fontSubtitle,
                   ),
                 ),
@@ -2900,12 +3016,40 @@ class _WidgetRow extends StatelessWidget {
             ),
           ),
 
-          // Configure button
-          WarpDpadButton(
+          // Configure button — or a static "Fixed" chip when pinned.
+          if (configure == null)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+              decoration: BoxDecoration(
+                color: Colors.white.withAlpha(5),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.white.withAlpha(12)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.lock_outline,
+                    color: Colors.white.withAlpha(70),
+                    size: 13,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    'Fixed',
+                    style: TextStyle(
+                      color: Colors.white.withAlpha(70),
+                      fontSize: t.fontSubtitle,
+                    ),
+                  ),
+                ],
+              ),
+            )
+          else
+            WarpDpadButton(
             tokens: t,
             focusNode: focusNode,
             onDirection: onDirection,
-            onSelect: onConfigure,
+            onSelect: configure,
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
             backgroundColor: Colors.white.withAlpha(8),
             borderColor: Colors.white.withAlpha(20),
@@ -2924,11 +3068,45 @@ class _WidgetRow extends StatelessWidget {
               ],
             ),
           ),
+
+          if (remove != null) ...[
+            const SizedBox(width: 8),
+            WarpDpadButton(
+              tokens: t,
+              focusNode: removeFocusNode,
+              onDirection: onRemoveDirection,
+              onSelect: remove,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+              backgroundColor: Colors.white.withAlpha(8),
+              borderColor: Colors.white.withAlpha(20),
+              focusBackgroundColor: const Color(0x33F87171),
+              focusBorderColor: const Color(0xFFF87171),
+              borderRadius: 8,
+              child: Icon(
+                Icons.remove_circle_outline,
+                color: Colors.white.withAlpha(160),
+                size: 14,
+              ),
+            ),
+          ],
         ],
       ),
     );
   }
 }
+
+/// Human-readable name for a catalog source id.
+///
+/// Only the built-ins get a nicer name; a plugin's id is already close enough to
+/// its display name, and looking the real label up would mean this row waiting
+/// on the definitions request just to draw a subtitle.
+String _prettySource(String id) => switch (id) {
+  'tmdb' => 'TMDb',
+  'trakt' => 'Trakt',
+  'warp' => 'My Library',
+  'local' => 'Local',
+  _ => id,
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Configure Widget Dialog
@@ -2950,7 +3128,14 @@ class _CatalogDialogPosition {
   });
 }
 
-class _ConfigureWidgetDialog extends StatefulWidget {
+/// Picks the list one home row shows.
+///
+/// The source tabs across the top and every card below them come from
+/// `catalogDefinitionsProvider` — the server-side registry that built-in TMDb,
+/// the legacy Trakt integration and every enabled catalog plugin all contribute
+/// to. Nothing about a source is compiled in here, which is the whole point:
+/// installing a catalog plugin adds a tab and its lists with no client change.
+class _ConfigureWidgetDialog extends ConsumerStatefulWidget {
   final int widgetIndex;
   final String mediaType; // 'movies' | 'shows'
   final WidgetConfig current;
@@ -2964,81 +3149,137 @@ class _ConfigureWidgetDialog extends StatefulWidget {
   });
 
   @override
-  State<_ConfigureWidgetDialog> createState() => _ConfigureWidgetDialogState();
+  ConsumerState<_ConfigureWidgetDialog> createState() =>
+      _ConfigureWidgetDialogState();
 }
 
-class _ConfigureWidgetDialogState extends State<_ConfigureWidgetDialog>
+class _ConfigureWidgetDialogState
+    extends ConsumerState<_ConfigureWidgetDialog>
     with WidgetsBindingObserver, ModalFocusRestore<_ConfigureWidgetDialog> {
-  late String _providerTab; // 'tmdb' | 'trakt'
+  /// Currently selected source id, or null until the definitions arrive and we
+  /// can tell whether the row's own source still exists.
+  String? _sourceId;
+
   final _closeFocusNode = FocusNode(debugLabel: 'SettingsCatalogDialogClose');
-  final _tmdbFocusNode = FocusNode(debugLabel: 'SettingsCatalogDialogTmdb');
-  final _traktFocusNode = FocusNode(debugLabel: 'SettingsCatalogDialogTrakt');
   final _dialogScrollController = ScrollController();
   final _dialogScrollRailFocusNode = FocusNode(
     debugLabel: 'SettingsCatalogDialogScrollRail',
   );
+
+  /// One per source tab. Variable-length now that sources are installable, so
+  /// it is synced from the definitions on every build, exactly as the card
+  /// nodes are.
+  final List<FocusNode> _sourceFocusNodes = [];
   final List<FocusNode> _cardFocusNodes = [];
 
-  @override
-  void initState() {
-    super.initState();
-    _providerTab = widget.current.provider;
-  }
+  /// The media type the definitions are filtered by. The dialog's `mediaType`
+  /// is the settings-panel tab name ('movies'/'shows'); list definitions use the
+  /// singular wire values.
+  String get _wireMediaType => widget.mediaType == 'movies' ? 'movie' : 'show';
 
   @override
   void dispose() {
     _closeFocusNode.dispose();
-    _tmdbFocusNode.dispose();
-    _traktFocusNode.dispose();
     _dialogScrollController.dispose();
     _dialogScrollRailFocusNode.dispose();
+    for (final node in _sourceFocusNodes) {
+      node.dispose();
+    }
     for (final node in _cardFocusNodes) {
       node.dispose();
     }
     super.dispose();
   }
 
-  void _syncCardFocusNodes(int length) {
-    while (_cardFocusNodes.length > length) {
-      _cardFocusNodes.removeLast().dispose();
+  void _syncNodes(List<FocusNode> nodes, int length, String label) {
+    while (nodes.length > length) {
+      nodes.removeLast().dispose();
     }
-    while (_cardFocusNodes.length < length) {
-      final index = _cardFocusNodes.length;
-      _cardFocusNodes.add(
-        FocusNode(debugLabel: 'SettingsCatalogDialogCard-$index'),
-      );
+    while (nodes.length < length) {
+      nodes.add(FocusNode(debugLabel: '$label-${nodes.length}'));
     }
   }
 
-  List<CatalogDef> get _catalogs {
-    if (_providerTab == 'tmdb') {
-      return widget.mediaType == 'movies'
-          ? kTmdbMovieCatalogs
-          : kTmdbShowCatalogs;
-    } else {
-      return widget.mediaType == 'movies'
-          ? kTraktMovieCatalogs
-          : kTraktShowCatalogs;
-    }
+  /// Sources that publish at least one list for this media type.
+  ///
+  /// A source with nothing to offer here is hidden rather than shown empty —
+  /// TheTVDB's movie-only sorts should not put a dead "TheTVDB" tab on the Shows
+  /// picker.
+  List<CatalogSourceDef> _sourcesFor(CatalogDefinitions defs) {
+    final wire = _wireMediaType;
+    return [
+      for (final source in defs.sources)
+        if (source.lists.any((l) => l.mediaTypes.contains(wire))) source,
+    ];
   }
 
-  void _select(CatalogDef def) {
+  /// The source whose tab is active, resolved against what actually exists.
+  ///
+  /// The row's saved source may have been uninstalled since, so this falls back
+  /// to the first available rather than leaving the dialog blank.
+  String _activeSource(List<CatalogSourceDef> sources) {
+    if (sources.isEmpty) return '';
+    final preferred = _sourceId ?? widget.current.sourceId;
+    if (sources.any((s) => s.id == preferred)) return preferred;
+    return sources.first.id;
+  }
+
+  List<CatalogListDef> _listsFor(
+    List<CatalogSourceDef> sources,
+    String sourceId,
+  ) {
+    final wire = _wireMediaType;
+    final source = sources.firstWhere(
+      (s) => s.id == sourceId,
+      orElse: () => const CatalogSourceDef(id: '', label: ''),
+    );
+    return [
+      for (final list in source.lists)
+        if (list.mediaTypes.contains(wire)) list,
+    ];
+  }
+
+  /// Lists bucketed by group, in the order the group headers render.
+  ///
+  /// A group this build has never heard of sorts last but is still shown — a
+  /// newer plugin inventing a group must not have its lists silently dropped.
+  Map<String, List<CatalogListDef>> _grouped(List<CatalogListDef> lists) {
+    final result = <String, List<CatalogListDef>>{};
+    for (final def in lists) {
+      result.putIfAbsent(def.group, () => []).add(def);
+    }
+    final ordered = result.keys.toList()
+      ..sort((a, b) {
+        final rank = catalogGroupRank(a).compareTo(catalogGroupRank(b));
+        return rank != 0 ? rank : a.compareTo(b);
+      });
+    return {for (final key in ordered) key: result[key]!};
+  }
+
+  void _select(CatalogListDef def, String sourceId) {
     Navigator.of(context).pop(
-      WidgetConfig(provider: _providerTab, category: def.id, title: def.label),
+      WidgetConfig(
+        source: sourceId,
+        // `provider` is kept equal to `source` so a config written by this build
+        // still resolves on a backend that only knows the older field.
+        provider: sourceId,
+        category: def.id,
+        title: def.title,
+        params: (def.params?.isEmpty ?? true) ? null : def.params,
+      ),
     );
   }
 
   List<_CatalogDialogPosition> _positionsFor(
-    Map<CatalogGroup, List<CatalogDef>> groups,
+    Map<String, List<CatalogListDef>> groups,
+    List<CatalogListDef> lists,
   ) {
     final positions = <_CatalogDialogPosition>[];
     var groupIndex = 0;
     for (final entry in groups.entries) {
       for (var i = 0; i < entry.value.length; i++) {
         final def = entry.value[i];
-        final globalIndex = _catalogs.indexWhere(
-          (catalog) => catalog.id == def.id,
-        );
+        final globalIndex = lists.indexWhere((l) => l.id == def.id);
         if (globalIndex < 0) continue;
         positions.add(
           _CatalogDialogPosition(
@@ -3058,6 +3299,11 @@ class _ConfigureWidgetDialogState extends State<_ConfigureWidgetDialog>
   bool _focusCatalogIndex(int index) {
     if (index < 0 || index >= _cardFocusNodes.length) return false;
     return _focusSettingsNode(context, _cardFocusNodes[index]);
+  }
+
+  bool _focusSourceTab(int index) {
+    if (index < 0 || index >= _sourceFocusNodes.length) return false;
+    return _focusSettingsNode(context, _sourceFocusNodes[index]);
   }
 
   _CatalogDialogPosition? _positionForIndex(
@@ -3212,20 +3458,22 @@ class _ConfigureWidgetDialogState extends State<_ConfigureWidgetDialog>
     return false;
   }
 
-  bool _closeDirection(TraversalDirection direction) {
+  bool _closeDirection(int activeTabIndex, TraversalDirection direction) {
     if (direction == TraversalDirection.down ||
         direction == TraversalDirection.left) {
-      _focusSettingsNode(
-        context,
-        _providerTab == 'tmdb' ? _tmdbFocusNode : _traktFocusNode,
-      );
+      _focusSourceTab(activeTabIndex);
       return true;
     }
     return true;
   }
 
-  bool _providerDirection(
-    String tab,
+  /// Traversal across the source tabs.
+  ///
+  /// Index-based rather than the old hardcoded tmdb/trakt pair, so the row works
+  /// unchanged whether there are two tabs or six.
+  bool _sourceTabDirection(
+    int index,
+    List<CatalogListDef> lists,
     List<_CatalogDialogPosition> positions,
     TraversalDirection direction,
   ) {
@@ -3234,26 +3482,27 @@ class _ConfigureWidgetDialogState extends State<_ConfigureWidgetDialog>
       return true;
     }
     if (direction == TraversalDirection.down) {
-      final selectedPositionIndex = positions.indexWhere(
-        (position) =>
-            _catalogs[position.globalIndex].id == widget.current.category,
+      // Land on the row's current selection when this tab holds it, so opening
+      // the dialog and pressing Down shows you what you already picked.
+      final selected = positions.indexWhere(
+        (position) => lists[position.globalIndex].id == widget.current.category,
       );
-      final index = selectedPositionIndex >= 0
-          ? positions[selectedPositionIndex].globalIndex
+      final target = selected >= 0
+          ? positions[selected].globalIndex
           : (positions.isEmpty ? -1 : positions.first.globalIndex);
-      _focusCatalogIndex(index);
+      _focusCatalogIndex(target);
       return true;
     }
-    if (direction == TraversalDirection.left && tab == 'trakt') {
-      _focusSettingsNode(context, _tmdbFocusNode);
+    if (direction == TraversalDirection.left) {
+      if (index > 0) _focusSourceTab(index - 1);
       return true;
     }
-    if (direction == TraversalDirection.right && tab == 'tmdb') {
-      _focusSettingsNode(context, _traktFocusNode);
-      return true;
-    }
-    if (direction == TraversalDirection.right && tab == 'trakt') {
-      _focusSettingsNode(context, _dialogScrollRailFocusNode);
+    if (direction == TraversalDirection.right) {
+      if (index < _sourceFocusNodes.length - 1) {
+        _focusSourceTab(index + 1);
+      } else {
+        _focusSettingsNode(context, _dialogScrollRailFocusNode);
+      }
       return true;
     }
     return true;
@@ -3261,6 +3510,7 @@ class _ConfigureWidgetDialogState extends State<_ConfigureWidgetDialog>
 
   bool _cardDirection(
     int index,
+    int activeTabIndex,
     List<_CatalogDialogPosition> positions,
     TraversalDirection direction,
   ) {
@@ -3286,10 +3536,7 @@ class _ConfigureWidgetDialogState extends State<_ConfigureWidgetDialog>
       if (target != null) {
         return _focusCatalogIndex(target.globalIndex);
       }
-      _focusSettingsNode(
-        context,
-        _providerTab == 'tmdb' ? _tmdbFocusNode : _traktFocusNode,
-      );
+      _focusSourceTab(activeTabIndex);
       return true;
     }
 
@@ -3343,9 +3590,18 @@ class _ConfigureWidgetDialogState extends State<_ConfigureWidgetDialog>
   Widget build(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
     final modalScale = MediaQuery.textScalerOf(context).scale(1);
-    final groups = _groupedCatalogs();
-    final positions = _positionsFor(groups);
-    _syncCardFocusNodes(_catalogs.length);
+    final defsAsync = ref.watch(catalogDefinitionsProvider);
+    final defs = defsAsync.asData?.value ?? const CatalogDefinitions();
+
+    final sources = _sourcesFor(defs);
+    final activeSource = _activeSource(sources);
+    final activeTabIndex = sources.indexWhere((s) => s.id == activeSource);
+    final lists = _listsFor(sources, activeSource);
+    final groups = _grouped(lists);
+    final positions = _positionsFor(groups, lists);
+
+    _syncNodes(_sourceFocusNodes, sources.length, 'SettingsCatalogDialogSource');
+    _syncNodes(_cardFocusNodes, lists.length, 'SettingsCatalogDialogCard');
 
     return Dialog(
       backgroundColor: Colors.transparent,
@@ -3447,7 +3703,8 @@ class _ConfigureWidgetDialogState extends State<_ConfigureWidgetDialog>
                           WarpDpadButton(
                             tokens: widget.t,
                             focusNode: _closeFocusNode,
-                            onDirection: _closeDirection,
+                            onDirection: (d) =>
+                                _closeDirection(activeTabIndex, d),
                             onSelect: () => Navigator.of(context).pop(),
                             padding: const EdgeInsets.all(6),
                             backgroundColor: Colors.white.withAlpha(20),
@@ -3465,164 +3722,176 @@ class _ConfigureWidgetDialogState extends State<_ConfigureWidgetDialog>
                       ),
                     ),
 
-                    // TMDb / Trakt tab toggle
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
-                      child: Row(
-                        children:
-                            ['tmdb', 'trakt']
-                                .map((tab) {
-                                  final isActive = _providerTab == tab;
-                                  final label = tab == 'tmdb'
-                                      ? 'TMDb Catalogs'
-                                      : 'Trakt Catalogs';
-                                  return Expanded(
-                                    child: WarpDpadButton(
-                                      tokens: widget.t,
-                                      focusNode: tab == 'tmdb'
-                                          ? _tmdbFocusNode
-                                          : _traktFocusNode,
-                                      autofocus: tab == _providerTab,
-                                      entry: tab == _providerTab,
-                                      onDirection: (d) =>
-                                          _providerDirection(tab, positions, d),
-                                      onSelect: () =>
-                                          setState(() => _providerTab = tab),
-                                      padding: const EdgeInsets.symmetric(
-                                        vertical: 10,
-                                      ),
-                                      backgroundColor: isActive
-                                          ? const Color(
-                                              0xFF0DB2E2,
-                                            ).withAlpha(30)
-                                          : Colors.white.withAlpha(8),
-                                      borderColor: isActive
-                                          ? const Color(
-                                              0xFF0DB2E2,
-                                            ).withAlpha(100)
-                                          : Colors.white.withAlpha(15),
-                                      borderRadius: 10,
-                                      child: Text(
-                                        label,
-                                        textAlign: TextAlign.center,
-                                        style: TextStyle(
-                                          color: isActive
-                                              ? const Color(0xFF0DB2E2)
-                                              : Colors.white.withAlpha(120),
-                                          fontSize: 13,
-                                          fontWeight: isActive
-                                              ? FontWeight.w600
-                                              : FontWeight.w400,
-                                        ),
-                                      ),
-                                    ),
-                                  );
-                                })
-                                .expand((w) => [w, const SizedBox(width: 8)])
-                                .toList()
-                              ..removeLast(),
+                    // Source tabs — one per catalog source that has lists for
+                    // this media type. Scrolls horizontally: with several
+                    // plugins installed these no longer fit as equal Expandeds.
+                    if (sources.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+                        child: SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: Row(
+                            children: [
+                              for (var i = 0; i < sources.length; i++) ...[
+                                if (i > 0) const SizedBox(width: 8),
+                                _SourceTab(
+                                  label: sources[i].label,
+                                  isActive: sources[i].id == activeSource,
+                                  t: widget.t,
+                                  focusNode: _sourceFocusNodes[i],
+                                  autofocus: sources[i].id == activeSource,
+                                  onDirection: (d) => _sourceTabDirection(
+                                    i,
+                                    lists,
+                                    positions,
+                                    d,
+                                  ),
+                                  onSelect: () =>
+                                      setState(() => _sourceId = sources[i].id),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
                       ),
-                    ),
 
                     // Grouped catalog grid — scrollable
                     Flexible(
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: SingleChildScrollView(
-                              controller: _dialogScrollController,
-                              padding: const EdgeInsets.all(20),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: groups.entries.map((entry) {
-                                  final group = entry.key;
-                                  final items = entry.value;
-                                  final label =
-                                      kCatalogGroupLabels[group] ??
-                                      group.name.toUpperCase();
-                                  return Padding(
-                                    padding: const EdgeInsets.only(bottom: 20),
+                      child: defsAsync.isLoading && sources.isEmpty
+                          ? const Padding(
+                              padding: EdgeInsets.all(40),
+                              child: Center(
+                                child: CircularProgressIndicator(
+                                  color: Color(0xFF0DB2E2),
+                                ),
+                              ),
+                            )
+                          : lists.isEmpty
+                          ? Padding(
+                              padding: const EdgeInsets.all(40),
+                              child: Center(
+                                child: Text(
+                                  defsAsync.hasError
+                                      ? 'Could not load catalog sources.'
+                                      : 'No lists available for '
+                                            '${widget.mediaType == 'movies' ? 'movies' : 'shows'}.',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    color: Colors.white.withAlpha(120),
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ),
+                            )
+                          : Row(
+                              children: [
+                                Expanded(
+                                  child: SingleChildScrollView(
+                                    controller: _dialogScrollController,
+                                    padding: const EdgeInsets.all(20),
                                     child: Column(
                                       crossAxisAlignment:
                                           CrossAxisAlignment.start,
-                                      children: [
-                                        // Group header
-                                        Padding(
+                                      children: groups.entries.map((entry) {
+                                        final items = entry.value;
+                                        final label = catalogGroupLabel(
+                                          entry.key,
+                                        );
+                                        return Padding(
                                           padding: const EdgeInsets.only(
-                                            bottom: 10,
+                                            bottom: 20,
                                           ),
-                                          child: Text(
-                                            '$label(${items.length})',
-                                            style: TextStyle(
-                                              color: Colors.white.withAlpha(
-                                                100,
-                                              ),
-                                              fontSize: 11,
-                                              fontWeight: FontWeight.w600,
-                                              letterSpacing: 1.1,
-                                            ),
-                                          ),
-                                        ),
-                                        // 2-column grid
-                                        GridView.builder(
-                                          shrinkWrap: true,
-                                          physics:
-                                              const NeverScrollableScrollPhysics(),
-                                          gridDelegate:
-                                              const SliverGridDelegateWithFixedCrossAxisCount(
-                                                crossAxisCount: 2,
-                                                crossAxisSpacing: 8,
-                                                mainAxisSpacing: 8,
-                                                childAspectRatio: 5.5,
-                                              ),
-                                          itemCount: items.length,
-                                          itemBuilder: (_, i) {
-                                            final globalIndex = _catalogs
-                                                .indexWhere(
-                                                  (def) =>
-                                                      def.id == items[i].id,
-                                                );
-                                            final safeIndex = globalIndex < 0
-                                                ? 0
-                                                : globalIndex;
-                                            return _CatalogCard(
-                                              def: items[i],
-                                              isSelected:
-                                                  widget.current.provider ==
-                                                      _providerTab &&
-                                                  widget.current.category ==
-                                                      items[i].id,
-                                              onTap: () => _select(items[i]),
-                                              t: widget.t,
-                                              focusNode:
-                                                  safeIndex <
-                                                      _cardFocusNodes.length
-                                                  ? _cardFocusNodes[safeIndex]
-                                                  : null,
-                                              onDirection: (d) =>
-                                                  _cardDirection(
-                                                    safeIndex,
-                                                    positions,
-                                                    d,
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              // Group header
+                                              Padding(
+                                                padding: const EdgeInsets.only(
+                                                  bottom: 10,
+                                                ),
+                                                child: Text(
+                                                  '$label(${items.length})',
+                                                  style: TextStyle(
+                                                    color: Colors.white
+                                                        .withAlpha(100),
+                                                    fontSize: 11,
+                                                    fontWeight: FontWeight.w600,
+                                                    letterSpacing: 1.1,
                                                   ),
-                                            );
-                                          },
-                                        ),
-                                      ],
+                                                ),
+                                              ),
+                                              // 2-column grid
+                                              GridView.builder(
+                                                shrinkWrap: true,
+                                                physics:
+                                                    const NeverScrollableScrollPhysics(),
+                                                gridDelegate:
+                                                    const SliverGridDelegateWithFixedCrossAxisCount(
+                                                      crossAxisCount: 2,
+                                                      crossAxisSpacing: 8,
+                                                      mainAxisSpacing: 8,
+                                                      childAspectRatio: 5.5,
+                                                    ),
+                                                itemCount: items.length,
+                                                itemBuilder: (_, i) {
+                                                  final globalIndex = lists
+                                                      .indexWhere(
+                                                        (def) =>
+                                                            def.id ==
+                                                            items[i].id,
+                                                      );
+                                                  final safeIndex =
+                                                      globalIndex < 0
+                                                      ? 0
+                                                      : globalIndex;
+                                                  return _CatalogCard(
+                                                    def: items[i],
+                                                    isSelected:
+                                                        widget
+                                                                .current
+                                                                .sourceId ==
+                                                            activeSource &&
+                                                        widget
+                                                                .current
+                                                                .category ==
+                                                            items[i].id,
+                                                    onTap: () => _select(
+                                                      items[i],
+                                                      activeSource,
+                                                    ),
+                                                    t: widget.t,
+                                                    focusNode:
+                                                        safeIndex <
+                                                            _cardFocusNodes
+                                                                .length
+                                                        ? _cardFocusNodes[safeIndex]
+                                                        : null,
+                                                    onDirection: (d) =>
+                                                        _cardDirection(
+                                                          safeIndex,
+                                                          activeTabIndex,
+                                                          positions,
+                                                          d,
+                                                        ),
+                                                  );
+                                                },
+                                              ),
+                                            ],
+                                          ),
+                                        );
+                                      }).toList(),
                                     ),
-                                  );
-                                }).toList(),
-                              ),
+                                  ),
+                                ),
+                                _SettingsScrollRail(
+                                  focusNode: _dialogScrollRailFocusNode,
+                                  tokens: widget.t,
+                                  onDirection: (d) =>
+                                      _dialogScrollRailDirection(positions, d),
+                                ),
+                              ],
                             ),
-                          ),
-                          _SettingsScrollRail(
-                            focusNode: _dialogScrollRailFocusNode,
-                            tokens: widget.t,
-                            onDirection: (d) =>
-                                _dialogScrollRailDirection(positions, d),
-                          ),
-                        ],
-                      ),
                     ),
                   ],
                 ),
@@ -3633,20 +3902,68 @@ class _ConfigureWidgetDialogState extends State<_ConfigureWidgetDialog>
       ),
     );
   }
+}
 
-  Map<CatalogGroup, List<CatalogDef>> _groupedCatalogs() {
-    final result = <CatalogGroup, List<CatalogDef>>{};
-    for (final def in _catalogs) {
-      result.putIfAbsent(def.group, () => []).add(def);
-    }
-    return result;
+// ── One source tab across the top of the configure dialog ────────────────────
+
+class _SourceTab extends StatelessWidget {
+  final String label;
+  final bool isActive;
+  final WarpTokens t;
+  final FocusNode focusNode;
+  final bool autofocus;
+  final DpadDirectionCallback onDirection;
+  final VoidCallback onSelect;
+
+  const _SourceTab({
+    required this.label,
+    required this.isActive,
+    required this.t,
+    required this.focusNode,
+    required this.autofocus,
+    required this.onDirection,
+    required this.onSelect,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minWidth: 140),
+      child: WarpDpadButton(
+        tokens: t,
+        focusNode: focusNode,
+        autofocus: autofocus,
+        entry: autofocus,
+        onDirection: onDirection,
+        onSelect: onSelect,
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 14),
+        backgroundColor: isActive
+            ? const Color(0xFF0DB2E2).withAlpha(30)
+            : Colors.white.withAlpha(8),
+        borderColor: isActive
+            ? const Color(0xFF0DB2E2).withAlpha(100)
+            : Colors.white.withAlpha(15),
+        borderRadius: 10,
+        child: Text(
+          label,
+          textAlign: TextAlign.center,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: isActive ? const Color(0xFF0DB2E2) : Colors.white.withAlpha(120),
+            fontSize: 13,
+            fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
+          ),
+        ),
+      ),
+    );
   }
 }
 
 // ── Single catalog source card inside the dialog ──────────────────────────────
 
 class _CatalogCard extends StatelessWidget {
-  final CatalogDef def;
+  final CatalogListDef def;
   final bool isSelected;
   final VoidCallback onTap;
   final WarpTokens t;
@@ -3702,7 +4019,7 @@ class _CatalogCard extends StatelessWidget {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Text(
-                    def.label,
+                    def.title,
                     style: TextStyle(
                       color: isSelected
                           ? const Color(0xFF0DB2E2)
@@ -3715,7 +4032,9 @@ class _CatalogCard extends StatelessWidget {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    def.description,
+                    // Descriptions are optional in the contract — a plugin need
+                    // not write one for every list it publishes.
+                    def.description ?? '',
                     style: TextStyle(
                       color: Colors.white.withAlpha(100),
                       fontSize: 11,

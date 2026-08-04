@@ -29,25 +29,48 @@ _scan_lock = threading.Lock()
 _cancel_event = threading.Event()
 
 # ---------------------------------------------------------------------------
-# Default widget configurations (6 slots each)
+# Widget configuration.
+#
+# Rows are variable-length: at least one, at most MAX_WIDGETS.  The cap is a
+# product decision, not a technical one — ten rows is already more than fits on
+# a TV screen without the vertical PageView becoming tedious to walk with a
+# D-pad — but it is enforced server-side so a hand-edited user_settings.json
+# cannot produce a home page the client cannot navigate.
+#
+# An entry is {source?, provider, category, title, params?}.  `provider` predates
+# `source` and is still what the alias routes key on, so both are kept and
+# `source` falls back to `provider` on read.  That is what lets every config
+# saved before the catalog plugin system load unchanged.
 # ---------------------------------------------------------------------------
 
+MIN_WIDGETS = 1
+MAX_WIDGETS = 10
+
+#: Continue Watching is always the first row and is not configurable in the UI;
+#: see `kPinnedWidget` in `flutter_client/lib/api/catalog_constants.dart`.
+_PINNED_WIDGET: Dict[str, Any] = {
+    "source": "warp",
+    "provider": "warp",
+    "category": "continue_watching",
+    "title": "Continue Watching",
+}
+
 _DEFAULT_MOVIE_WIDGETS: List[Dict[str, Any]] = [
+    dict(_PINNED_WIDGET),
     {"provider": "tmdb", "category": "trending_day",  "title": "Trending Today"},
     {"provider": "tmdb", "category": "popular",       "title": "Popular"},
     {"provider": "tmdb", "category": "top_rated",     "title": "Top Rated"},
     {"provider": "tmdb", "category": "now_playing",   "title": "Now Playing"},
     {"provider": "tmdb", "category": "upcoming",      "title": "Upcoming"},
-    {"provider": "tmdb", "category": "trending_week", "title": "Trending This Week"},
 ]
 
 _DEFAULT_SHOW_WIDGETS: List[Dict[str, Any]] = [
+    dict(_PINNED_WIDGET),
     {"provider": "tmdb", "category": "trending_day",  "title": "Trending Today"},
     {"provider": "tmdb", "category": "popular",       "title": "Popular"},
     {"provider": "tmdb", "category": "top_rated",     "title": "Top Rated"},
     {"provider": "tmdb", "category": "airing_today",  "title": "Airing Today"},
     {"provider": "tmdb", "category": "on_the_air",    "title": "On The Air"},
-    {"provider": "tmdb", "category": "trending_week", "title": "Trending This Week"},
 ]
 
 
@@ -86,46 +109,135 @@ async def get_all_settings() -> Dict[str, Any]:
     return {"settings": settings}
 
 
+def _normalize_widget(entry: Any) -> Optional[Dict[str, Any]]:
+    """Coerce one stored/submitted widget entry, or reject it.
+
+    ``source`` defaults to ``provider`` so pre-plugin configs keep resolving, and
+    ``provider`` is filled from ``source`` for the reverse case, so whichever
+    field a caller sets the other is always present.
+    """
+
+    if not isinstance(entry, dict):
+        return None
+
+    category = str(entry.get("category") or "").strip()
+    if not category:
+        return None
+
+    source = str(entry.get("source") or entry.get("provider") or "").strip()
+    if not source:
+        return None
+
+    normalized: Dict[str, Any] = {
+        "source": source,
+        "provider": str(entry.get("provider") or source).strip(),
+        "category": category,
+        "title": str(entry.get("title") or category),
+    }
+
+    params = entry.get("params")
+    if isinstance(params, dict) and params:
+        # Only JSON scalars survive: a param the round trip cannot reproduce
+        # would come back as a different value and silently change the row.
+        cleaned = {
+            str(k): v
+            for k, v in params.items()
+            if v is None or isinstance(v, (str, int, float, bool))
+        }
+        if cleaned:
+            normalized["params"] = cleaned
+
+    return normalized
+
+
+def _normalize_widget_list(
+    raw: Any, fallback: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """Read a stored list, dropping junk entries and falling back when unusable."""
+
+    if not isinstance(raw, list):
+        return list(fallback)
+
+    entries = [w for w in (_normalize_widget(e) for e in raw) if w is not None]
+    if len(entries) < MIN_WIDGETS:
+        return list(fallback)
+    return entries[:MAX_WIDGETS]
+
+
 @router.get("/widgets")
 async def get_widget_config() -> Dict[str, Any]:
-    """Get the 6-slot widget configuration for Movies and Shows pages.
+    """Get the widget configuration for the Movies and Shows pages.
 
     Returns saved configuration from ``user_settings.json``.  Falls back to
-    built-in defaults when no configuration has been saved yet.
+    built-in defaults when nothing is saved or the stored data is unusable.
     """
     from warp_mediacenter.config.settings.library import load_user_settings
 
     user_cfg = load_user_settings()
     widgets_cfg = user_cfg.get("widgets", {})
-    movies = widgets_cfg.get("movies")
-    shows = widgets_cfg.get("shows")
+    if not isinstance(widgets_cfg, dict):
+        widgets_cfg = {}
 
-    # Validate length — fall back to defaults if the stored data is corrupt
-    if not isinstance(movies, list) or len(movies) != 6:
-        movies = _DEFAULT_MOVIE_WIDGETS
-    if not isinstance(shows, list) or len(shows) != 6:
-        shows = _DEFAULT_SHOW_WIDGETS
+    return {
+        "movies": _normalize_widget_list(
+            widgets_cfg.get("movies"), _DEFAULT_MOVIE_WIDGETS
+        ),
+        "shows": _normalize_widget_list(
+            widgets_cfg.get("shows"), _DEFAULT_SHOW_WIDGETS
+        ),
+        "min_widgets": MIN_WIDGETS,
+        "max_widgets": MAX_WIDGETS,
+    }
 
-    return {"movies": movies, "shows": shows}
+
+def _validate_widget_payload(name: str, raw: Any) -> List[Dict[str, Any]]:
+    """Validate a submitted row list, rejecting loudly.
+
+    The old handler validated nothing at all — any JSON was written straight to
+    disk, and a typo'd provider surfaced later as a permanently empty row with no
+    indication why.  A save is a deliberate user action, so it is the right place
+    to refuse bad input rather than silently degrade it.
+    """
+
+    if not isinstance(raw, list):
+        raise HTTPException(status_code=400, detail=f"{name} must be a list")
+    if not (MIN_WIDGETS <= len(raw) <= MAX_WIDGETS):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{name} must contain between {MIN_WIDGETS} and {MAX_WIDGETS} "
+                f"widgets (got {len(raw)})"
+            ),
+        )
+
+    entries: List[Dict[str, Any]] = []
+    for index, entry in enumerate(raw):
+        normalized = _normalize_widget(entry)
+        if normalized is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{name}[{index}] must be an object with non-empty "
+                    "'category' and 'source' (or 'provider')"
+                ),
+            )
+        entries.append(normalized)
+    return entries
 
 
 @router.put("/widgets")
 async def save_widget_config(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Persist the 6-slot widget configuration for Movies and Shows pages.
-
-    Accepts ``movies`` and/or ``shows`` arrays (each exactly 6 items) and
-    writes them to ``user_settings.json`` under the ``widgets`` key.
-    """
+    """Persist the widget configuration for the Movies and Shows pages."""
     from warp_mediacenter.config.settings.library import load_user_settings, write_user_settings
     from datetime import datetime, timezone
 
     movies = payload.get("movies")
     shows = payload.get("shows")
 
-    if movies is not None and not isinstance(movies, list):
-        raise HTTPException(status_code=400, detail="movies must be a list")
-    if shows is not None and not isinstance(shows, list):
-        raise HTTPException(status_code=400, detail="shows must be a list")
+    if movies is not None:
+        movies = _validate_widget_payload("movies", movies)
+    if shows is not None:
+        shows = _validate_widget_payload("shows", shows)
 
     user_cfg = load_user_settings()
     widgets_cfg = dict(user_cfg.get("widgets", {}))

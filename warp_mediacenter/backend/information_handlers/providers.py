@@ -543,6 +543,33 @@ class InformationProviders:
             username=username,
         )
 
+    def trakt_catalog_page(
+        self,
+        media_type: MediaType,
+        category: str,
+        *,
+        period: Optional[str] = None,
+        page: int = 1,
+        limit: int = 40,
+        username: str = "me",
+    ):
+        """One page of a Trakt catalog plus its pagination headers.
+
+        Returns ``([], None)`` when Trakt is not configured, so callers branch on
+        the pagination being ``None`` rather than on an exception.
+        """
+
+        if self._trakt is None:
+            return [], None
+        return self._trakt.catalog_page(
+            media_type,
+            category,
+            period=period,
+            page=page,
+            limit=limit,
+            username=username,
+        )
+
     def trakt_playback(
         self,
         media_type: MediaType,

@@ -311,6 +311,10 @@ class _MoviesPageState extends ConsumerState<MoviesPage> with RouteAware {
             provider: w.provider,
             category: w.category,
             mediaType: 'movie',
+            // A row's source may be a plugin, which only the canonical
+            // /source/... route can reach.
+            source: w.sourceId,
+            params: w.params,
           ),
         ),
     ];

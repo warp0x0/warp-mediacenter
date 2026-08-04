@@ -133,6 +133,15 @@ def _build_health_response() -> Dict[str, Any]:
                 plugins["tracker"] = tracker_service.health()
             except Exception as exc:  # noqa: BLE001
                 plugins["tracker"] = {"status": "error", "message": str(exc)}
+        catalog_service = getattr(container, "catalog_service", None)
+        if catalog_service is not None:
+            # Surfaces which sources are live and which built-in a plugin is
+            # currently shadowing — the two questions asked when a row that
+            # worked yesterday is empty today.
+            try:
+                plugins["catalog"] = catalog_service.health()
+            except Exception as exc:  # noqa: BLE001
+                plugins["catalog"] = {"status": "error", "message": str(exc)}
         status["subsystems"]["plugins"] = plugins
 
     return status

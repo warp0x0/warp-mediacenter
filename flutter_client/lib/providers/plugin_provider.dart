@@ -25,11 +25,18 @@ Future<List<PluginCategory>> pluginCategories(Ref ref) async {
 @riverpod
 Future<List<PluginSummary>> configurablePlugins(Ref ref) async {
   final categories = await ref.watch(pluginCategoriesProvider.future);
-  return [
+  final plugins = [
     for (final category in categories)
       for (final plugin in category.installed)
         if (plugin.hasSettings) plugin,
   ];
+  // Sorted by id, not left in category order. These become sidebar sections —
+  // a flat list — and one that reorders between two builds would move an entry
+  // out from under a focused node, sending the D-pad somewhere the user never
+  // asked to go. Sorting makes the order a function of what is installed and
+  // nothing else.
+  plugins.sort((a, b) => a.pluginId.compareTo(b.pluginId));
+  return plugins;
 }
 
 @riverpod
@@ -56,6 +63,11 @@ Future<PluginAuthState> pluginAuthStatus(Ref ref, String pluginId) async {
 // Anything that changes which tracker is active also invalidates the catalog
 // providers: Continue Watching comes from the active tracker, so leaving a stale
 // row on screen would show one service's progress under another's name.
+//
+// The same call refreshes the catalog *definitions*, because a catalog plugin
+// going on or off changes which lists the Settings picker can offer — and,
+// through shadowing, can hide or reveal a built-in source that the plugin itself
+// never mentions.
 // ─────────────────────────────────────────────────────────────────────────────
 
 Future<void> _refreshPluginSurfaces(Ref ref) async {
@@ -63,6 +75,7 @@ Future<void> _refreshPluginSurfaces(Ref ref) async {
   ref.invalidate(configurablePluginsProvider);
   ref.invalidate(providersStatusProvider);
   ref.invalidate(catalogDataProvider);
+  ref.invalidate(catalogDefinitionsProvider);
 }
 
 class PluginActions {

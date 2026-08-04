@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import random
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -13,6 +14,10 @@ from fastapi import APIRouter, HTTPException, Query
 
 from warp_mediacenter.backend.common.logging import get_logger
 from warp_mediacenter.backend.api.middleware import get_container
+from warp_mediacenter.backend.catalog.normalize import (
+    catalog_item_to_dict,
+    tmdb_result_to_dict,
+)
 from warp_mediacenter.backend.information_handlers.enrichment import (
     enrich_item_with_tmdb_images,
     full_enrich_from_tmdb,
@@ -159,55 +164,9 @@ def _get_providers() -> InformationProviders:
     return InformationProviders()
 
 
-def _catalog_item_to_dict(item) -> Dict[str, Any]:
-    """Convert a CatalogItem to a dict with UI-friendly fields."""
-    if hasattr(item, "model_dump"):
-        d = item.model_dump(mode="json")
-    else:
-        d = dict(item) if hasattr(item, "__iter__") else {}
-
-    extra = d.get("extra", {})
-    if isinstance(extra, dict):
-        raw = extra.get("raw_payload", {})
-        if isinstance(raw, dict):
-            if raw.get("poster_path"):
-                d["poster_path"] = raw.get("poster_path")
-            if raw.get("backdrop_path"):
-                d["backdrop_path"] = raw.get("backdrop_path")
-
-    poster = d.get("poster")
-    if isinstance(poster, dict):
-        if not d.get("poster_path"):
-            d["poster_path"] = poster.get("medium") or poster.get("large") or poster.get("original")
-        if not d.get("backdrop_path"):
-            d["backdrop_path"] = poster.get("original")
-    elif isinstance(poster, str) and not d.get("poster_path"):
-        d["poster_path"] = poster
-
-    if isinstance(extra, dict):
-        ids = extra.get("ids", {})
-        raw = extra.get("raw_payload", {})
-        if isinstance(ids, dict):
-            d["tmdb_id"] = ids.get("tmdb")
-            d["trakt_id"] = ids.get("trakt")
-        # Fallback: extract tmdb_id from raw_payload.id when ids dict is missing
-        if not d.get("tmdb_id") and isinstance(raw, dict) and raw.get("id"):
-            d["tmdb_id"] = str(raw.get("id"))
-        if not d.get("trakt_id") and isinstance(raw, dict):
-            d["trakt_id"] = raw.get("trakt_slug") or raw.get("slug")
-        d["media"] = {
-            "id": d.get("id"),
-            "title": d.get("title"),
-            "name": d.get("title"),
-            "year": d.get("year"),
-            "overview": d.get("overview"),
-            "poster_path": d.get("poster_path"),
-            "backdrop_path": d.get("backdrop_path"),
-            "rating": d.get("rating"),
-            "genres": [{"name": g} for g in d.get("genres", [])],
-        }
-
-    return d
+#: The wire shape lives in ``backend/catalog/normalize`` so that every source —
+#: TMDb, Trakt, and any installed catalog plugin — produces byte-identical rows.
+_catalog_item_to_dict = catalog_item_to_dict
 
 
 def _trakt_search_to_dict(result) -> Dict[str, Any]:
@@ -351,117 +310,110 @@ async def search_unified(
 
 # ------------------------------------------------------------------
 # Catalog routes
+#
+# Every list — built-in, legacy or plugin — is served by CatalogService out of a
+# day-scoped growable pool (plugins/services/catalog_cache.py).  The per-provider
+# routes below are kept as aliases so saved widget configs, "See More" deep links
+# and the Library page's hardcoded strip keep working unchanged; they delegate to
+# the same service and so inherit full pagination and `has_more` for free.
+#
+# ORDERING: /definitions and /source/... are declared before /{provider}/{category}
+# so the catch-alls do not swallow them.
+#
+# THREADING: these handlers are plain `def`, not `async def`, on purpose.  They
+# do blocking network I/O (upstream page fetches, TMDb enrichment).  An
+# `async def` handler runs ON the event loop, so a single slow or unresponsive
+# upstream stalls *every* other request in the process — including cheap
+# in-memory ones like /definitions.  A plain `def` handler is dispatched to a
+# worker thread by FastAPI, which is what keeps one bad list local to its own row.
 # ------------------------------------------------------------------
 
+def _catalog_service():
+    """The catalog facade from the service container.
+
+    Imported lazily for the same reason ``_tracker_service`` is: the personal
+    source calls back into this module.
+    """
+
+    container = get_container()
+    service = getattr(container, "catalog_service", None)
+    if service is None:
+        raise HTTPException(status_code=503, detail="Catalog service not initialized")
+    return service
+
+
+def _parse_params(raw: Optional[str]) -> Dict[str, Any]:
+    """Decode the opaque ``params`` blob a list def round-trips through the client.
+
+    Malformed JSON degrades to no params rather than a 400: the params only ever
+    refine a list, so serving it unfiltered beats refusing to serve it.
+    """
+
+    if not raw:
+        return {}
+    try:
+        decoded = json.loads(raw)
+    except (TypeError, ValueError):
+        log.warning("catalog_params_unparseable", raw=raw[:120])
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
+
+
+@catalog_router.get("/definitions")
+def catalog_definitions() -> Dict[str, Any]:
+    """Every catalog source and the lists it publishes.
+
+    Drives the Settings picker.  Installing a catalog plugin changes this
+    response, which is the whole mechanism by which a plugin's lists become
+    selectable with no client-side change.
+    """
+
+    return _catalog_service().definitions()
+
+
+@catalog_router.get("/source/{source_id}/{list_id}")
+def catalog_by_source(
+    source_id: str,
+    list_id: str,
+    media_type: str = Query(default="movie", regex="^(movie|show)$"),
+    limit: int = Query(default=20, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    params: Optional[str] = Query(default=None, description="JSON object, opaque"),
+) -> Dict[str, Any]:
+    """One window of one list, from any source."""
+
+    return _catalog_service().fetch(
+        source_id,
+        list_id,
+        media_type=media_type,
+        params=_parse_params(params),
+        limit=limit,
+        offset=offset,
+    )
+
+
 @catalog_router.get("/tmdb/{category}")
-async def tmdb_catalog(
+def tmdb_catalog(
     category: str,
     media_type: str = Query(default="movie", regex="^(movie|show)$"),
     limit: int = Query(default=20, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     language: Optional[str] = Query(default=None),
 ) -> Dict[str, Any]:
-    """Get a TMDb catalog with daily-seeded shuffle and offset-based pagination.
+    """Alias for the built-in TMDb source."""
 
-    On first request for the day, fetches all pages (up to _TMDB_CATALOG_FULL_PAGES)
-    in parallel, deduplicates, shuffles the full pool once, and caches it.
-    Subsequent requests for any offset serve from that in-memory list.
-    """
-    providers = _get_providers()
-    mt = MediaType.MOVIE if media_type == "movie" else MediaType.SHOW
-    cache_key = f"tmdb:{category}:{media_type}"
-    today = date.today()
-
-    with _shuffle_lock:
-        entry = _shuffle_cache.get(cache_key)
-        shuffled = entry[1] if (entry is not None and entry[0] == today) else None
-
-    if shuffled is None:
-        def _fetch_page(page_num: int) -> List[Dict[str, Any]]:
-            page_items = providers.tmdb.catalog_list(mt, category, language=language, page=page_num)
-            return [_catalog_item_to_dict(i) for i in page_items]
-
-        page_results: Dict[int, List[Dict[str, Any]]] = {}
-        with ThreadPoolExecutor(max_workers=_TMDB_CATALOG_FULL_PAGES) as ex:
-            fut_to_page = {
-                ex.submit(_fetch_page, p): p
-                for p in range(1, _TMDB_CATALOG_FULL_PAGES + 1)
-            }
-            for fut in as_completed(fut_to_page, timeout=30):
-                p = fut_to_page[fut]
-                try:
-                    page_results[p] = fut.result()
-                except Exception as exc:
-                    log.warning("tmdb_catalog_page_failed: page=%d error=%s", p, exc)
-
-        # Merge pages in insertion order (1→N) so dedup is deterministic
-        all_dicts: List[Dict[str, Any]] = []
-        seen_ids: set = set()
-        for p in range(1, _TMDB_CATALOG_FULL_PAGES + 1):
-            for d in page_results.get(p, []):
-                item_id = str(d.get("id") or d.get("tmdb_id") or "")
-                if item_id and item_id not in seen_ids:
-                    seen_ids.add(item_id)
-                    all_dicts.append(d)
-
-        if not all_dicts:
-            raise HTTPException(status_code=500, detail="TMDb catalog error: no items fetched")
-
-        shuffled = _get_daily_shuffled(cache_key, all_dicts)
-
-    page_items = shuffled[offset: offset + limit]
-
-    return {
-        "category": category,
-        "media_type": media_type,
-        "items": page_items,
-        "count": len(page_items),
-        "total": len(shuffled),
-        "offset": offset,
-        "limit": limit,
-    }
+    extra: Dict[str, Any] = {"language": language} if language else {}
+    return _catalog_service().fetch(
+        "tmdb",
+        category,
+        media_type=media_type,
+        params=extra,
+        limit=limit,
+        offset=offset,
+    )
 
 
-def _tmdb_result_to_catalog_item(result: Dict[str, Any], media_type: str) -> Dict[str, Any]:
-    """Convert a raw TMDb API result dict to a frontend-compatible catalog item dict."""
-    tmdb_id = str(result.get("id") or "")
-    title = result.get("title") or result.get("name") or ""
-    year: Optional[int] = None
-    date_str = result.get("release_date") or result.get("first_air_date") or ""
-    if date_str:
-        try:
-            year = int(str(date_str)[:4])
-        except (ValueError, IndexError):
-            pass
-    return {
-        "id": tmdb_id,
-        "title": title,
-        "type": media_type,
-        "year": year,
-        "overview": result.get("overview"),
-        "poster_path": result.get("poster_path"),
-        "backdrop_path": result.get("backdrop_path"),
-        "rating": result.get("vote_average"),
-        "genres": [],
-        "tmdb_id": tmdb_id,
-        "trakt_id": None,
-        "source_tag": "tmdb",
-        "extra": {
-            "raw_payload": result,
-            "ids": {"tmdb": tmdb_id},
-        },
-        "media": {
-            "id": tmdb_id,
-            "title": title,
-            "name": title,
-            "year": year,
-            "overview": result.get("overview"),
-            "poster_path": result.get("poster_path"),
-            "backdrop_path": result.get("backdrop_path"),
-            "rating": result.get("vote_average"),
-            "genres": [],
-        },
-    }
+_tmdb_result_to_catalog_item = tmdb_result_to_dict
 
 
 def _release_sort_key(item: Dict[str, Any]) -> Tuple[int, str]:
@@ -882,12 +834,18 @@ async def tracker_show_progress(tmdb_id: str) -> Dict[str, Any]:
 # Based on Recently Watched — must be registered BEFORE /trakt/{category}
 # ------------------------------------------------------------------
 
-@catalog_router.get("/trakt/based_on_watched")
-async def trakt_based_on_watched_catalog(
-    media_type: str = Query(default="movie", regex="^(movie|show)$"),
-    limit: int = Query(default=20, ge=1, le=50),
+def build_trakt_based_on_watched(
+    *,
+    media_type: str = "movie",
+    limit: int = 20,
 ) -> Dict[str, Any]:
-    """Return recommendations seeded from recent watch history via TMDb recommendations+similar."""
+    """Recommendations seeded from recent watch history via TMDb recommendations+similar.
+
+    Split out of the route so the catalog source can serve the same row through
+    the generalised ``/catalog/source/warp/based_on_watched`` path without
+    duplicating the fan-out.
+    """
+
     providers = _get_providers()
     mt = MediaType.MOVIE if media_type == "movie" else MediaType.SHOW
     seg = "movie" if media_type == "movie" else "tv"
@@ -953,6 +911,15 @@ async def trakt_based_on_watched_catalog(
         "items": items,
         "count": len(items),
     }
+
+
+@catalog_router.get("/trakt/based_on_watched")
+async def trakt_based_on_watched_catalog(
+    media_type: str = Query(default="movie", regex="^(movie|show)$"),
+    limit: int = Query(default=20, ge=1, le=50),
+) -> Dict[str, Any]:
+    """Recommendations seeded from recent watch history."""
+    return build_trakt_based_on_watched(media_type=media_type, limit=limit)
 
 
 # ------------------------------------------------------------------
@@ -1103,46 +1070,42 @@ async def trakt_show_progress(tmdb_id: str) -> Dict[str, Any]:
 
 
 @catalog_router.get("/trakt/{category}")
-async def trakt_catalog(
+def trakt_catalog(
     category: str,
     media_type: str = Query(default="movie", regex="^(movie|show)$"),
     period: str = Query(default="daily", regex="^(daily|weekly|monthly|yearly|all)$"),
     limit: int = Query(default=20, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> Dict[str, Any]:
-    """Get a Trakt catalog with daily-seeded shuffle and offset-based pagination."""
-    providers = _get_providers()
-    mt = MediaType.MOVIE if media_type == "movie" else MediaType.SHOW
-    cache_key = f"trakt:{category}:{media_type}"
-    today = date.today()
+    """Alias for the Trakt catalog source.
 
-    # Serve from shuffle cache when today's list is already built.
-    with _shuffle_lock:
-        entry = _shuffle_cache.get(cache_key)
-        cached_today = entry is not None and entry[0] == today
+    Resolves through ``CatalogService``, so once a Trakt catalog plugin is
+    installed and shadows the built-in, this alias transparently serves the
+    plugin's rows — an existing saved widget config needs no migration.
+    """
 
-    if cached_today:
-        shuffled = _shuffle_cache[cache_key][1]
-    else:
-        # Fetch the full pool, convert to dicts, then shuffle + cache.
-        try:
-            raw = providers.trakt_catalog(mt, category, period=period, limit=_CATALOG_FULL_LIMIT)
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"Trakt catalog error: {exc}")
-        shuffled = _get_daily_shuffled(cache_key, [_catalog_item_to_dict(i) for i in raw])
+    service = _catalog_service()
+    source_id = "trakt"
+    if service.source_by_id(source_id) is None:
+        # Shadowed by a plugin under a different id: fall through to whichever
+        # source claimed the `trakt` slot.
+        for candidate in service.plugin_sources():
+            if candidate.shadows == source_id:
+                source_id = candidate.id
+                break
 
-    page_items = shuffled[offset: offset + limit]
-
-    return {
-        "category": category,
-        "media_type": media_type,
-        "period": period,
-        "items": page_items,
-        "count": len(page_items),
-        "total": len(shuffled),
-        "offset": offset,
-        "limit": limit,
-    }
+    response = service.fetch(
+        source_id,
+        category,
+        media_type=media_type,
+        params={"period": period},
+        limit=limit,
+        offset=offset,
+    )
+    # This route has always echoed `period`; keep it so nothing reading the
+    # response shape breaks.
+    response["period"] = period
+    return response
 
 
 @catalog_router.get("/continue-watching")

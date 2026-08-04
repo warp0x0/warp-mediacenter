@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from warp_mediacenter.backend.common.logging import get_logger
 from warp_mediacenter.backend.api.middleware import get_container
+from warp_mediacenter.backend.catalog.normalize import catalog_item_to_dict
 from warp_mediacenter.backend.information_handlers.models import MediaType
 from warp_mediacenter.backend.information_handlers.trakt_manager import TraktManager
 
@@ -34,11 +35,11 @@ def _get_trakt() -> TraktManager:
     raise HTTPException(status_code=503, detail="Trakt manager not initialized")
 
 
-def _catalog_item_to_dict(item) -> Dict[str, Any]:
-    """Convert a CatalogItem to a dict."""
-    if hasattr(item, "model_dump"):
-        return item.model_dump(mode="json")
-    return dict(item) if hasattr(item, "__iter__") else {}
+#: These routes used to emit the raw model dump, without the flattened artwork
+#: and id fields the catalog routes have always sent.  Sharing the one normaliser
+#: makes the shape a superset of what they returned before — additive, and it
+#: means a Trakt row looks the same however the client reached it.
+_catalog_item_to_dict = catalog_item_to_dict
 
 
 # ------------------------------------------------------------------

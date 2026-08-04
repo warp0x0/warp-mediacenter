@@ -12,6 +12,7 @@ import '../models/library.dart';
 import '../models/media.dart';
 import '../navigation/detail_route_extra.dart';
 import '../navigation/tab_bar_focus_registry.dart';
+import '../providers/catalog_provider.dart';
 import '../providers/library_provider.dart';
 import '../theme/warp_tokens.dart';
 import '../widgets/cards/poster_card.dart';
@@ -19,7 +20,6 @@ import '../widgets/layout/backdrop_layer.dart';
 import '../widgets/shared/dpad_controls.dart';
 import '../navigation/after_frame.dart';
 
-const _kPageSize = 20;
 
 bool _isTvScaled(BuildContext context) {
   final media = MediaQuery.of(context);
@@ -72,7 +72,6 @@ class CatalogBrowsePage extends ConsumerStatefulWidget {
 class _CatalogBrowsePageState extends ConsumerState<CatalogBrowsePage>
     with WidgetsBindingObserver {
   List<MediaItem> _items = [];
-  int _offset = 0;
   bool _hasMore = false;
   bool _isLoading = true;
   bool _isLoadingMore = false;
@@ -104,7 +103,7 @@ class _CatalogBrowsePageState extends ConsumerState<CatalogBrowsePage>
 
   bool get _isLocalBrowse => widget.provider == 'local';
 
-  Future<_BrowsePageData?> _fetchPageData(int offset) async {
+  Future<_BrowsePageData?> _fetchPageData(int offset, int limit) async {
     final client = ref.read(apiClientProvider);
     if (_isLocalBrowse) {
       final raw = await client.get<Map<String, dynamic>>(
@@ -112,7 +111,7 @@ class _CatalogBrowsePageState extends ConsumerState<CatalogBrowsePage>
             ? '/api/v1/library/shows'
             : '/api/v1/library/movies',
         params: {
-          'limit': _kPageSize,
+          'limit': limit,
           'offset': offset,
           'sort': widget.category == 'az' ? 'title' : 'added_at',
           'order': widget.category == 'az' ? 'asc' : 'desc',
@@ -127,21 +126,26 @@ class _CatalogBrowsePageState extends ConsumerState<CatalogBrowsePage>
       );
     }
 
+    // `provider` on this route is the catalog source id, so the canonical
+    // /source/... path is what reaches plugin sources; the older
+    // /{provider}/{category} aliases only cover tmdb and trakt.
+    //
+    // Params are not carried in the deep link: the picker only ever stores a
+    // list's own declared params, and the service merges those back in as
+    // defaults, so the row resolves identically without them.
     final raw = await client.get<Map<String, dynamic>>(
-      '/api/v1/catalog/${widget.provider}/${widget.category}',
+      catalogPath(source: widget.provider, listId: widget.category),
       params: {
         'media_type': widget.mediaType,
-        'limit': _kPageSize,
+        'limit': limit,
         'offset': offset,
       },
     );
     final data = CatalogResponse.fromJson(raw);
-    final hasMore = () {
-      if (data.total != null) {
-        return offset + data.count < data.total!;
-      }
-      return data.count >= _kPageSize;
-    }();
+    // `has_more` is authoritative. The old `offset + count < total` test is
+    // what capped every list at the backend's fixed prefetch pool, and it is
+    // wrong for any source that cannot report a total at all.
+    final hasMore = data.hasMore ?? (data.count >= limit);
     return _BrowsePageData(
       items: data.items,
       count: data.count,
@@ -154,17 +158,17 @@ class _CatalogBrowsePageState extends ConsumerState<CatalogBrowsePage>
       setState(() {
         _isLoading = true;
         _items = [];
-        _offset = 0;
         _hasMore = false;
         _error = null;
       });
     }
     try {
-      final data = await _fetchPageData(offset);
+      // The grid opens pre-filled with a row's worth so it does not look
+      // half-empty next to the ribbon the user just came from.
+      final data = await _fetchPageData(offset, kCatalogRowSize);
       if (!mounted || data == null) return;
       setState(() {
         _items = offset == 0 ? data.items : [..._items, ...data.items];
-        _offset = offset;
         _hasMore = data.hasMore;
       });
     } catch (_) {
@@ -179,16 +183,19 @@ class _CatalogBrowsePageState extends ConsumerState<CatalogBrowsePage>
   }
 
   Future<void> _loadMore() async {
-    if (_isLoadingMore) return;
+    // The latch guards a D-pad repeat, which fires far faster than a request
+    // returns; `_hasMore` stops the button re-arming on an exhausted list.
+    if (_isLoadingMore || !_hasMore) return;
     final firstNewIndex = _items.length;
     setState(() => _isLoadingMore = true);
     try {
-      final nextOffset = _offset + _kPageSize;
-      final data = await _fetchPageData(nextOffset);
+      // Offset from what is actually loaded, not from a page counter: a short
+      // page would otherwise leave a gap that never gets fetched.
+      final nextOffset = _items.length;
+      final data = await _fetchPageData(nextOffset, kCatalogLoadMoreSize);
       if (!mounted || data == null) return;
       setState(() {
         _items = [..._items, ...data.items];
-        _offset = nextOffset;
         _hasMore = data.hasMore;
       });
       WidgetsBinding.instance.addPostFrameCallback((_) {

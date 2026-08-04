@@ -655,6 +655,47 @@ class TraktManager:
         if not isinstance(payload, Iterable):
             return []
 
+        return self._catalog_items_from_payload(payload, media_type)
+
+    def catalog_page(
+        self,
+        media_type: MediaType,
+        category: str,
+        *,
+        period: Optional[str] = None,
+        username: str = "me",
+        page: int = 1,
+        limit: int = 40,
+    ) -> tuple[Sequence[CatalogItem], PaginationDetails]:
+        """One page of a catalog list, with Trakt's pagination headers parsed.
+
+        ``catalog_list`` asks for ``limit`` items off page 1 and throws the
+        ``X-Pagination-*`` headers away, which caps every row at whatever the
+        first page held.  This returns the same items plus the header snapshot so
+        a caller can walk the list to its end.
+        """
+
+        path = self._catalog_endpoint(
+            media_type, category, period=period, username=username
+        )
+        params: Dict[str, Any] = {"page": max(1, int(page)), "limit": max(1, int(limit))}
+        response = self._session.get(_SERVICE_NAME, path, params=params)
+        payload = self._parse_json(response)
+        pagination = self._parse_pagination_info(
+            response, fallback_page=page, fallback_limit=limit
+        )
+
+        if not isinstance(payload, Iterable):
+            return [], pagination
+
+        items = self._catalog_items_from_payload(payload, media_type)
+        return items, pagination
+
+    def _catalog_items_from_payload(
+        self, payload: Iterable[Any], media_type: MediaType
+    ) -> list[CatalogItem]:
+        """Shared body of ``catalog_list`` and ``catalog_page``."""
+
         items: list[CatalogItem] = []
         for entry in payload:
             if not isinstance(entry, Mapping):
@@ -667,7 +708,9 @@ class TraktManager:
             if media_payload is None:
                 continue
 
-            resolved_type = self._resolve_media_type(media_payload.get("media_type"), fallback=media_type)
+            resolved_type = self._resolve_media_type(
+                media_payload.get("media_type"), fallback=media_type
+            )
             try:
                 items.append(
                     self._facade.catalog_item(

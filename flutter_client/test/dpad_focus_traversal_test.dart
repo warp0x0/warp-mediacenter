@@ -44,6 +44,10 @@ Map<String, dynamic> _item(String title, int i) => {
 
 /// Categories listed here return items; anything else returns an empty row,
 /// which is how a row is made to "not exist" (see `_isRowVisible`).
+///
+/// Config row 0 is the pinned Continue Watching row, so a fixture that omits
+/// `continue_watching` is modelling "no tracker installed yet" — row 0 prunes
+/// and every later row moves up a slot.
 class _FakeAdapter implements HttpClientAdapter {
   _FakeAdapter(this.populated);
 
@@ -140,7 +144,7 @@ void main() {
   testWidgets('Down from the Movies tab pill lands on row 0 card 0', (
     tester,
   ) async {
-    await pumpApp(tester, {'trending_day', 'popular', 'top_rated'});
+    await pumpApp(tester, {'continue_watching', 'trending_day', 'popular'});
 
     // Focus the Movies tab pill the way Up-from-row-0 would.
     final pill = moviesPill();
@@ -163,7 +167,7 @@ void main() {
   });
 
   testWidgets('Up from row 1 returns to row 0 card 0', (tester) async {
-    await pumpApp(tester, {'trending_day', 'popular', 'top_rated'});
+    await pumpApp(tester, {'continue_watching', 'trending_day', 'popular'});
 
     moviesPill().requestFocus();
     await tester.pump();
@@ -195,9 +199,9 @@ void main() {
     'a row that appears mid-session keeps Down and Up deterministic',
     (tester) async {
       // Continue Watching absent, exactly as before a tracker plugin is
-      // installed: config row 0 (trending_day) resolves empty and is pruned,
-      // so the first *visible* row is config row 1.
-      await pumpApp(tester, {'popular', 'top_rated'});
+      // installed: pinned config row 0 resolves empty and is pruned, so the
+      // first *visible* row is config row 1.
+      await pumpApp(tester, {'trending_day', 'popular'});
 
       moviesPill().requestFocus();
       await tester.pump();
@@ -210,7 +214,7 @@ void main() {
 
       // Install the tracker: row 0 now has content and appears above
       // everything else, shifting every later row down one slot.
-      adapter.populated = {'trending_day', 'popular', 'top_rated'};
+      adapter.populated = {'continue_watching', 'trending_day', 'popular'};
       container.invalidate(catalogDataProvider);
       for (var i = 0; i < 10; i++) {
         await tester.pump(const Duration(milliseconds: 100));
@@ -243,7 +247,7 @@ void main() {
   testWidgets('returning to the pill from row 0 leaves Down working in one press', (
     tester,
   ) async {
-    await pumpApp(tester, {'trending_day', 'popular', 'top_rated'});
+    await pumpApp(tester, {'continue_watching', 'trending_day', 'popular'});
 
     moviesPill().requestFocus();
     await tester.pump();

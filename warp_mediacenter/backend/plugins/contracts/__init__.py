@@ -1,5 +1,12 @@
 """Plugin contracts — the types and action names that cross the host boundary."""
 
+from warp_mediacenter.backend.plugins.contracts.catalog import (
+    CatalogAction,
+    CatalogCapability,
+    CatalogItem,
+    CatalogListDef,
+    CatalogPage,
+)
 from warp_mediacenter.backend.plugins.contracts.common import (
     CATEGORY_CATALOG,
     CATEGORY_PROVIDER,
@@ -27,6 +34,11 @@ __all__ = [
     "CATEGORY_SKIN",
     "CATEGORY_TRACKER",
     "ERROR_HTTP_STATUS",
+    "CatalogAction",
+    "CatalogCapability",
+    "CatalogItem",
+    "CatalogListDef",
+    "CatalogPage",
     "ErrorCode",
     "LifecycleAction",
     "MediaRef",

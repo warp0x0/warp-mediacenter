@@ -123,6 +123,30 @@ class TMDbManager:
         if media_type not in {MediaType.MOVIE, MediaType.SHOW}:
             raise ValueError("Catalog lists are only available for movies or shows")
 
+        items, _ = self.catalog_page(
+            media_type, category, language=language, page=page
+        )
+        return items
+
+    def catalog_page(
+        self,
+        media_type: MediaType,
+        category: str,
+        *,
+        language: Optional[str] = None,
+        page: int = 1,
+    ) -> tuple[Sequence[CatalogItem], Dict[str, Any]]:
+        """One page of a catalog list, keeping TMDb's paging counters.
+
+        ``catalog_list`` discards ``total_pages``/``total_results``, so a caller
+        cannot tell a short final page from a full one.  This returns them, which
+        is what lets a row page all the way to the end of a list instead of
+        stopping at a fixed prefetch depth.
+        """
+
+        if media_type not in {MediaType.MOVIE, MediaType.SHOW}:
+            raise ValueError("Catalog lists are only available for movies or shows")
+
         path, extra_params = self._catalog_path(media_type, category)
         payload = self._request_json(
             path,
@@ -133,7 +157,14 @@ class TMDbManager:
             },
         )
 
-        return self._parse_catalog_results(payload, media_type)
+        info: Dict[str, Any] = {"page": page, "total_pages": None, "total_results": None}
+        if isinstance(payload, Mapping):
+            for key in ("page", "total_pages", "total_results"):
+                value = payload.get(key)
+                if isinstance(value, int):
+                    info[key] = value
+
+        return self._parse_catalog_results(payload, media_type), info
 
     def movie_details(
         self,

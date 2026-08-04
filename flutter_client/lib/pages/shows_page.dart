@@ -305,6 +305,10 @@ class _ShowsPageState extends ConsumerState<ShowsPage> with RouteAware {
             provider: w.provider,
             category: w.category,
             mediaType: 'show',
+            // A row's source may be a plugin, which only the canonical
+            // /source/... route can reach.
+            source: w.sourceId,
+            params: w.params,
           ),
         ),
     ];
